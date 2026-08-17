@@ -7,9 +7,11 @@ use temporal_rooms::dsl;
 use temporal_rooms::model::*;
 use temporal_rooms::sim::{CountersBig, World};
 
+const FAR: Tick = 1_000_000_000_000_000_000;
+
 struct Cfg {
-    title: &'static str,
-    path: &'static str,
+    title: String,
+    path: String,
     /// Horizon for the materialised (T1) deployment run.
     t_mat: Tick,
     /// Cap on how many instances we are willing to materialise.
@@ -17,40 +19,61 @@ struct Cfg {
     /// Horizon answered analytically only.
     t_far: Tick,
     /// Extra single-instance state dumps.
-    dumps: &'static [Tick],
+    dumps: Vec<Tick>,
 }
 
-const CONFIGS: &[Cfg] = &[
+fn configs() -> Vec<Cfg> {
+    vec![
+        Cfg {
+            title: "CONFIGURATION 1 -- the specification as written".into(),
+            path: "configs/01-spec.factory".into(),
+            t_mat: 5_000,
+            max_inst: 1,
+            t_far: FAR,
+            dumps: vec![600, 1_200, 2_100, 5_000],
+        },
+        Cfg {
+            title: "CONFIGURATION 2 -- sustainable line, 1,000,000 objects".into(),
+            path: "configs/02-balanced.factory".into(),
+            t_mat: 2_000,
+            max_inst: 125_000,
+            t_far: FAR,
+            dumps: vec![600, 2_000],
+        },
+        Cfg {
+            title: "CONFIGURATION 3 -- four stages, 1,000,000,005 objects".into(),
+            path: "configs/03-megafactory.factory".into(),
+            t_mat: 3_000,
+            max_inst: 20_000,
+            t_far: FAR,
+            dumps: vec![3_000],
+        },
+    ]
+}
+
+/// `trooms <file.factory> ...` analyses just those files with default settings.
+fn adhoc(path: &str) -> Cfg {
     Cfg {
-        title: "CONFIGURATION 1 -- the specification as written",
-        path: "configs/01-spec.factory",
-        t_mat: 5_000,
-        max_inst: 1,
-        t_far: 1_000_000_000_000_000_000,
-        dumps: &[600, 1_200, 2_100, 5_000],
-    },
-    Cfg {
-        title: "CONFIGURATION 2 -- sustainable line, 1,000,000 objects",
-        path: "configs/02-balanced.factory",
-        t_mat: 2_000,
-        max_inst: 125_000,
-        t_far: 1_000_000_000_000_000_000,
-        dumps: &[600, 2_000],
-    },
-    Cfg {
-        title: "CONFIGURATION 3 -- four stages, 1,000,000,005 objects",
-        path: "configs/03-megafactory.factory",
+        title: format!("{path}"),
+        path: path.to_string(),
         t_mat: 3_000,
         max_inst: 20_000,
-        t_far: 1_000_000_000_000_000_000,
-        dumps: &[3_000],
-    },
-];
+        t_far: FAR,
+        dumps: vec![1_000, 3_000],
+    }
+}
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cfgs: Vec<Cfg> = if args.is_empty() {
+        configs()
+    } else {
+        args.iter().map(|a| adhoc(a)).collect()
+    };
+
     let mut failures = 0usize;
     let mut summary: Vec<String> = Vec::new();
-    for cfg in CONFIGS {
+    for cfg in &cfgs {
         match run(cfg) {
             Ok(line) => summary.push(line),
             Err(n) => {
@@ -85,8 +108,13 @@ fn run(cfg: &Cfg) -> Result<String, usize> {
     println!("{}", cfg.title);
     rule('=');
 
-    let src = std::fs::read_to_string(cfg.path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", cfg.path));
+    let src = match std::fs::read_to_string(&cfg.path) {
+        Ok(s) => s,
+        Err(e) => {
+            println!("cannot read {}: {e}", cfg.path);
+            return Err(1);
+        }
+    };
     let prog = match dsl::parse(&src) {
         Ok(p) => p,
         Err(e) => {
@@ -223,7 +251,7 @@ fn run(cfg: &Cfg) -> Result<String, usize> {
 
     // --------------------------------- single-instance state snapshots
     println!("\n-- exact state of one line at selected ticks ---------------");
-    for &t in cfg.dumps {
+    for &t in &cfg.dumps {
         let (w, orbits) = cf.world_at(bp, n_items, t);
         let mut parts: Vec<String> = Vec::new();
         for (s, sd) in bp.storages.iter().enumerate() {
@@ -407,7 +435,7 @@ fn run(cfg: &Cfg) -> Result<String, usize> {
     println!();
     let line = format!(
         "{:<14} {:>15} {:>13} {:>13} {:>11}",
-        short(cfg.path),
+        short(&cfg.path),
         commas(prog.total_objects()),
         human_secs(est_secs),
         dur(far_time),

@@ -14,9 +14,10 @@ fn load(path: &str) -> Program {
 
 fn configs() -> Vec<Program> {
     vec![
-        load("configs/01-spec.factory"),
-        load("configs/02-balanced.factory"),
-        load("configs/03-megafactory.factory"),
+        // load("configs/01-spec.factory"),
+        // load("configs/02-balanced.factory"),
+        // load("configs/03-megafactory.factory"),
+        load("configs/04-science.factory"),
     ]
 }
 

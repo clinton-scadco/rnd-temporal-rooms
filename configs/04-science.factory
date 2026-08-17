@@ -1,0 +1,61 @@
+# Configuration 4 -- a two-ingredient recipe.
+#
+# Iron and copper are mined separately and converge on the Assembler, which
+# needs BOTH IronGear and CopperPlate to produce RedScience.
+#
+# Two rules make a converging line work:
+#
+#   1. A process lists one `consumes` line per ingredient, and gets one `wire`
+#      from each storage those ingredients live in. Withdrawal is atomic: the
+#      Assembler takes all 15 gears and all 10 plates or it takes nothing, so
+#      it never sits holding half a recipe.
+#
+#   2. Iron and copper plates get SEPARATE storages. Storage capacity is a
+#      shared unit count, so if both plate types landed in one bay the faster
+#      copper line would eat the buffer, starve the gear presses, and deadlock
+#      the whole plant -- exactly the failure in configuration 1.
+
+item IronOre
+item IronPlate
+item IronGear
+item CopperOre
+item CopperPlate
+item RedScience
+
+blueprint RedScienceFactory {
+    source  I_Miner      { produces 50 IronOre   every 60 ticks }
+    source  C_Miner      { produces 50 CopperOre every 60 ticks }
+    storage I_OreBay     { capacity 60 }
+    storage C_OreBay     { capacity 60 }
+
+    process I_Smelter x4 { consumes 10 IronOre   takes 20 ticks produces 10 IronPlate }
+    process C_Smelter x4 { consumes 10 CopperOre takes 20 ticks produces 10 CopperPlate }
+    storage I_PlateBay   { capacity 1000 }
+    storage C_PlateBay   { capacity 1000 }
+
+    process GearPress x3 { consumes 20 IronPlate takes 30 ticks produces 10 IronGear }
+    storage GearBay      { capacity 800 }
+
+    # The two-ingredient recipe.
+    process Assembler x2 {
+        consumes 15 IronGear
+        consumes 10 CopperPlate
+        takes 45 ticks
+        produces 5 RedScience
+    }
+    storage ScienceBay   { capacity 400 }
+    sink    Lab          { consumes 5 RedScience every 30 ticks }
+
+    # Iron branch: ore -> plate -> gear
+    wire I_Miner -> I_OreBay -> I_Smelter -> I_PlateBay -> GearPress -> GearBay
+
+    # Copper branch: ore -> plate
+    wire C_Miner -> C_OreBay -> C_Smelter -> C_PlateBay
+
+    # Both branches converge on the Assembler: one wire per ingredient source.
+    wire GearBay    -> Assembler
+    wire C_PlateBay -> Assembler
+    wire Assembler  -> ScienceBay -> Lab
+}
+
+deploy 10 x RedScienceFactory stagger 2
