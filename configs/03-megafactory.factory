@@ -1,0 +1,36 @@
+# Configuration 3 -- four production stages, deployed past one billion objects.
+#
+#   15 objects per line x 66,666,667 lines = 1,000,000,005 objects
+#
+# Materialising this would need ~2 TB of state, so nothing is materialised.
+# lcm(60,20,30,45,27) = 540, so `stagger 7` yields exactly 540 phase
+# archetypes -- and 540 closed-form evaluations answer for all billion.
+#
+# The stage capacities deliberately disagree with each other:
+#   miner      1.667 ore/tick
+#   smelters   2.000 ore/tick   (ore-limited)
+#   presses    2.000 plate/tick (plate-limited)
+#   assemblers 0.667 gear/tick
+#   depot      0.185 engine/tick  <- the true bottleneck, throttling everything
+
+item IronOre
+item IronPlate
+item Gear
+item Engine
+
+blueprint MegaLine {
+    source  Miner        { produces 100 IronOre every 60 ticks }
+    storage OreBay       { capacity 1000 }
+    process Smelter x4   { consumes 10 IronOre takes 20 ticks produces 10 IronPlate }
+    storage PlateBay     { capacity 1000 }
+    process GearPress x3 { consumes 20 IronPlate takes 30 ticks produces 10 Gear }
+    storage GearBay      { capacity 800 }
+    process Assembler x2 { consumes 15 Gear takes 45 ticks produces 5 Engine }
+    storage EngineBay    { capacity 400 }
+    sink    Depot        { consumes 5 Engine every 27 ticks }
+
+    wire Miner -> OreBay -> Smelter -> PlateBay -> GearPress -> GearBay
+    wire GearBay -> Assembler -> EngineBay -> Depot
+}
+
+deploy 66_666_667 x MegaLine stagger 7

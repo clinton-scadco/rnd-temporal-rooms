@@ -1,0 +1,25 @@
+# Configuration 2 -- a sustainable line, replicated to 1,000,000 objects.
+#
+# The reference plant is fixed in two ways: plates get their own storage (so
+# they cannot steal the ore buffer's capacity) and a shipping sink drains them.
+# Four smelters give 2.0 ore/tick of capacity against the miner's 1.667.
+#
+#   8 objects per line x 125,000 lines = 1,000,000 objects
+#
+# `stagger 7` starts line k at tick (7k mod 60), so the lines are genuinely
+# out of phase with one another rather than a million identical copies.
+
+item IronOre
+item IronPlate
+
+blueprint SmeltLine {
+    source  Miner      { produces 100 IronOre every 60 ticks }
+    storage OreBay     { capacity 1000 }
+    process Smelter x4 { consumes 10 IronOre takes 20 ticks produces 10 IronPlate }
+    storage PlateBay   { capacity 1000 }
+    sink    Shipping   { consumes 100 IronPlate every 60 ticks }
+
+    wire Miner -> OreBay -> Smelter -> PlateBay -> Shipping
+}
+
+deploy 125_000 x SmeltLine stagger 7

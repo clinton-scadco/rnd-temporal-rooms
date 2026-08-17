@@ -1,0 +1,23 @@
+# Configuration 1 -- the specification exactly as written.
+#
+#   SOURCE     produces 100 IronOre every 60 ticks
+#   PROCESSOR  consumes 10 IronOre, 20 ticks, produces 10 IronPlate
+#   STORAGE    capacity 1000 units
+#
+#   Source -> Storage -> Processor -> Storage
+#
+# Note that the processor's output returns to the *same* storage, and that
+# capacity is shared across item types. Both facts matter.
+
+item IronOre
+item IronPlate
+
+blueprint Spec {
+    source  Source    { produces 100 IronOre every 60 ticks }
+    storage Storage   { capacity 1000 }
+    process Processor { consumes 10 IronOre takes 20 ticks produces 10 IronPlate }
+
+    wire Source -> Storage -> Processor -> Storage
+}
+
+deploy 1 x Spec
