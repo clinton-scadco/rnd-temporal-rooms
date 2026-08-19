@@ -22,6 +22,9 @@ const CONFIGS: &[&str] = &[
     "configs/07-transport.factory",
     "configs/08-policy.factory",
     "configs/09-population.factory",
+    "configs/11-railchain.factory",
+    "configs/12-tradeloop.factory",
+    "configs/14-privatebay.factory",
 ];
 
 fn load(path: &str) -> Program {
@@ -31,6 +34,12 @@ fn load(path: &str) -> Program {
 
 fn programs() -> Vec<(&'static str, Program)> {
     CONFIGS.iter().map(|&p| (p, load(p))).collect()
+}
+
+/// The blueprint a program actually deploys. v3 rewrites the deployment axis
+/// when lines share infrastructure, so this is no longer always the first one.
+fn deployed(prog: &Program) -> &Blueprint {
+    &prog.blueprints[prog.deploys[0].blueprint as usize]
 }
 
 /// Dense sweep: every tick up to 400, then coarse and absurd ones.
@@ -48,7 +57,7 @@ fn probe_ticks() -> Vec<Tick> {
 #[test]
 fn population_form_matches_machine_by_machine() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         let n_items = prog.items.len();
         for t in (0..4_000).step_by(13) {
             let mut w = World::new(bp, n_items, 1, 0);
@@ -70,7 +79,7 @@ fn population_form_matches_machine_by_machine() {
 fn population_histogram_is_the_real_state() {
     use temporal_rooms::sim::{S_DONE, S_STARVED, S_WORKING};
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         if bp.machines > 50_000 {
             continue;
         }
@@ -167,7 +176,7 @@ fn scaling_the_population_scales_the_answer() {
 #[test]
 fn closed_form_matches_event_sim_everywhere() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         let n_items = prog.items.len();
         let cf = pop::orbit(bp, n_items, 20_000_000);
         assert!(cf.found, "{path}: no orbit found");
@@ -195,7 +204,7 @@ fn closed_form_matches_event_sim_everywhere() {
 #[test]
 fn closed_form_is_periodic_at_astronomical_ticks() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         let n_items = prog.items.len();
         let cf = pop::orbit(bp, n_items, 20_000_000);
         if cf.frozen {
@@ -220,7 +229,7 @@ fn closed_form_is_periodic_at_astronomical_ticks() {
 #[test]
 fn machine_orbit_and_population_orbit_agree() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         if bp.machines > 50_000 {
             continue;
         }
@@ -245,7 +254,7 @@ fn machine_orbit_and_population_orbit_agree() {
 #[test]
 fn mass_is_conserved() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         let n_items = prog.items.len();
         if bp.machines > 50_000 {
             continue;
@@ -282,7 +291,7 @@ fn mass_is_conserved() {
 #[test]
 fn capacity_is_never_exceeded() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         let n_items = prog.items.len();
         for t in (0..3_000).step_by(23) {
             let mut p = pop::Pop::new(bp, n_items);
@@ -303,7 +312,7 @@ fn capacity_is_never_exceeded() {
 #[test]
 fn population_is_conserved() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         let n_items = prog.items.len();
         for t in (0..3_000).step_by(31) {
             let mut p = pop::Pop::new(bp, n_items);
@@ -328,7 +337,7 @@ fn population_is_conserved() {
 #[test]
 fn classes_share_work_evenly() {
     for (path, prog) in programs() {
-        let bp = &prog.blueprints[0];
+        let bp = deployed(&prog);
         let n_items = prog.items.len();
         if bp.machines > 50_000 {
             continue;
@@ -360,7 +369,7 @@ fn classes_share_work_evenly() {
 #[test]
 fn aggregates_ignore_machine_identity() {
     let prog = load("configs/09-population.factory");
-    let bp = &prog.blueprints[0];
+    let bp = deployed(&prog);
     let n_items = prog.items.len();
 
     let mut shuffled = bp.clone();
@@ -389,7 +398,7 @@ fn aggregates_ignore_machine_identity() {
 #[test]
 fn contention_policy_changes_the_outcome() {
     let prog = load("configs/08-policy.factory");
-    let bp = &prog.blueprints[0];
+    let bp = deployed(&prog);
     let n_items = prog.items.len();
 
     let mut duties = Vec::new();
@@ -480,7 +489,7 @@ fn an_unseeded_cycle_is_reported_dead() {
 #[test]
 fn transport_creates_causal_domains() {
     let prog = load("configs/07-transport.factory");
-    let bp = &prog.blueprints[0];
+    let bp = deployed(&prog);
     let rep = domains::analyse(bp);
     assert_eq!(rep.hard.len(), 1, "the plant is connected");
     assert_eq!(rep.transit.len(), 2, "cutting the trains should split it in two");
@@ -519,7 +528,7 @@ fn feedback_is_detected() {
 #[test]
 fn replication_is_a_population_not_a_node_list() {
     let prog = load("configs/09-population.factory");
-    let bp = &prog.blueprints[0];
+    let bp = deployed(&prog);
     assert_eq!(bp.actors.len(), 6, "six classes, however many machines");
     assert_eq!(bp.machines, 10_085);
     // The point: analysis walks classes, not machines.
@@ -529,7 +538,7 @@ fn replication_is_a_population_not_a_node_list() {
 #[test]
 fn item_qualified_wires_keep_bays_separate() {
     let prog = load("configs/06-cycle.factory");
-    let bp = &prog.blueprints[0];
+    let bp = deployed(&prog);
     let cat = prog.items.iter().position(|i| i == "Catalyst").unwrap() as ItemId;
     let prod = prog.items.iter().position(|i| i == "Product").unwrap() as ItemId;
     let catbay = bp.storages.iter().position(|s| s.name == "CatBay").unwrap();

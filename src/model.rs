@@ -33,10 +33,11 @@ pub struct Stack {
 /// - `Process`   : has inputs and outputs  -> "consumes X, takes D ticks, produces Y"
 /// - `Sink`      : has inputs, no outputs  -> "consumes A every P ticks"
 /// - `Transport` : a process whose outputs equal its inputs, moving them from
-///                 one storage to another over `duration` ticks. Structurally
-///                 nothing new -- which is the point -- but worth naming,
-///                 because a long-duration transport is what splits a factory
-///                 into causally independent domains.
+///                 one storage to another over `duration` ticks, after which
+///                 the vehicle takes `return_latency` ticks to come home.
+///                 Structurally nothing new -- which is the point -- but worth
+///                 naming, because a transport is what splits a factory into
+///                 causally independent regions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActorKind {
     Source,
@@ -56,6 +57,22 @@ impl ActorKind {
     }
 }
 
+/// Where a transport's latency came from, when it was derived rather than
+/// declared. Distance is the thing a player actually builds; latency is what
+/// the physics makes of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Geometry {
+    pub base: Tick,
+    pub distance: u64,
+    pub speed: u64,
+}
+
+impl Geometry {
+    pub fn latency(&self) -> Tick {
+        self.base + self.distance / self.speed.max(1)
+    }
+}
+
 /// A recipe plus a population. `count` members share the recipe, the cycle
 /// time and the wiring, and are therefore mutually interchangeable -- the
 /// property tier T5 exists to exploit.
@@ -65,8 +82,25 @@ pub struct ActorDef {
     pub kind: ActorKind,
     pub inputs: Vec<Stack>,
     pub outputs: Vec<Stack>,
-    /// Cycle time. For sources/sinks this is the declared period.
+    /// Cycle time. For sources/sinks this is the declared period; for a
+    /// transport it is the *outbound* leg only.
     pub duration: Tick,
+    /// Transport only: how long a vehicle takes to get back to the loading
+    /// end after it has unloaded.
+    ///
+    /// v2 links teleported home, which is `0`. That is not a rounding detail:
+    /// it is the difference between a region that can run ahead of its
+    /// neighbour and one that cannot. Material flowing A to B gives B slack of
+    /// `duration`; vehicles flowing B back to A give A slack of
+    /// `return_latency`. Causal slack is a property of *both* directions, and
+    /// a link with no return trip has none in one of them.
+    pub return_latency: Tick,
+    /// Set when the latency was derived from spatial distance.
+    pub geometry: Option<Geometry>,
+    /// Declared `shared`: this class exists once for the whole deployment
+    /// rather than once per deployed line. A shared class may only touch
+    /// shared storage, because there is no private copy for it to live in.
+    pub shared: bool,
     /// How many identical machines this class stands for.
     pub count: u64,
     /// First machine index of this class within one blueprint instance.
@@ -85,6 +119,25 @@ impl ActorDef {
     }
     pub fn primary_out(&self) -> Option<u16> {
         self.out_stores.first().copied()
+    }
+
+    /// Full round trip. For everything except a transport with a return leg
+    /// this is just `duration`.
+    pub fn cycle(&self) -> Tick {
+        self.duration + self.return_latency
+    }
+
+    pub fn is_link(&self) -> bool {
+        self.kind == ActorKind::Transport
+    }
+
+    /// Sustained throughput of a transport class, as `items per tick`, exact.
+    ///
+    /// Derived, never declared: it is `vehicles * batch / round trip`, and
+    /// there is no second place for it to disagree with itself.
+    pub fn throughput(&self) -> (u128, u128) {
+        let batch: Qty = self.outputs.iter().map(|s| s.qty).sum();
+        (self.count as u128 * batch as u128, self.cycle().max(1) as u128)
     }
 }
 
@@ -120,6 +173,10 @@ impl Policy {
 #[derive(Clone, Debug)]
 pub struct StorageDef {
     pub name: String,
+    /// Declared `shared`: every deployed instance of the blueprint refers to
+    /// *this one* storage rather than to a private copy of it. Deployments
+    /// stop being independent the moment one of these exists.
+    pub shared: bool,
     /// Total units across *all* item types. This shared-capacity rule is what
     /// makes the reference configuration deadlock.
     pub capacity: Qty,
@@ -185,6 +242,16 @@ impl Blueprint {
         self.storages.len() + self.actors.len()
     }
 
+    /// Indices of the transport classes: the channels between regions.
+    pub fn links(&self) -> Vec<u16> {
+        self.actors
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.is_link())
+            .map(|(i, _)| i as u16)
+            .collect()
+    }
+
     pub fn slot_of(&self, storage: usize, item: ItemId) -> Option<u32> {
         let s = &self.storages[storage];
         s.slots
@@ -211,6 +278,22 @@ pub struct Deploy {
     pub count: u64,
     /// Instance k starts dormant until tick `(k * stagger) % base_period`.
     pub stagger: u64,
+    /// Set when this deploy's lines share infrastructure and the deployment
+    /// axis therefore had to be lowered rather than left alone.
+    pub origin: Option<Origin>,
+}
+
+/// How a deployment of coupled lines was lowered.
+#[derive(Clone, Copy, Debug)]
+pub struct Origin {
+    /// The one-line blueprint it was written as.
+    pub blueprint: u32,
+    pub lines: u64,
+    /// `true`  -- collapsed: every storage was shared, so the lines had no
+    ///            private state, were interchangeable, and became populations.
+    /// `false` -- spread: some storage was private, so the lines are genuinely
+    ///            different objects and had to be written out one by one.
+    pub collapsed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -247,4 +330,142 @@ pub fn lcm(a: u64, b: u64) -> u64 {
         return a.max(b);
     }
     a / gcd(a, b) * b
+}
+
+// ============================================ v3: deployments that share
+
+impl Blueprint {
+    pub fn has_shared(&self) -> bool {
+        self.storages.iter().any(|s| s.shared) || self.actors.iter().any(|a| a.shared)
+    }
+
+    pub fn all_shared(&self) -> bool {
+        self.storages.iter().all(|s| s.shared)
+    }
+
+    /// `n` deployed lines written out honestly: every private storage and
+    /// every private machine class gets `n` distinct copies, and the shared
+    /// ones appear once with all `n` copies wired to them.
+    ///
+    /// This is what "a million lines on one ore network" *means*. It is also
+    /// hopeless at a million, which is the point: it exists as the ground
+    /// truth that `collapse` is checked against at four lines and eight.
+    pub fn spread(&self, n: u64) -> Blueprint {
+        let n = n.max(1) as usize;
+        // storage -> its copies (one entry if shared, `n` otherwise)
+        let mut smap: Vec<Vec<u16>> = Vec::with_capacity(self.storages.len());
+        let mut storages: Vec<StorageDef> = Vec::new();
+        for sd in &self.storages {
+            let reps = if sd.shared { 1 } else { n };
+            let mut ids = Vec::with_capacity(reps);
+            for k in 0..reps {
+                ids.push(storages.len() as u16);
+                let mut copy = sd.clone();
+                if !sd.shared {
+                    copy.name = format!("{}#{k}", sd.name);
+                }
+                copy.clients.clear();
+                copy.order.clear();
+                copy.takers.clear();
+                copy.givers.clear();
+                storages.push(copy);
+            }
+            smap.push(ids);
+        }
+
+        let mut cmap: Vec<Vec<u16>> = Vec::with_capacity(self.actors.len());
+        let mut actors: Vec<ActorDef> = Vec::new();
+        for ad in &self.actors {
+            let reps = if ad.shared { 1 } else { n };
+            let mut ids = Vec::with_capacity(reps);
+            for k in 0..reps {
+                ids.push(actors.len() as u16);
+                let mut copy = ad.clone();
+                if !ad.shared {
+                    copy.name = format!("{}#{k}", ad.name);
+                }
+                let pick = |v: &Vec<u16>| -> Vec<u16> {
+                    v.iter()
+                        .map(|&s| {
+                            let reps = smap[s as usize].len();
+                            smap[s as usize][if reps == 1 { 0 } else { k }]
+                        })
+                        .collect()
+                };
+                copy.in_stores = pick(&ad.in_stores);
+                copy.out_stores = pick(&ad.out_stores);
+                actors.push(copy);
+            }
+            cmap.push(ids);
+        }
+
+        // Rebuild each storage's arbitration lists by expanding the original
+        // ones in place, so the relative order of two *different* classes
+        // survives and only the copies of one class are new neighbours.
+        let expand = |list: &Vec<u16>, k: usize, shared_store: bool| -> Vec<u16> {
+            let mut out = Vec::new();
+            for &c in list {
+                let copies = &cmap[c as usize];
+                if shared_store {
+                    out.extend(copies.iter().copied());
+                } else if copies.len() == 1 {
+                    out.push(copies[0]);
+                } else {
+                    out.push(copies[k]);
+                }
+            }
+            out
+        };
+        for (s, sd) in self.storages.iter().enumerate() {
+            for (k, &id) in smap[s].iter().enumerate() {
+                let sh = sd.shared;
+                storages[id as usize].clients = expand(&sd.clients, k, sh);
+                storages[id as usize].order = expand(&sd.order, k, sh);
+                storages[id as usize].takers = expand(&sd.takers, k, sh);
+                storages[id as usize].givers = expand(&sd.givers, k, sh);
+            }
+        }
+
+        let mut qty_stride = 0u32;
+        for sd in &mut storages {
+            sd.qty_offset = qty_stride;
+            qty_stride += sd.slots.len() as u32;
+        }
+        let mut machines = 0u64;
+        for a in &mut actors {
+            a.machine_offset = machines;
+            machines += a.count;
+        }
+        Blueprint {
+            name: format!("{}x{n}", self.name),
+            storages,
+            actors,
+            qty_stride,
+            machines,
+            base_period: self.base_period,
+        }
+    }
+
+    /// `n` deployed lines claimed as one population.
+    ///
+    /// Every private class simply becomes `n` times as populous. This is only
+    /// a legal move when the lines share *all* of their storage: with nothing
+    /// private left, two lines have no state that could tell them apart, so
+    /// their machines are interchangeable and belong in one class. Give a line
+    /// a buffer of its own and the claim dies -- that buffer is exactly the
+    /// state that makes one line different from another.
+    pub fn collapse(&self, n: u64) -> Blueprint {
+        let mut b = self.clone();
+        b.name = format!("{} x{n}", self.name);
+        let mut machines = 0u64;
+        for a in &mut b.actors {
+            if !a.shared {
+                a.count = a.count.saturating_mul(n);
+            }
+            a.machine_offset = machines;
+            machines += a.count;
+        }
+        b.machines = machines;
+        b
+    }
 }

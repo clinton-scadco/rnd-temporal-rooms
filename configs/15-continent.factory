@@ -1,0 +1,63 @@
+# Configuration 15 -- one and a half billion machines in six regions.
+#
+#      [North mine] --\
+#      [South mine] ----\
+#      [East  mine] ------>== rail ==>[ Smelting ]== rail ==>[ Works ]
+#      [West  mine] --/
+#
+# The two compressions stack. Populations collapse the machines inside a
+# region; regions collapse the plant into pieces that do not have to share a
+# clock. Neither knows about the other, and the product of the two is what a
+# Room would actually be made of: six independently advancing simulations
+# holding one and a half billion machines between them in a few dozen numbers.
+#
+# The four mines are far away and identical, which is the case a real megabase
+# is full of. Each one runs alone for a full outbound trip, and each is pinned
+# to the smelter only by how long its wagons take to get back.
+#
+# Supply is deliberately hopeless again -- 952 ore/tick arriving against a
+# billion smelters -- because the interesting quantity here is the size of the
+# state, not the throughput. Nothing about the compression cares which.
+
+item IronOre
+item IronPlate
+item Gear
+
+blueprint Continent {
+    source  MinerN x100 { produces 1000 IronOre every 50 ticks }
+    storage HeadN       { capacity 200000  policy round_robin }
+    link    RailN x50   { moves 20000 IronOre  distance 4000 speed 2 base 100 }
+
+    source  MinerS x100 { produces 1000 IronOre every 50 ticks }
+    storage HeadS       { capacity 200000  policy round_robin }
+    link    RailS x50   { moves 20000 IronOre  distance 4000 speed 2 base 100 }
+
+    source  MinerE x100 { produces 1000 IronOre every 50 ticks }
+    storage HeadE       { capacity 200000  policy round_robin }
+    link    RailE x50   { moves 20000 IronOre  distance 4000 speed 2 base 100 }
+
+    source  MinerW x100 { produces 1000 IronOre every 50 ticks }
+    storage HeadW       { capacity 200000  policy round_robin }
+    link    RailW x50   { moves 20000 IronOre  distance 4000 speed 2 base 100 }
+
+    storage Yard        { capacity 2000000 policy round_robin }
+    process Smelter x1000000000 { consumes 25 IronOre takes 50 ticks produces 25 IronPlate }
+    storage PlateBay    { capacity 2000000 policy round_robin }
+
+    link    PlateRail x30 { moves 10000 IronPlate  distance 3000 speed 2 base 100 }
+
+    storage Works       { capacity 1000000 policy round_robin }
+    process GearPress x500000000 { consumes 20 IronPlate takes 60 ticks produces 10 Gear }
+    storage GearBay     { capacity 500000  policy round_robin }
+    sink    Depot x1000 { consumes 500 Gear every 50 ticks }
+
+    wire MinerN -> HeadN -> RailN -> Yard
+    wire MinerS -> HeadS -> RailS -> Yard
+    wire MinerE -> HeadE -> RailE -> Yard
+    wire MinerW -> HeadW -> RailW -> Yard
+
+    wire Yard -> Smelter -> PlateBay -> PlateRail -> Works
+    wire Works -> GearPress -> GearBay -> Depot
+}
+
+deploy 1 x Continent

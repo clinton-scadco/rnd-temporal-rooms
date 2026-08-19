@@ -1,0 +1,74 @@
+# Configuration 12 -- two regions that trade with each other.
+#
+#   [ Home works ] ==NorthRun, plates==> [ Gear shop ]
+#         ^                                    |
+#         +=========SouthRun, gears============+
+#
+# Config 11 is a chain: material only ever flows downhill, so the region graph
+# is a line and any two regions have an obvious order. This one is a *cycle*.
+# The home works sends plates north and gets gears back, and the assembler that
+# consumes those gears also wants plates -- so it contends with the outbound
+# train for the same bay. Which of them wins is decided by PlateA's policy and
+# by how long the round trip takes, not by declaration order.
+#
+# That cycle is what makes the causal argument non-trivial. A region graph with
+# a loop in it can only be scheduled at all if every loop has strictly positive
+# total latency, and it has that here because both runs declare a trip home.
+# Delete the trips home and the loop closes at zero cost: the two regions can
+# then never differ by a single tick, and `domains::regions` fuses them back
+# into one rather than pretending otherwise. The harness prints both.
+#
+# Rates:
+#   miner       1 x 200 / 40    =  5.00 ore  /tick
+#   smelters   10 x  20 / 40    =  5.00 ore  /tick of appetite
+#   north run  10 x 400 / 1200  =  3.33 plate/tick
+#   assembler   8 x  10 / 60    =  1.33 plate/tick of appetite  <- contends
+#   gear shop  12 x  25 / 50    =  6.00 plate/tick of appetite
+#   south run   6 x 200 / 1200  =  1.00 gear /tick              <- bottleneck
+#
+# So gears back up at the far end and the south run stays saturated, which
+# means vehicles sit blocked at the unloading end -- the case where the two
+# regions really do have to tell each other something.
+
+item IronOre
+item IronPlate
+item Gear
+item Engine
+
+blueprint TradeLoop {
+    source  MinerA x1     { produces 200 IronOre every 40 ticks }
+    storage OreA          { capacity 20000  policy round_robin }
+    process SmelterA x10  { consumes 20 IronOre takes 40 ticks produces 20 IronPlate }
+    storage PlateA        { capacity 30000  policy round_robin }
+
+    link    NorthRun x10  {
+        moves 400 IronPlate
+        distance 1000 speed 2 base 100      # 600 ticks each way
+    }
+
+    storage PlateB        { capacity 30000  policy round_robin }
+    process GearShop x12  { consumes 25 IronPlate takes 50 ticks produces 10 Gear }
+    storage GearB         { capacity 20000  policy round_robin }
+
+    link    SouthRun x6   {
+        moves 200 Gear
+        distance 1000 speed 2 base 100
+    }
+
+    storage GearA         { capacity 20000  policy round_robin }
+    process Assembler x8  {
+        consumes 30 Gear
+        consumes 10 IronPlate
+        takes 60 ticks
+        produces 5 Engine
+    }
+    storage EngineA       { capacity 10000 }
+    sink    Depot x1      { consumes 20 Engine every 120 ticks }
+
+    wire MinerA -> OreA -> SmelterA -> PlateA -> NorthRun -> PlateB
+    wire PlateB -> GearShop -> GearB -> SouthRun -> GearA -> Assembler
+    wire PlateA -> Assembler
+    wire Assembler -> EngineA -> Depot
+}
+
+deploy 1 x TradeLoop

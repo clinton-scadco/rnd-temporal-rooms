@@ -1,0 +1,48 @@
+# Configuration 13 -- a quarter of a billion lines on one ore field.
+#
+#                        Shared ore network
+#                               |
+#          +--------------------+--------------------+
+#          v                    v                    v
+#       Line 1               Line 2      ...    Line 250,000,000
+#
+# v1 and v2 both leaned on deployed lines never touching each other. That is
+# what let T4 answer a billion lines with a handful of phase archetypes: each
+# line's trajectory was a function of its own starting phase and nothing else.
+# One shared bay deletes that assumption completely. Line 1 and line
+# 250,000,000 are now competing for the same ore, and neither can be solved
+# without the other.
+#
+# The compression has to move up a level, and it can -- for exactly one reason.
+# With every storage shared there is no per-line state left anywhere in the
+# plant. Two lines therefore have nothing that could tell them apart, their
+# machines are interchangeable in the same sense two smelters inside one line
+# are, and a million lines of four smelters simply *is* one class of four
+# million smelters. `SmeltLine x 250,000,000` becomes a population.
+#
+# The harness checks that claim rather than asserting it: at small line counts
+# it builds the plant both ways -- as `n` genuinely separate classes over the
+# shared bays, and as one class `n` times as populous -- and requires the two
+# to agree on every counter. It also asks what happens when a line is given a
+# buffer of its own, which is where the argument is supposed to break.
+#
+# Supply is deliberately hopeless: 10,000 ore/tick arriving against 500,000,000
+# ore/tick of appetite. The point of the configuration is the contention, not
+# the throughput.
+
+item IronOre
+item IronPlate
+
+blueprint SmeltLine {
+    shared storage OreNet    { capacity 2000000  policy round_robin }
+    shared source  Field x50 { produces 4000 IronOre every 20 ticks }
+
+    process Smelter x4       { consumes 20 IronOre takes 40 ticks produces 20 IronPlate }
+
+    shared storage PlateNet  { capacity 2000000  policy round_robin }
+    shared sink    Yard x40  { consumes 5000 IronPlate every 20 ticks }
+
+    wire Field -> OreNet -> Smelter -> PlateNet -> Yard
+}
+
+deploy 250_000_000 x SmeltLine

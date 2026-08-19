@@ -37,12 +37,37 @@
 //!
 //! T0 is never implemented; it is the thing this crate exists to avoid.
 //!
-//! `domains` is not a tier. It decides which parts of a plant have to be
-//! solved together in the first place.
+//! # v3 asks: can *causality* be compressed?
+//!
+//! v1 and v2 both still solved one plant as one object with one clock. A
+//! factory the size of a continent is not one thing happening: it is many
+//! regions that cannot possibly affect each other yet, because everything
+//! between them is a train that has not arrived.
+//!
+//! v3 cuts the plant at its transports and runs the pieces as separate
+//! simulations at separate times, exchanging nothing but timestamped batches
+//! and timestamped empty vehicles -- and the result is bit-for-bit the state
+//! one global tick loop would have reached.
+//!
+//! Making that work needed one correction to v2. A v2 transport delivered its
+//! load and then *teleported its vehicle home*, which is a zero-latency channel
+//! running backwards through the transport, so the loading end could never run
+//! a tick ahead of the unloading end. Causal slack is a property of both
+//! directions:
+//!
+//! ```text
+//!   slack(region) = min( latency        of every channel arriving here,
+//!                        return latency of every channel leaving here )
+//! ```
+//!
+//! `domains` and `rooms` are not tiers. `domains` decides which parts of a
+//! plant have to be solved together in the first place; `rooms` runs the parts
+//! that do not.
 
 pub mod analytic;
 pub mod domains;
 pub mod dsl;
 pub mod model;
 pub mod pop;
+pub mod rooms;
 pub mod sim;

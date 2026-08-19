@@ -1,12 +1,15 @@
-//! Experiment harness for v2.
+//! Experiment harness for v3.
 //!
 //! v1 asked whether a billion *independent* factory objects could be answered
-//! without touching a billion objects. They could. v2 removes the independence
+//! without touching a billion objects. They could. v2 removed the independence
 //! -- shared buffers, fan-in, fan-out, feedback cycles, batch transport -- and
-//! asks the same question again.
+//! got the same answer. v3 removes the single clock: a plant is cut at its
+//! transports and the pieces are run as separate simulations at separate times.
 //!
 //! Every configuration is put through the same gauntlet, and every analytic
 //! answer is checked against the event simulator that is not allowed to cheat.
+//! The v3 answers are checked twice over: against the monolithic lumped solver
+//! state for state, and against that same event simulator.
 
 use std::time::{Duration, Instant};
 use temporal_rooms::analytic::{self, Rat};
@@ -14,6 +17,7 @@ use temporal_rooms::domains;
 use temporal_rooms::dsl;
 use temporal_rooms::model::*;
 use temporal_rooms::pop;
+use temporal_rooms::rooms::{self, Room};
 use temporal_rooms::sim::{self, CountersBig, World};
 
 const FAR: Tick = 1_000_000_000_000_000_000;
@@ -56,6 +60,11 @@ fn configs() -> Vec<Cfg> {
         cfg("CONFIG 8 -- contention policies, side by side", "configs/08-policy.factory", 6_000, 1, &[6_000]),
         cfg("CONFIG 9 -- 10,000 smelters on one ore bay", "configs/09-population.factory", 4_000, 1, &[4_000]),
         cfg("CONFIG 10 -- one billion coupled machines", "configs/10-billion.factory", 4_000, 1, &[4_000]),
+        cfg("CONFIG 11 -- three regions on a rail line", "configs/11-railchain.factory", 40_000, 1, &[8_000, 40_000]),
+        cfg("CONFIG 12 -- two regions that trade both ways", "configs/12-tradeloop.factory", 30_000, 1, &[6_000, 30_000]),
+        cfg("CONFIG 13 -- 250,000,000 lines on one ore field", "configs/13-orefield.factory", 4_000, 1, &[4_000]),
+        cfg("CONFIG 14 -- the same field, private bays", "configs/14-privatebay.factory", 20_000, 1, &[20_000]),
+        cfg("CONFIG 15 -- 1.5 billion machines in six regions", "configs/15-continent.factory", 20_000, 1, &[20_000]),
     ]
 }
 
@@ -75,7 +84,7 @@ fn main() {
             Ok(line) => summary.push(line),
             Err(n) => {
                 failures += n;
-                summary.push(format!("{:<16} {:>12} FAILED", short(&c.path), ""));
+                summary.push(format!("{:<16} {:>15} FAILED", short(&c.path), ""));
             }
         }
     }
@@ -84,8 +93,8 @@ fn main() {
     println!("SUMMARY");
     rule('=');
     println!(
-        "{:<16} {:>15} {:>9} {:>11} {:>10} {:>11}",
-        "config", "objects", "classes", "pop cells", "T5 solve", "compression"
+        "{:<16} {:>15} {:>8} {:>10} {:>8} {:>10} {:>10} {:>11}",
+        "config", "objects", "classes", "pop cells", "regions", "drift", "T5 solve", "compression"
     );
     for s in &summary {
         println!("{s}");
@@ -224,6 +233,293 @@ fn run(c: &Cfg) -> Result<String, usize> {
         }
     }
 
+    // ------------------------------- v3 deployments that share a network
+    if let Some(org) = d.origin {
+        println!("\n-- v3  a deployment whose lines share infrastructure -------");
+        let ob = &prog.blueprints[org.blueprint as usize];
+        let shared: Vec<&str> = ob
+            .storages
+            .iter()
+            .filter(|s| s.shared)
+            .map(|s| s.name.as_str())
+            .collect();
+        let private: Vec<&str> = ob
+            .storages
+            .iter()
+            .filter(|s| !s.shared)
+            .map(|s| s.name.as_str())
+            .collect();
+        println!(
+            "  {} lines share [{}]{}",
+            commas(org.lines as u128),
+            shared.join(", "),
+            if private.is_empty() {
+                " and keep nothing private".to_string()
+            } else {
+                format!(" and keep [{}] private", private.join(", "))
+            }
+        );
+        if org.collapsed {
+            println!(
+                "  Nothing is private, so no state distinguishes one line from another\n\
+                 \x20 and the whole deployment is one population:"
+            );
+            for a in &bp.actors {
+                println!(
+                    "    {:<12} x{:<16}{}",
+                    a.name,
+                    commas(a.count as u128),
+                    if a.shared { "(shared: one set for everybody)" } else { "" }
+                );
+            }
+            println!("  the claim, checked against the plant written out line by line:");
+            println!(
+                "    {:>6} {:>9} {:>10} {:>12}  {}",
+                "lines", "classes", "machines", "probe ticks", "agreement"
+            );
+            let mut all_ok = true;
+            for n in [1u64, 2, 3, 5, 8, 13] {
+                let wide = ob.spread(n);
+                let tall = ob.collapse(n);
+                let probes: Vec<Tick> = vec![1, 20, 41, 137, 400, 1_000, 2_000, 5_000];
+                let mut ok = true;
+                for &t in &probes {
+                    let mut a = pop::Pop::new(&wide, n_items);
+                    a.run_until(t);
+                    let mut b = pop::Pop::new(&tall, n_items);
+                    b.run_until(t);
+                    if a.c.produced != b.c.produced || a.c.consumed != b.c.consumed {
+                        ok = false;
+                    }
+                    // Cycles are per class, and the wide plant has `n` classes
+                    // where the tall one has a single populous one, so they are
+                    // summed back before comparing.
+                    let mut k = 0usize;
+                    for (i, orig) in ob.actors.iter().enumerate() {
+                        let reps = if orig.shared { 1 } else { n as usize };
+                        let sum: u64 = (0..reps).map(|j| a.c.cycles[k + j]).sum();
+                        if sum != b.c.cycles[i] {
+                            ok = false;
+                        }
+                        k += reps;
+                    }
+                }
+                all_ok &= ok;
+                println!(
+                    "    {:>6} {:>9} {:>10} {:>12}  {}",
+                    n,
+                    wide.actors.len(),
+                    commas(wide.machines as u128),
+                    probes.len(),
+                    if ok { "exact" } else { "MISMATCH" }
+                );
+            }
+            if !all_ok {
+                fails += 1;
+            }
+            println!(
+                "  Two lines drawing on one bay are not independent for a single tick.\n\
+                 \x20 They are still interchangeable, and that is the property the\n\
+                 \x20 compression actually needed -- v1 asked for the stronger one."
+            );
+        } else {
+            println!(
+                "  A private bay is state that tells one line from another, so the\n\
+                 \x20 lines are not interchangeable and the deployment cannot become a\n\
+                 \x20 population. It is written out line by line instead: {} classes,\n\
+                 \x20 {} storages, {} machines.",
+                bp.actors.len(),
+                bp.storages.len(),
+                commas(bp.machines as u128)
+            );
+            println!("  how different do the lines actually get?");
+            println!(
+                "    {:>9} {:>16} {:>18}",
+                "tick", "distinct lines", "distinct bay levels"
+            );
+            let mut p = pop::Pop::new(bp, n_items);
+            for &t in &[200u64, 1_000, 5_000, 20_000, 60_000, 200_000] {
+                p.run_until(t);
+                let (lines, levels) = line_states(bp, &p, org.lines as usize);
+                println!("    {:>9} {:>16} {:>18}", commas(t as u128), lines, levels);
+            }
+            println!(
+                "  Sixteen lines, and the state space they occupy stays a handful wide.\n\
+                 \x20 That is the v4 question in one table: a deployment may yet be a\n\
+                 \x20 population of *line* states rather than of machine states."
+            );
+        }
+    }
+
+    // ---------------------------------------------- v3 room execution
+    println!("\n-- v3  the Room: regions advancing on their own clocks -----");
+    let plan = rooms::plan(bp);
+    let g = &plan.graph;
+    print!("  regions          {}", g.regions.len());
+    if g.fused > 0 {
+        print!(
+            "   ({} transit domain(s) glued back on: a link whose vehicle\n\
+             \x20                      teleports home pins its two ends into lockstep)",
+            g.fused
+        );
+    }
+    println!();
+    for (i, reg) in g.regions.iter().enumerate() {
+        let names: Vec<String> = reg
+            .storages
+            .iter()
+            .map(|&s| bp.storages[s as usize].name.clone())
+            .chain(reg.classes.iter().map(|&c| {
+                let a = &bp.actors[c as usize];
+                if a.count == 1 {
+                    a.name.clone()
+                } else {
+                    format!("{}x{}", a.name, a.count)
+                }
+            }))
+            .collect();
+        println!(
+            "    region {i}: {}{}",
+            names.iter().take(8).cloned().collect::<Vec<_>>().join(" "),
+            if names.len() > 8 {
+                format!(" ... and {} more", names.len() - 8)
+            } else {
+                String::new()
+            }
+        );
+        println!(
+            "      {} machines, {} buffer, guaranteed slack {}",
+            commas(reg.machines as u128),
+            commas(reg.capacity as u128),
+            match reg.slack(&g.channels) {
+                Some(s) => format!("{} ticks", commas(s as u128)),
+                None => "unbounded -- it hears from nobody".to_string(),
+            }
+        );
+    }
+    for ch in &g.channels {
+        let a = &bp.actors[ch.class as usize];
+        let (num, den) = a.throughput();
+        println!(
+            "    channel {}: region {} -> region {}",
+            a.name, ch.src_region, ch.dst_region
+        );
+        println!(
+            "      {} vehicles x {} {},  {} ticks out / {} ticks home  =  {} items/tick",
+            commas(a.count as u128),
+            commas(a.inputs[0].qty as u128),
+            prog.item_name(a.inputs[0].item),
+            commas(ch.latency as u128),
+            commas(ch.return_latency as u128),
+            Rat::new(num, den).show()
+        );
+        if let Some(geo) = a.geometry {
+            println!(
+                "      latency derived from geometry: {} + {}/{} = {}",
+                geo.base, geo.distance, geo.speed, ch.latency
+            );
+        }
+    }
+
+    // Run the decomposition and check it against the monolithic solver, state
+    // for state rather than merely counter for counter.
+    let room_probes: Vec<Tick> = {
+        let mut v: Vec<Tick> = c.dumps.clone();
+        v.extend([1, 17, 137, 999, 1_500, 3_000, c.t_mat / 2, c.t_mat, c.t_mat + 1]);
+        v.retain(|&t| t > 0);
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let mut room_ok = true;
+    for &t in &room_probes {
+        let mut room = Room::new(&plan, n_items);
+        room.run_until(t);
+        let mut mono = pop::Pop::new(bp, n_items);
+        mono.run_until(t);
+        if room.signature(bp) != mono.signature() || room.counters() != mono.c {
+            println!("  t={t}: MISMATCH between the decomposed and monolithic states");
+            room_ok = false;
+        }
+    }
+    println!(
+        "  {} probe ticks: decomposed state {} monolithic state",
+        room_probes.len(),
+        if room_ok { "== byte for byte ==" } else { "DIFFERS FROM" }
+    );
+    if !room_ok {
+        fails += 1;
+    }
+
+    let ts = Instant::now();
+    let mut room = Room::new(&plan, n_items);
+    room.run_until(c.t_mat);
+    let room_time = ts.elapsed();
+    let ts = Instant::now();
+    let mut mono = pop::Pop::new(bp, n_items);
+    mono.run_until(c.t_mat);
+    let mono_time = ts.elapsed();
+    println!(
+        "  to t={}: {} region advances, {} messages, {} rendezvous",
+        commas(c.t_mat as u128),
+        commas(room.steps as u128),
+        commas(room.messages as u128),
+        commas(room.rendezvous as u128)
+    );
+    println!(
+        "    a region ran alone for {:.0} ticks on average, {} at most",
+        room.mean_advance(),
+        commas(room.max_advance as u128)
+    );
+    for (i, m) in room.modes.iter().enumerate() {
+        println!("    region {i} solved as: {}", m.label());
+    }
+    if g.regions.len() > 1 {
+        println!(
+            "    widest clock skew {} ticks, at {}",
+            commas(room.max_skew as u128),
+            room.skew_clocks
+                .iter()
+                .enumerate()
+                .map(|(i, t)| format!("r{i} t={}", commas(*t as u128)))
+                .collect::<Vec<_>>()
+                .join("  ")
+        );
+    }
+    println!(
+        "    decomposed {} vs monolithic {}",
+        dur(room_time),
+        dur(mono_time)
+    );
+
+    // The same plant with v2's teleporting vehicles, to show what the trip
+    // home is actually buying.
+    if !bp.links().is_empty() {
+        let flat = with_teleporting_links(bp);
+        let fg = domains::regions(&flat);
+        println!(
+            "  delete every trip home (v2's link) and the same plant has {} region(s)\n\
+             \x20   instead of {}: {}",
+            fg.regions.len(),
+            g.regions.len(),
+            if fg.fused > 0 {
+                format!(
+                    "{} of them are pinned into lockstep by a zero-cost\n\
+                     \x20   channel running backwards through the transport",
+                    fg.fused + 1
+                )
+            } else {
+                format!(
+                    "still {}, but the sending side's slack falls to {}",
+                    fg.regions.len(),
+                    fg.min_slack()
+                        .map(|s| format!("{s} ticks"))
+                        .unwrap_or_else(|| "unbounded".into())
+                )
+            }
+        );
+    }
+
     // ------------------------------------------------- T3 rate algebra
     println!("\n-- T3  rate algebra (no simulation at all) -----------------");
     let t3_start = Instant::now();
@@ -322,7 +618,7 @@ fn run(c: &Cfg) -> Result<String, usize> {
         let mut diverged = false;
         for (a, ad) in bp.actors.iter().enumerate() {
             let cyc = Rat::new(pf.delta.cycles[a] as u128, pf.period as u128);
-            let duty = cyc.mul(Rat::new(ad.duration as u128, 1)).div(Rat::new(ad.count as u128, 1));
+            let duty = cyc.mul(Rat::new(ad.cycle() as u128, 1)).div(Rat::new(ad.count as u128, 1));
             let agree = cyc == rr.cycles[a];
             println!(
                 "    {:<14} {:>16}  duty {:>6.1}%   T3 said {:<16} {}",
@@ -489,7 +785,7 @@ fn run(c: &Cfg) -> Result<String, usize> {
                         } else {
                             let cyc = Rat::new(f.delta.cycles[a] as u128, f.period as u128);
                             let duty = cyc
-                                .mul(Rat::new(b2.actors[a].duration as u128, 1))
+                                .mul(Rat::new(b2.actors[a].cycle() as u128, 1))
                                 .div(Rat::new(b2.actors[a].count as u128, 1));
                             format!("{:.1}%", duty.to_f64() * 100.0)
                         }
@@ -559,7 +855,7 @@ fn run(c: &Cfg) -> Result<String, usize> {
             dur(sim_time),
             commas((big.events as f64 / sim_time.as_secs_f64().max(1e-12)) as u128)
         );
-        let dm = Deploy { blueprint: d.blueprint, count: n_mat, stagger: d.stagger };
+        let dm = Deploy { count: n_mat, ..d };
         let ts = Instant::now();
         let (totals, n_arch) = pop::deployment_totals(bp, n_items, &pf, &dm, c.t_mat);
         let t45 = ts.elapsed();
@@ -601,11 +897,13 @@ fn run(c: &Cfg) -> Result<String, usize> {
 
     println!();
     let line = format!(
-        "{:<16} {:>15} {:>9} {:>11} {:>10} {:>11}",
+        "{:<16} {:>15} {:>8} {:>10} {:>8} {:>10} {:>10} {:>11}",
         short(&c.path),
         commas(prog.total_objects()),
         bp.actors.len(),
         pf.max_distinct_states,
+        g.regions.len(),
+        commas(room.max_skew as u128),
         dur(t5_time),
         format!("{:.0}x", pf.population as f64 / pf.max_distinct_states.max(1) as f64)
     );
@@ -616,6 +914,58 @@ fn run(c: &Cfg) -> Result<String, usize> {
     }
 }
 
+
+/// How many genuinely distinct states the lines of a spread deployment are in,
+/// and how many distinct levels their private bays are at.
+///
+/// The lines of a spread plant are named `Thing#k`, so the suffix is the line
+/// number. Shared nodes have no suffix and belong to nobody.
+fn line_states(bp: &Blueprint, p: &pop::Pop, lines: usize) -> (usize, usize) {
+    let mut sigs: Vec<Vec<u8>> = vec![Vec::new(); lines];
+    let mut levels: Vec<Qty> = vec![0; lines];
+    for (s, sd) in bp.storages.iter().enumerate() {
+        let Some(k) = suffix_index(&sd.name).filter(|&k| k < lines) else { continue };
+        levels[k] = p.storage_used(s);
+        sigs[k].extend_from_slice(&p.storage_used(s).to_le_bytes());
+        for &it in &sd.slots {
+            sigs[k].extend_from_slice(&p.storage_qty(s, it).to_le_bytes());
+        }
+    }
+    for (c, ad) in bp.actors.iter().enumerate() {
+        let Some(k) = suffix_index(&ad.name).filter(|&k| k < lines) else { continue };
+        let cp = &p.classes[c];
+        sigs[k].extend_from_slice(&cp.starved.to_le_bytes());
+        sigs[k].extend_from_slice(&cp.done.to_le_bytes());
+        for (dl, n) in &cp.working {
+            sigs[k].extend_from_slice(&(dl - p.now).to_le_bytes());
+            sigs[k].extend_from_slice(&n.to_le_bytes());
+        }
+        sigs[k].push(0xff);
+    }
+    let mut a = sigs;
+    a.sort_unstable();
+    a.dedup();
+    let mut b = levels;
+    b.sort_unstable();
+    b.dedup();
+    (a.len(), b.len())
+}
+
+fn suffix_index(name: &str) -> Option<usize> {
+    name.rsplit_once('#').and_then(|(_, k)| k.parse().ok())
+}
+
+/// The same plant with every transport's trip home deleted, which is exactly
+/// what a v2 `link` was: a vehicle that unloads and is instantly available to
+/// load again, half a factory away.
+fn with_teleporting_links(bp: &Blueprint) -> Blueprint {
+    let mut b = bp.clone();
+    for a in &mut b.actors {
+        a.return_latency = 0;
+    }
+    b.base_period = b.actors.iter().fold(1u64, |p, a| lcm(p, a.cycle()));
+    b
+}
 
 /// The same plant with every storage switched to one arbitration rule.
 ///

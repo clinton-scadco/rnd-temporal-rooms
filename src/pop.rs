@@ -57,6 +57,12 @@ const Q_STARVED: usize = 1;
 const NO_STORE: u32 = u32::MAX;
 
 /// The population state of one actor class.
+///
+/// Four buckets, and for a transport class they are exactly the four places a
+/// vehicle can be: waiting to load, in transit, waiting to unload, on its way
+/// home. That is not a coincidence -- it is why `rooms.rs` can lift a link out
+/// of a plant and run its two ends in different regions without inventing any
+/// new state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClassPop {
     /// Members mid-cycle, as `(finish tick, how many)`, sorted by tick. At most
@@ -66,19 +72,53 @@ pub struct ClassPop {
     pub starved: u64,
     /// Members finished, queued to deposit.
     pub done: u64,
+    /// Transports on the trip home, as `(available tick, how many)`.
+    pub returning: Vec<(Tick, u64)>,
 }
 
 impl ClassPop {
     pub fn total(&self) -> u64 {
-        self.starved + self.done + self.working.iter().map(|w| w.1).sum::<u64>()
+        self.starved
+            + self.done
+            + self.working.iter().map(|w| w.1).sum::<u64>()
+            + self.returning.iter().map(|w| w.1).sum::<u64>()
     }
     pub fn working_total(&self) -> u64 {
         self.working.iter().map(|w| w.1).sum()
     }
     /// Distinct occupied cells: the actual compressed width of this class.
     pub fn distinct_states(&self) -> usize {
-        self.working.len() + (self.starved > 0) as usize + (self.done > 0) as usize
+        self.working.len()
+            + self.returning.len()
+            + (self.starved > 0) as usize
+            + (self.done > 0) as usize
     }
+}
+
+/// Which end of a lifted transport a class stands at, when this engine is one
+/// region of a decomposed plant rather than the whole thing.
+///
+/// `Whole` is the monolithic case and the default: the class does both halves
+/// of its cycle here, and no message crosses anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Port {
+    Whole,
+    /// The loading end. It queues to withdraw and, when served, hands the
+    /// batch to the channel instead of carrying it itself.
+    Out,
+    /// The unloading end. Batches are delivered to it; when it manages to
+    /// deposit them, the vehicle is handed back to the channel.
+    In,
+}
+
+/// A message leaving a region: either a loaded batch heading downstream or an
+/// empty vehicle heading home. Both are `(when it lands, how many)`, and both
+/// land strictly in the receiving region's future.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Emit {
+    pub class: u16,
+    pub at: Tick,
+    pub count: u64,
 }
 
 pub struct Pop<'a> {
@@ -95,10 +135,22 @@ pub struct Pop<'a> {
     pub grants: u64,
     pub rounds: u64,
     cand: Vec<(u32, u32, u16)>,
+    /// Which end of a lifted transport each class stands at. All `Whole` in
+    /// the monolithic case, which is every use outside `rooms.rs`.
+    pub ports: Vec<Port>,
+    /// Messages produced since the caller last drained it.
+    pub outbox: Vec<Emit>,
 }
 
 impl<'a> Pop<'a> {
     pub fn new(bp: &'a Blueprint, n_items: usize) -> Pop<'a> {
+        Pop::new_ported(bp, n_items, vec![Port::Whole; bp.actors.len()])
+    }
+
+    /// As `new`, but some classes are only one end of a transport that has
+    /// been lifted out into a channel.
+    pub fn new_ported(bp: &'a Blueprint, n_items: usize, ports: Vec<Port>) -> Pop<'a> {
+        assert_eq!(ports.len(), bp.actors.len());
         let mut qty = vec![0; bp.qty_stride as usize];
         let mut used = vec![0; bp.storages.len()];
         for (s, sd) in bp.storages.iter().enumerate() {
@@ -114,11 +166,19 @@ impl<'a> Pop<'a> {
             qty,
             used,
             // Every machine starts idle and asking, exactly as `World` does
-            // once its dormancy timer fires at t=0.
+            // once its dormancy timer fires at t=0. The vehicles of a lifted
+            // transport start at its loading end, so the unloading end starts
+            // with none of them.
             classes: bp
                 .actors
                 .iter()
-                .map(|a| ClassPop { working: Vec::new(), starved: a.count, done: 0 })
+                .enumerate()
+                .map(|(i, a)| ClassPop {
+                    working: Vec::new(),
+                    starved: if ports[i] == Port::In { 0 } else { a.count },
+                    done: 0,
+                    returning: Vec::new(),
+                })
                 .collect(),
             rr: vec![0; bp.storages.len() * 2],
             now: 0,
@@ -126,11 +186,32 @@ impl<'a> Pop<'a> {
             grants: 0,
             rounds: 0,
             cand: Vec::with_capacity(16),
+            ports,
+            outbox: Vec::new(),
         };
         // t=0 is itself a tick that has to settle: everyone is idle and asking,
         // and whoever the policy favours starts work before the clock moves.
         p.settle();
         p
+    }
+
+    /// Hand this engine something that arrived from another region: a loaded
+    /// batch that lands at `at`, or an empty vehicle that gets home at `at`.
+    ///
+    /// Both go into an ordinary bucket of the class's own population, which is
+    /// the whole trick -- a region needs no inbox, because "in transit" and
+    /// "on the way home" were already states a class could be in.
+    pub fn deliver(&mut self, class: u16, at: Tick, count: u64) {
+        assert!(at > self.now, "a message landed in region time that is already settled");
+        let c = &mut self.classes[class as usize];
+        let bucket = match self.ports[class as usize] {
+            Port::In => &mut c.working,
+            _ => &mut c.returning,
+        };
+        match bucket.binary_search_by_key(&at, |e| e.0) {
+            Ok(i) => bucket[i].1 += count,
+            Err(i) => bucket.insert(i, (at, count)),
+        }
     }
 
     /// Machines in the whole plant, however few records that takes.
@@ -143,11 +224,14 @@ impl<'a> Pop<'a> {
         self.classes.iter().map(|c| c.distinct_states()).sum()
     }
 
-    /// Next tick at which any machine finishes. `None` means frozen.
+    /// Next tick at which any machine finishes a cycle or gets home. `None`
+    /// means nothing is pending here at all.
     pub fn next_time(&self) -> Option<Tick> {
         self.classes
             .iter()
-            .filter_map(|c| c.working.first().map(|w| w.0))
+            .flat_map(|c| [c.working.first(), c.returning.first()])
+            .flatten()
+            .map(|w| w.0)
             .min()
     }
 
@@ -199,6 +283,15 @@ impl<'a> Pop<'a> {
                 c.working.remove(0);
             }
             c.done += moved;
+            let mut home = 0;
+            while let Some(&(dl, n)) = c.returning.first() {
+                if dl != t {
+                    break;
+                }
+                home += n;
+                c.returning.remove(0);
+            }
+            c.starved += home;
         }
         self.settle();
     }
@@ -238,6 +331,13 @@ impl<'a> Pop<'a> {
         for class in 0..nc {
             if self.pending(class, q) == 0 {
                 continue;
+            }
+            // A port class stands at one end of its trip and contends only
+            // there. The loading end never deposits here; the unloading end
+            // never withdraws here.
+            match (self.ports[class], q) {
+                (Port::Out, Q_DONE) | (Port::In, Q_STARVED) => continue,
+                _ => {}
             }
             let ad = &self.bp.actors[class];
             let primary = if q == Q_DONE { ad.primary_out() } else { ad.primary_in() };
@@ -531,6 +631,14 @@ impl<'a> Pop<'a> {
                 }
                 self.classes[class].starved -= k;
                 let dl = self.now + ad.duration;
+                if self.ports[class] == Port::Out {
+                    // The loading end of a lifted transport. The batch is now
+                    // the channel's problem, and it will surface in another
+                    // region at `dl` -- which is strictly in that region's
+                    // future, because `dl > now >= that region's clock`.
+                    self.outbox.push(Emit { class: class as u16, at: dl, count: k });
+                    continue;
+                }
                 let w = &mut self.classes[class].working;
                 match w.binary_search_by_key(&dl, |e| e.0) {
                     Ok(i) => w[i].1 += k,
@@ -558,8 +666,29 @@ impl<'a> Pop<'a> {
                 }
                 self.c.cycles[class] += k;
                 self.classes[class].done -= k;
-                // Straight to the back of the withdraw queue, as in `sim.rs`.
-                self.classes[class].starved += k;
+                let ret = ad.return_latency;
+                if self.ports[class] == Port::In {
+                    // The unloading end. The vehicle is empty and starts home;
+                    // the loading end will see it as `returning`.
+                    self.outbox.push(Emit {
+                        class: class as u16,
+                        at: self.now + ret,
+                        count: k,
+                    });
+                } else if ret > 0 {
+                    // A transport still has to get back before it can load
+                    // again. This is the only way the unloading end can tell
+                    // the loading end to slow down, and it takes real time.
+                    let dl = self.now + ret;
+                    let r = &mut self.classes[class].returning;
+                    match r.binary_search_by_key(&dl, |e| e.0) {
+                        Ok(i) => r[i].1 += k,
+                        Err(i) => r.insert(i, (dl, k)),
+                    }
+                } else {
+                    // Straight to the back of the withdraw queue, as in `sim.rs`.
+                    self.classes[class].starved += k;
+                }
             }
         }
     }
@@ -577,6 +706,13 @@ impl<'a> Pop<'a> {
         self.used[storage]
     }
 
+    /// The live round-robin pointer of a storage, for the deposit queue
+    /// (`q = 0`) or the withdraw queue (`q = 1`). Part of the state, so a
+    /// decomposed run has to reproduce it too.
+    pub fn rr_at(&self, storage: usize, q: usize) -> u16 {
+        self.rr[storage * 2 + q]
+    }
+
     /// Canonical encoding of the population state, with deadlines relative to
     /// now. This is `World::signature` with the machine records already
     /// collapsed -- the same equivalence, reached without ever expanding it.
@@ -592,6 +728,11 @@ impl<'a> Pop<'a> {
             v.extend_from_slice(&c.starved.to_le_bytes());
             v.extend_from_slice(&c.done.to_le_bytes());
             for (dl, n) in &c.working {
+                v.extend_from_slice(&(dl - self.now).to_le_bytes());
+                v.extend_from_slice(&n.to_le_bytes());
+            }
+            v.push(0xfe);
+            for (dl, n) in &c.returning {
                 v.extend_from_slice(&(dl - self.now).to_le_bytes());
                 v.extend_from_slice(&n.to_le_bytes());
             }
@@ -633,6 +774,9 @@ impl<'a> Pop<'a> {
         }
         for (dl, n) in &c.working {
             parts.push(format!("working@+{}: {}", dl - self.now, n));
+        }
+        for (dl, n) in &c.returning {
+            parts.push(format!("homebound@+{}: {}", dl - self.now, n));
         }
         format!(
             "{} {{ {} }}",

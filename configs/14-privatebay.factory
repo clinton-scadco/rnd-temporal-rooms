@@ -1,0 +1,47 @@
+# Configuration 14 -- the same shared ore field, but every line keeps a bay.
+#
+#                        Shared ore network
+#                               |
+#          +--------------------+--------------------+
+#          v                    v                    v
+#      Smelter x4           Smelter x4           Smelter x4
+#          |                    |                    |
+#      PlateBay#0           PlateBay#1           PlateBay#15    <- private
+#
+# Config 13 collapses because there is nothing private in it: two lines have no
+# state that could tell them apart. Here each line has a buffer of its own, and
+# that buffer is exactly the state that makes lines different. So the
+# deployment cannot become a population, and the compiler says so by writing
+# the sixteen lines out one by one instead -- an exact answer at a worse price,
+# which is better than a refusal.
+#
+# The interesting question is how *much* they differ. Round-robin at OreNet is
+# max-min fair, so all sixteen lines are served identically except for the
+# remainder of the last incomplete lap, and that remainder rotates. The harness
+# measures how many genuinely distinct line states the plant visits over time.
+# If that number stays small, the compression really can move up a level and a
+# deployment becomes a population of *line* states rather than machine states.
+# That is the v4 question, asked here with numbers rather than hope.
+#
+#   field       1 x 200 / 20   = 10.00 ore/tick shared between everybody
+#   smelters   16 x 4 x 20/40  = 32.00 ore/tick of appetite
+#   depots     16 x 100 / 600  =  2.67 plate/tick of appetite
+#
+# so the ore field is fought over, and the private bays fill at slightly
+# different rates, which is the divergence being measured.
+
+item IronOre
+item IronPlate
+
+blueprint PrivateLine {
+    shared storage OreNet   { capacity 100000  policy round_robin }
+    shared source  Field x1 { produces 200 IronOre every 20 ticks }
+
+    process Smelter x4      { consumes 20 IronOre takes 40 ticks produces 20 IronPlate }
+    storage PlateBay        { capacity 40000   policy round_robin }
+    sink    Depot x1        { consumes 100 IronPlate every 600 ticks }
+
+    wire Field -> OreNet -> Smelter -> PlateBay -> Depot
+}
+
+deploy 16 x PrivateLine

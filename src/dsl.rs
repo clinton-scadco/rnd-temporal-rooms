@@ -37,6 +37,32 @@
 //! equal its inputs and whose two ends are different storages. That is the
 //! point: batch transport with latency is already expressible, and naming it
 //! only lets the domain analysis recognise it.
+//!
+//! v3 additions:
+//!
+//! ```text
+//! link Rail x4 {
+//!     moves 4000 IronOre
+//!     distance 1200 speed 2 base 50   # latency = 50 + 1200/2 = 650, both ways
+//! }
+//!
+//! link Belt x40 { moves 10 IronOre takes 20 ticks returns 20 ticks }
+//!
+//! storage OreNet { shared  capacity 400000 }   # one bay for every deployed line
+//! ```
+//!
+//! `returns` is the load-bearing addition. A v2 link teleported its vehicle
+//! home the instant it unloaded, and a vehicle that comes back for free is a
+//! zero-latency channel running *backwards* through the transport -- so the
+//! loading end can never run ahead of the unloading end. Declaring the return
+//! trip is what buys the sending region its causal slack. `distance` implies a
+//! symmetric round trip, because a place that is far away is far away in both
+//! directions.
+//!
+//! v3 also *removes* something: a machine may no longer draw one item from
+//! several storages, or post one item to several storages. Material reaches a
+//! machine through the logistics graph, not by reaching into every bay that
+//! happens to contain what it wants.
 
 use crate::model::*;
 use std::collections::HashMap;
@@ -53,6 +79,10 @@ impl fmt::Display for DslError {
         write!(f, "line {}: {}", self.line, self.msg)
     }
 }
+
+/// Deployments of lines that share some but not all of their storage have to
+/// be written out line by line. Past this many, say so instead.
+const SPREAD_CAP: u64 = 64;
 
 macro_rules! bail {
     ($line:expr, $($t:tt)*) => {
@@ -317,7 +347,7 @@ pub fn parse(src: &str) -> Result<Program, DslError> {
                 bail!(line, "deploy of unknown blueprint `{bpname}`");
             };
             let stagger = if p.eat_word("stagger") { p.expect_num()? } else { 0 };
-            deploys.push(Deploy { blueprint: id, count, stagger });
+            deploys.push(Deploy { blueprint: id, count, stagger, origin: None });
         } else {
             bail!(line, "expected `item`, `blueprint` or `deploy`, found {}", p.describe());
         }
@@ -326,6 +356,68 @@ pub fn parse(src: &str) -> Result<Program, DslError> {
     if blueprints.is_empty() {
         bail!(0, "program declares no blueprints");
     }
+
+    // ---- deployments that share infrastructure -------------------------
+    //
+    // Until now a deployment was a stack of lines that never touched each
+    // other, which is what let T4 answer a billion of them with a handful of
+    // phase archetypes. A shared storage destroys that outright: line 1 and
+    // line 1,000,000 are now competing for the same ore.
+    //
+    // The compression has to move up a level to survive, and it can -- but
+    // only when *nothing* is private. With every storage shared there is no
+    // per-line state left, so two lines have nothing that could distinguish
+    // them, their machines are interchangeable, and `N` lines of `k` machines
+    // are one class of `N * k`. Give a line a buffer of its own and that
+    // buffer is precisely the state that tells lines apart, and the argument
+    // stops working. `Blueprint::spread` is what it would mean instead, and it
+    // does not scale, which is the honest answer rather than a missing one.
+    let mut fused: Vec<Blueprint> = Vec::new();
+    for d in deploys.iter_mut() {
+        let bp = &blueprints[d.blueprint as usize];
+        if !bp.has_shared() || d.count <= 1 {
+            continue;
+        }
+        if d.stagger != 0 {
+            bail!(
+                0,
+                "`{}` has shared storage, so its lines are not independent and \
+                 cannot be staggered against each other",
+                bp.name
+            );
+        }
+        let lines = d.count;
+        let collapsed = bp.all_shared();
+        if !collapsed && lines > SPREAD_CAP {
+            let private: Vec<&str> = bp
+                .storages
+                .iter()
+                .filter(|s| !s.shared)
+                .map(|s| s.name.as_str())
+                .collect();
+            bail!(
+                0,
+                "`{}` shares some storage but keeps {} private ({}), and {} lines \
+                 is past the {} that can be written out one by one. Lines with \
+                 private state are not interchangeable, so this deployment cannot \
+                 be collapsed into populations either. Share the rest, or deploy fewer.",
+                bp.name,
+                private.len(),
+                private.join(", "),
+                lines,
+                SPREAD_CAP
+            );
+        }
+        // Collapse where the lines are interchangeable, and otherwise fall
+        // back to writing them out: an exact answer at a worse price is still
+        // an exact answer, and refusing to answer is not.
+        fused.push(if collapsed { bp.collapse(lines) } else { bp.spread(lines) });
+        d.origin = Some(Origin { blueprint: d.blueprint, lines, collapsed });
+        d.blueprint = (blueprints.len() + fused.len() - 1) as u32;
+        d.count = 1;
+    }
+    blueprints.extend(fused);
+
     Ok(Program { items: items.names, blueprints, deploys })
 }
 
@@ -382,6 +474,9 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
             continue;
         }
 
+        // `shared` in front of anything means "one of these for the whole
+        // deployment", not one per deployed line.
+        let shared_decl = p.eat_word("shared");
         let kindword = match p.peek() {
             Some(Tok::Ident(s)) => s.clone(),
             _ => bail!(line, "expected a node declaration, found {}", p.describe()),
@@ -405,6 +500,7 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
                     }
                     storages.push(StorageDef {
                         name: inst_name(&nodename, k, mult),
+                        shared: body.shared || shared_decl,
                         capacity: body.capacity,
                         slots: Vec::new(),
                         initial: body.initial.clone(),
@@ -419,8 +515,7 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
                 groups.insert(nodename, Group::Storages(ids));
             }
             "source" | "process" | "sink" | "link" => {
-                let (inputs, outputs, duration) =
-                    parse_actor_body(p, items, &kindword, &nodename)?;
+                let body = parse_actor_body(p, items, &kindword, &nodename)?;
                 let kind = match kindword.as_str() {
                     "source" => ActorKind::Source,
                     "sink" => ActorKind::Sink,
@@ -435,9 +530,12 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
                 actors.push(ActorDef {
                     name: nodename.clone(),
                     kind,
-                    inputs,
-                    outputs,
-                    duration,
+                    inputs: body.inputs,
+                    outputs: body.outputs,
+                    duration: body.duration,
+                    return_latency: body.return_latency,
+                    geometry: body.geometry,
+                    shared: shared_decl,
                     count: mult,
                     machine_offset: 0,
                     in_stores: Vec::new(),
@@ -613,18 +711,67 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
         // nowhere to come from -- if every bay feeding it is filled by someone
         // who does not make that ingredient. Silent permanent starvation is a
         // miserable thing to debug, so it is a compile error.
+        // Exactly one bay per ingredient, and exactly one bay per product.
+        //
+        // v2 let a machine reach into every storage wired to it that happened
+        // to hold what it wanted, filling greedily in `in_stores` order. That
+        // made array order a logistics policy all over again -- the same
+        // mistake v2 removed from contention -- and it was the one assumption
+        // the lumped solver could not discharge, because it fills a whole
+        // class in one pass where the simulator interleaves members.
+        //
+        // v3 deletes the question instead of answering it. Material reaches a
+        // machine through the logistics graph: if two bays should feed one
+        // consumer, run a link from one into the other and let transport
+        // latency and the receiving bay's policy decide, which is a property
+        // of the factory somebody built rather than of a `Vec`.
         for st in &a.inputs {
-            if !a.in_stores.iter().any(|&s| storages[s as usize].slots.contains(&st.item)) {
-                bail!(
+            let from: Vec<&str> = a
+                .in_stores
+                .iter()
+                .filter(|&&s| storages[s as usize].slots.contains(&st.item))
+                .map(|&s| storages[s as usize].name.as_str())
+                .collect();
+            match from.len() {
+                0 => bail!(
                     0,
                     "`{}` consumes an item that nothing delivers to any storage feeding it",
                     a.name
-                );
+                ),
+                1 => {}
+                _ => bail!(
+                    0,
+                    "`{}` could draw {} from {} different storages ({}). \
+                     Give it one input buffer and link the others into it.",
+                    a.name,
+                    items.names[st.item as usize],
+                    from.len(),
+                    from.join(", ")
+                ),
             }
         }
         for st in &a.outputs {
-            if !a.out_stores.iter().any(|&s| storages[s as usize].slots.contains(&st.item)) {
-                bail!(0, "`{}` produces an item no storage wired to it accepts", a.name);
+            let to: Vec<&str> = a
+                .out_stores
+                .iter()
+                .filter(|&&s| storages[s as usize].slots.contains(&st.item))
+                .map(|&s| storages[s as usize].name.as_str())
+                .collect();
+            match to.len() {
+                0 => bail!(0, "`{}` produces an item no storage wired to it accepts", a.name),
+                1 => {}
+                _ => bail!(
+                    0,
+                    "`{}` could post {} to {} different storages ({}). \
+                     Name the one that should have it with `{} -> {} {{ {} }}`.",
+                    a.name,
+                    items.names[st.item as usize],
+                    to.len(),
+                    to.join(", "),
+                    a.name,
+                    to[0],
+                    items.names[st.item as usize]
+                ),
             }
         }
         if a.kind == ActorKind::Transport && a.in_stores == a.out_stores {
@@ -634,7 +781,25 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
                 a.name
             );
         }
-        base_period = lcm(base_period, a.duration);
+        if a.kind != ActorKind::Transport && a.return_latency != 0 {
+            bail!(0, "`{}` is not a link and cannot have a return trip", a.name);
+        }
+        // A shared machine has no private line to live in, so everything it
+        // touches has to be shared too.
+        if a.shared {
+            for &s in a.in_stores.iter().chain(a.out_stores.iter()) {
+                if !storages[s as usize].shared {
+                    bail!(
+                        0,
+                        "shared `{}` is wired to private storage `{}`; \
+                         one of the two has to change",
+                        a.name,
+                        storages[s as usize].name
+                    );
+                }
+            }
+        }
+        base_period = lcm(base_period, a.cycle());
     }
     if actors.is_empty() {
         bail!(0, "blueprint `{name}` has no machines");
@@ -648,6 +813,7 @@ struct StorageBody {
     initial: Vec<Stack>,
     policy: Policy,
     priority: Vec<String>,
+    shared: bool,
 }
 
 fn parse_storage_body(
@@ -660,6 +826,7 @@ fn parse_storage_body(
     let mut initial: Vec<Stack> = Vec::new();
     let mut policy = Policy::Index;
     let mut priority: Vec<String> = Vec::new();
+    let mut shared = false;
 
     loop {
         let line = p.line();
@@ -667,7 +834,9 @@ fn parse_storage_body(
             p.pos += 1;
             break;
         }
-        if p.eat_word("capacity") {
+        if p.eat_word("shared") {
+            shared = true;
+        } else if p.eat_word("capacity") {
             capacity = Some(p.expect_num()?);
         } else if p.eat_word("initial") {
             let qty = p.expect_num()?;
@@ -688,7 +857,10 @@ fn parse_storage_body(
             // Commas are whitespace to the lexer, so a priority list is just a
             // run of names, ended by the next keyword or the closing brace.
             while let Some(Tok::Ident(w)) = p.peek() {
-                if matches!(w.as_str(), "capacity" | "initial" | "policy" | "priority") {
+                if matches!(
+                    w.as_str(),
+                    "capacity" | "initial" | "policy" | "priority" | "shared"
+                ) {
                     break;
                 }
                 priority.push(w.clone());
@@ -718,7 +890,17 @@ fn parse_storage_body(
             "storage `{nodename}` starts with {seeded} units but holds only {capacity}"
         );
     }
-    Ok(StorageBody { capacity, initial, policy, priority })
+    Ok(StorageBody { capacity, initial, policy, priority, shared })
+}
+
+/// Everything a machine declaration can carry, gathered before it is resolved
+/// so the keywords may appear in any order.
+struct ActorBody {
+    inputs: Vec<Stack>,
+    outputs: Vec<Stack>,
+    duration: Tick,
+    return_latency: Tick,
+    geometry: Option<Geometry>,
 }
 
 fn parse_actor_body(
@@ -726,11 +908,15 @@ fn parse_actor_body(
     items: &mut Items,
     kindword: &str,
     nodename: &str,
-) -> Result<(Vec<Stack>, Vec<Stack>, Tick), DslError> {
+) -> Result<ActorBody, DslError> {
     p.expect(Tok::LBrace)?;
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     let mut duration: Option<Tick> = None;
+    let mut returns: Option<Tick> = None;
+    let mut distance: Option<u64> = None;
+    let mut speed: Option<u64> = None;
+    let mut base: Tick = 0;
 
     loop {
         let line = p.line();
@@ -771,14 +957,60 @@ fn parse_actor_body(
                 bail!(line, "`{nodename}` has a zero-tick cycle");
             }
             duration = Some(d);
+        } else if p.eat_word("returns") {
+            // The trip home. Without it a vehicle teleports back to the
+            // loading end, which is v2's behaviour and is why v2's sending
+            // regions had no slack at all.
+            let d = p.expect_num()?;
+            p.expect_word("ticks")?;
+            returns = Some(d);
+        } else if p.eat_word("distance") {
+            distance = Some(p.expect_num()?);
+        } else if p.eat_word("speed") {
+            let s = p.expect_num()?;
+            if s == 0 {
+                bail!(line, "`{nodename}` declares zero speed");
+            }
+            speed = Some(s);
+        } else if p.eat_word("base") {
+            base = p.expect_num()?;
+            p.eat_word("ticks");
         } else {
             bail!(line, "unexpected {} inside `{nodename}`", p.describe());
         }
     }
 
-    let Some(duration) = duration else {
-        bail!(p.line(), "`{nodename}` never says how long a cycle takes");
+    // Geometry, if declared, fixes both legs: somewhere far away is far away
+    // in both directions. Explicit `takes` / `returns` still win, so a one-way
+    // conveyor with a fast return path stays expressible.
+    let geometry = match (distance, speed) {
+        (Some(d), Some(s)) => Some(Geometry { base, distance: d, speed: s }),
+        (Some(_), None) => bail!(p.line(), "`{nodename}` declares a distance but no speed"),
+        (None, Some(_)) => bail!(p.line(), "`{nodename}` declares a speed but no distance"),
+        (None, None) => {
+            if base != 0 {
+                bail!(p.line(), "`{nodename}` declares a base delay but no distance");
+            }
+            None
+        }
     };
+    if geometry.is_some() && kindword != "link" {
+        bail!(p.line(), "`{nodename}` is not a link, so distance means nothing to it");
+    }
+    let geo_latency = geometry.map(|g| g.latency());
+    if let Some(l) = geo_latency {
+        if l == 0 {
+            bail!(p.line(), "`{nodename}` works out to a zero-tick trip; give it a base delay");
+        }
+    }
+    let duration = match duration.or(geo_latency) {
+        Some(d) => d,
+        None => bail!(p.line(), "`{nodename}` never says how long a cycle takes"),
+    };
+    let return_latency = returns.or(geo_latency).unwrap_or(0);
+    if return_latency != 0 && kindword != "link" {
+        bail!(p.line(), "`{nodename}` is not a link, so it has no trip home");
+    }
     match kindword {
         "source" if !inputs.is_empty() => {
             bail!(p.line(), "source `{nodename}` cannot consume; make it a process")
@@ -794,7 +1026,7 @@ fn parse_actor_body(
         "link" if inputs.is_empty() => bail!(p.line(), "link `{nodename}` moves nothing"),
         _ => {}
     }
-    Ok((inputs, outputs, duration))
+    Ok(ActorBody { inputs, outputs, duration, return_latency, geometry })
 }
 
 fn inst_name(base: &str, k: u64, mult: u64) -> String {

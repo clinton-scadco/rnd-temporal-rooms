@@ -9,28 +9,29 @@ without simulating a billion objects? Yes — a deployment of identical,
 non-interacting lines has only as many distinct trajectories as it has starting
 phases, so a few hundred closed-form evaluations answer for all of them.
 
-That result rested on lines never touching each other, which is not what a
-factory is. Wire several machines to one buffer and whether A can act depends on
-what B already did; the archetypes stop being independent and the argument
-collapses.
+**v2** asked the harder question: can *interaction* be compressed? Also yes.
+Ten thousand smelters fighting over one ore bay are not independent, but at any
+instant each is in one of a couple of dozen local states, and machines sharing a
+state are interchangeable. One billion coupled machines fit in 60 numbers.
 
-**v2** asks the harder question: can *interaction* be compressed?
+Both answers still solved one plant as one object with one clock.
 
-> Ten thousand smelters fighting over one ore bay are not independent. But at
-> any instant each of them is in one of a couple of dozen local states, and
-> machines sharing a state are interchangeable. So the thing to compress is not
-> "identical factories" but **identical states inside one coupled factory** —
-> and that survives contention intact.
+**v3** asks: can *causality* be compressed?
 
-It works, it is exact, and it costs nothing in the population size. One billion
-coupled machines are held in 60 numbers and solved in 0.7 ms.
+> A factory the size of a continent is not one thing happening. It is many
+> regions that cannot possibly affect each other yet, because everything
+> between them is a train that has not arrived. Can those regions be run as
+> genuinely separate simulations, at genuinely different times, and still
+> produce exactly — bit for bit — the answer one global tick loop would have?
+
+Yes. And the thing that makes it work is a detail v2 got wrong.
 
 ## Quick start
 
 ```powershell
-.\run.ps1          # build + run all ten configurations
-.\run.ps1 -Test    # run the cross-validation suite
-.\run.ps1 configs/09-population.factory   # just one
+.\run.ps1          # build + run all fifteen configurations
+.\run.ps1 -Test    # 34 cross-validation tests
+.\run.ps1 configs/11-railchain.factory                     # just one
 ```
 
 `run.ps1` exists because rustup installs the MSVC toolchain without setting the
@@ -38,113 +39,308 @@ MSVC/Windows-SDK library search paths; it discovers them and sets `LIB`.
 
 ## The headline result
 
-`configs/09-population.factory` and `configs/10-billion.factory` are the same
-plant at two scales. Three miner classes on mismatched periods feed one ore bay;
-two smelter classes with different recipes fight over it; the shortfall has to be
-divided every tick. Nothing in either plant is independent of anything else.
+`configs/15-continent.factory` is four distant mines railing ore to one smelting
+region, which rails plate on to a works. One and a half billion machines.
 
-| | config 9 | config 10 |
+```
+regions          6
+  region 0: HeadN MinerNx100        100 machines,   slack 2,100 ticks
+  region 1: HeadS MinerSx100        100 machines,   slack 2,100 ticks
+  region 2: HeadE MinerEx100        100 machines,   slack 2,100 ticks
+  region 3: HeadW MinerWx100        100 machines,   slack 2,100 ticks
+  region 4: Yard PlateBay Smelterx1000000000    slack 1,600 ticks
+  region 5: Works GearBay GearPressx500000000   slack 1,600 ticks
+
+  channel RailN: region 0 -> region 4
+    50 vehicles x 20,000 IronOre,  2,100 out / 2,100 home  =  238.0952 items/tick
+    latency derived from geometry: 100 + 4000/2 = 2100
+
+9 probe ticks: decomposed state == byte for byte == monolithic state
+to t=20,000: 42 region advances, 412 messages, 36 rendezvous
+  a region ran alone for 2857 ticks on average, 4,200 at most
+  widest clock skew 4,200 ticks, at
+     r0 t=6,300  r1 t=2,100  r2 t=2,100  r3 t=2,100  r4 t=4,200  r5 t=3,200
+```
+
+Six clocks, three thousand ticks apart, and the same state as the monolithic
+solver — not the same throughput, the same *state*: storage contents, class
+populations, in-flight batches, vehicles halfway home, live round-robin
+pointers, canonical hash. Forty-two region advances did the work that four
+hundred thousand global ticks would have.
+
+The two compressions stack and neither knows about the other:
+
+| | v2 result | v3 result |
 |---|---|---|
-| machines | 10,085 | **1,008,500,000** |
-| occupied population cells | 60 | **60** |
-| orbit | period 120, entered t=416 | period 120, entered t=416 |
-| T5 solve | 447 µs | **705 µs** |
-| T1 (machine by machine) | 104,239 events, 6.6 ms | refuses to run |
-| agreement | exact, every counter | — |
+| machines | 1,500,001,630 | same |
+| population cells | 51 | same |
+| clocks | 1 | **6** |
+| decomposed vs monolithic | — | 446 µs vs 774 µs |
 
-A hundred thousand times the machines, the same sixty numbers, the same orbit.
-The population size survives only as the integer inside each cell.
+## What v2 got wrong: the trip home
 
-Here is what the state actually looks like mid-orbit — the compression is not an
-abstraction over the state, it *is* the state:
+v2 noticed that cutting a transport splits a plant, and computed how long each
+piece could run alone. That number was the transport's latency, and it was half
+of an answer.
 
-```
-t=4000  OreBay[0/50000: empty]   PlateBay[1700/50000: 1700 IronPlate]
-  MinerA   { working@+20: 20 }
-  SmelterA { idle/starved: 4000, working@+10: 80, working@+16: 80, working@+20: 80,
-             working@+40: 240, working@+60: 80, ... working@+200: 80 }
-  SmelterB { idle/starved: 1040, working@+20: 240, ... working@+300: 80 }
-  Shipping { working@+6: 2, working@+10: 23 }
-```
+A link moves material from A to B. Cutting it buys **B** a window, because a
+batch that has not been loaded yet cannot possibly arrive for `latency` ticks.
+It buys **A** nothing at all — because in v2 the vehicle unloaded at B and was
+instantly available at A again. That is a zero-latency channel running
+*backwards* through the transport, and it means the loading end can never run a
+single tick ahead of the unloading end.
 
-## Why this is exact, not an approximation
-
-Every machine queued at a storage is in the identical local state: idle and
-asking for the same items, or finished and offering the same items. Permuting
-the members of such a queue maps the global state to itself. Arbitration is
-defined so that only *how many* members a class is served can affect anything —
-which member is a free choice.
-
-So "relabel machines within a class" is a **strong lumping**: the population
-dynamics are well defined on their own, and every aggregate the full simulator
-computes is recoverable from them. `sim.rs` is the ground truth and `pop.rs` is
-a claim about it, so the two share no code and are run against each other.
-
-The one algorithmic trick: serving a class one member at a time would be O(N)
-again. Instead ask directly *how many members can be served at once*. Feasibility
-is monotone — if k members fit then k−1 do, their allocation being a prefix of
-the same greedy fill — so the answer is a binary search with an exact scaled
-feasibility test. Serving four machines and serving four billion cost the same
-handful of tests.
-
-## Contention had to be fixed first
-
-v1 processed one machine per event, so whichever event popped first won any
-contention. That meant **lowest array index always wins** — deterministic, and a
-logistics policy nobody chose. T5 is only well defined once arbitration is
-something the plant declares, so v2 makes it a `Policy` on each storage and
-replaces event-order-decides with explicit **rounds**:
+So v3 makes the return trip real:
 
 ```
-round:
-  phase A -- every machine whose work finished tries to deposit, in policy order
-  phase B -- every idle machine tries to withdraw, likewise
-repeat while anything succeeded, then advance the clock
+link OreTrain x8 {
+    moves 6000 IronOre
+    distance 2400 speed 2 base 200      # 1400 ticks each way
+}
 ```
 
-`configs/08-policy.factory` is three identical shops on one bay with supply for
-about half of them — experiment-02.md's complaint made concrete. Same plant, same
-numbers, one keyword changed:
+A declared distance is symmetric — somewhere far away is far away in both
+directions — so it fixes both legs. `takes` and `returns` set them separately
+when a plant wants an asymmetric route.
 
-| class | `index` | `round_robin` |
+Causal slack is therefore a property of both directions:
+
+```
+slack(region) = min( latency        of every channel arriving here,
+                     return latency of every channel leaving here )
+```
+
+The consequences are visible immediately. On `configs/07-transport.factory`,
+which is a v2 configuration untouched:
+
+| region | v2 said | v3 says |
 |---|---|---|
-| ShopA | **100.0%** | 55.6% |
-| ShopB | 66.7% | 55.6% |
-| ShopC | **0.0%** | 55.6% |
-| Depot (throughput) | 27.8% | 27.8% |
+| Yard, smelters (receiving) | advance alone 3,000 ticks | slack 3,000 |
+| MineHead, miners (sending) | **independent forever** | **slack 0** |
 
-Under `index`, ShopC never runs. Not once, in either direction, forever, purely
-because it was written last. Both answers are exact and deterministic. They are
-different games, and now the plant says which one it wants.
+v2 called the mine independent forever because nothing arrives there. Nothing
+does — but its trains have to come back, and in that configuration they come
+back instantly, so the mine can never lead the yard by one tick. The tests
+assert both readings, because v2's was not wrong about arrivals; it was
+answering a different question than the one a scheduler asks.
 
-Two decisions carry the weight:
-
-- **A class is exactly the set of machines the arbiter refuses to distinguish.**
-  Within a class service is FIFO rotation, so `Smelter x4` shares by
-  construction. Want v1's lopsided split? Declare four separate classes.
-- **Round-robin deals one member per class per lap**, not "everything you can
-  take". The obvious implementation is not round-robin at all: a class of six
-  thousand idle smelters is never satisfied, so a pointer that waits for
-  satisfaction never moves and the class behind it starves exactly as under
-  `index`. Dealing one at a time is what actually shares, and the result is
-  max-min fair.
-
-Measured across every configuration, every class now splits its work to within
-the one cycle integrality forces:
+And where zero return trips close a **loop**, the regions on it can never differ
+at all. `configs/12-tradeloop.factory` sends plates north and gets gears back:
 
 ```
-SmelterA  x6,000   cycles per machine: min 6    max 7    gap 1   (perfectly shared)
-SmelterB  x4,000   cycles per machine: min 9    max 10   gap 1   (perfectly shared)
-Miner     x20      cycles per machine: min 200  max 200  gap 0   (perfectly shared)
+with trips home:     2 regions, slack 600 both ways
+without them:        1 region  -- fused, because the loop costs nothing
 ```
 
-Getting there needed one non-obvious fix. Timer events fire in machine-index
-order, so re-queueing finishers straight from the event stream resets the
-rotation to index order every time a whole class finishes together — and then
-low indices win every contention again. Machines mid-cycle are kept in their own
-queue and handed back in the order they started (`Q_WORK` in `sim.rs`). The
-lumped solver knows nothing about any of this and still matched, before and
-after, which is the lumping argument demonstrated rather than asserted.
+That fusion is not a nicety. A conservative scheduler on a zero-weight
+constraint cycle deadlocks. `domains::regions` finds the strongly connected
+components of the zero-return graph and glues them back together before the
+scheduler ever sees them, so every remaining cycle has strictly positive
+weight and progress is guaranteed.
+
+> Distance is what makes a factory distributable, and distance only counts
+> when it is paid for in both directions.
+
+## How a region runs alone
+
+A transport class is **lifted out** of both regions and becomes a channel. It
+needs no new state to do this, because the four buckets a class already had are
+exactly the four places a vehicle can be:
+
+```
+starved    waiting to load       <- lives in the sending region
+working    in transit            <- a message between them
+done       waiting to unload     <- lives in the receiving region
+returning  on the trip home      <- a message back
+```
+
+So a region has no inbox. A batch landing at tick *t* is delivered straight into
+the receiving region's `working` bucket; an empty vehicle getting home at tick
+*t* into the sending region's `returning` bucket. Both are ordinary states those
+classes could already be in.
+
+Every such message lands strictly in the receiver's future, and that is asserted
+on delivery rather than argued:
+
+```rust
+assert!(at > self.now, "a message landed in region time that is already settled");
+```
+
+That one line is the whole claim that these regions could be running on
+different machines. It holds because the scheduler will not let a region settle
+past
+
+```
+min over inbound  channels of ( clock[sender]   + latency        )
+min over outbound channels of ( clock[receiver] + return latency )
+```
+
+Each region gets its own real `Blueprint` — its own storage indices, its own
+class indices, its own arbitration queues — rather than a mask over a shared
+one. A mask is a promise that a region could be handed to another process; a
+blueprint is a region that can be.
+
+Regions are also picked up *furthest-behind-first*, which is what turns a
+correct scheduler into a useful one: advancing the laggard raises the most
+horizons at once.
+
+## Topology decides precedence, not array order
+
+v2 shipped one assumption it could not discharge. When several classes drew one
+item from the same *set* of bays, the lumped solver filled them in one pass
+where the simulator interleaved, and the totals only agreed because every
+configuration happened to list the bays in the same order.
+
+v3 does not answer that question. It deletes it:
+
+```
+`Furnace` could draw IronOre from 2 different storages (BayA, BayB).
+Give it one input buffer and link the others into it.
+```
+
+A machine has exactly one bay per ingredient and one per product. If two bays
+should feed one consumer, run a link from one into the other — and then which
+material arrives first is decided by transport latency, transport throughput and
+the receiving bay's declared policy. That is a property of the factory somebody
+built, not of a `Vec`.
+
+Every v2 configuration already satisfied this, so the rule cost nothing and
+retired the last unproven assumption in the compression argument.
+
+## Transport is physics now
+
+A link is a deterministic delayed transfer with capacity and throughput
+constraints, and throughput is **derived** rather than declared, so there is no
+second number to disagree with the first three:
+
+```
+throughput = vehicles x batch / (latency + return latency)
+```
+
+| shape | declaration | throughput |
+|---|---|---|
+| train | `x8 { moves 6000 IronOre distance 2400 speed 2 base 200 }` | 17.14 ore/tick |
+| belt | `x40 { moves 10 IronOre takes 20 ticks returns 20 ticks }` | 10 items/tick |
+
+Those are the same abstraction. A belt is a shuttle with many small vehicles and
+a short trip; a train is a shuttle with few large ones and a long trip. A
+physical belt's return path is why a blocked head backs the tail up over
+`latency` ticks rather than instantly — which is exactly the causal slack the
+scheduler uses. The model and the intuition agree once the return path exists,
+and a belt declared with no return path is the unphysical one.
+
+Backpressure crosses a channel as it should: batches that arrive at a full bay
+wait there as `done`, holding their vehicles, and the sending region runs out of
+things to load. The state dump shows all of it:
+
+```
+RailN { homebound@+1050: 5, homebound@+1100: 5, ... homebound@+1500: 5 }
+PlateRail { homebound@+1400: 30 }
+Smelter { idle/starved: 999352000, blocked: 648000 }
+```
+
+## Deployments that share a network
+
+v1 and v2 both leaned on deployed lines never touching each other. That is what
+let phase archetypes answer a billion lines. One shared bay deletes the
+assumption outright: line 1 and line 250,000,000 are now competing for the same
+ore.
+
+`configs/13-orefield.factory` says so directly:
+
+```
+shared storage OreNet    { capacity 2000000  policy round_robin }
+shared source  Field x50 { produces 4000 IronOre every 20 ticks }
+process Smelter x4       { consumes 20 IronOre takes 40 ticks produces 20 IronPlate }
+
+deploy 250_000_000 x SmeltLine
+```
+
+The compression moves up a level, and for exactly one reason. With every storage
+shared there is **no per-line state left**, so two lines have nothing that could
+tell them apart, their machines are interchangeable in the same sense two
+smelters inside one line are, and 250,000,000 lines of four smelters simply *is*
+one class of a billion smelters:
+
+```
+Field    x50              (shared: one set for everybody)
+Smelter  x1,000,000,000
+Yard     x40              (shared: one set for everybody)
+
+1,000,000,092 objects -> 5 population cells      (200,000,018x)
+```
+
+That is a claim, so it is checked rather than asserted: at small line counts the
+harness builds the plant *both* ways — as *n* genuinely separate classes over
+the shared bays, and as one class *n* times as populous — and requires every
+counter to match.
+
+```
+ lines   classes   machines  probe ticks  agreement
+     1         3         94            8  exact
+     2         4         98            8  exact
+     3         5        102            8  exact
+     5         7        110            8  exact
+     8        10        122            8  exact
+    13        15        142            8  exact
+```
+
+Note what makes this legal. The wide form has *n* classes at one bay and the
+tall form has one; under `round_robin` those give the same totals because the
+policy is blind to the labels being merged. Under `index` they do not. Higher-
+level lumping needs an arbiter that refuses to distinguish the things being
+lumped — which is v2's definition of a class, one level up.
+
+### And where it breaks
+
+Give a line a buffer of its own and that buffer is precisely the state that
+tells lines apart. `configs/14-privatebay.factory` is the same shared ore field
+with a private plate bay per line, and the compiler refuses to collapse it —
+writing the sixteen lines out one by one instead, which is an exact answer at a
+worse price rather than a refusal. Past 64 lines it says so and stops.
+
+The interesting question is *how much* the lines actually differ, because
+round-robin at the shared bay is max-min fair and only the remainder of the last
+incomplete lap rotates. Measured:
+
+```
+     tick   distinct lines   distinct bay levels
+      200                4                     1
+    1,000                4                     1
+    5,000                4                     1
+   20,000                3                     2
+   60,000                3                     2
+  200,000                2                     1
+```
+
+Sixteen lines, and the state space they occupy stays a handful wide. That is the
+v4 question in one table: a deployment may yet be a population of *line* states
+rather than of machine states.
+
+## Execution modes
+
+A region uses the cheapest exact representation available to it, and says which
+one it used:
+
+```
+closed form          region hears from nobody; any tick is one evaluation away
+      v
+population           lumped, stepped by the scheduler
+      v
+event simulation     the floor: sim.rs, which every answer is checked against
+```
+
+Compression is an optimisation of exact semantics, not a requirement imposed on
+the player's factory. On `configs/09-population.factory` the Room finds one
+region and solves it in closed form; on `configs/11-railchain.factory` every
+region has a neighbour to listen to and all three are stepped, and the Room
+reports which rung each region used.
+
+The bottom rung is honest but not yet plumbed into a region: `sim.rs` runs whole
+plants, not halves of a lifted transport, so a Room cannot currently put *one*
+of its regions on it. Nothing has needed that — with the one-bay rule in place
+the lumped form is exact on every topology the DSL can express, and the ladder
+exists for the day it is not.
 
 ## The tiers
 
@@ -159,19 +355,13 @@ after, which is the lumping argument demonstrated rather than asserted.
 
 T0 is never implemented; it is the thing this crate exists to avoid.
 
-T2 and T5 find the same orbit wherever both can run — because v2 wrote T2's state
-signature to quotient out machine identity too. The difference between them is
-not the answer but the price: **T2 still walks a materialised machine list, so it
-stops at exactly the scale T5 exists for.** On config 10 it cannot start.
-
-`domains` is not a tier. It decides which parts of a plant have to be solved
-together in the first place.
+`domains` and `rooms` are not tiers. `domains` decides which parts of a plant
+have to be solved together; `rooms` runs the parts that do not.
 
 ## Language
 
 ```
 item IronOre
-item Catalyst
 
 blueprint Line {
     source  Miner x50 { produces 1000 IronOre every 60 ticks }
@@ -184,7 +374,15 @@ blueprint Line {
     }
 
     process Smelter x10000 { consumes 10 IronOre takes 20 ticks produces 10 IronPlate }
-    link    Rail x2       { moves 12000 IronOre takes 3000 ticks }
+
+    link    Rail x8 {
+        moves 6000 IronOre
+        distance 2400 speed 2 base 200   # latency = 200 + 1200, both ways
+    }
+    link    Belt x40 { moves 10 IronOre takes 20 ticks returns 20 ticks }
+
+    shared storage OreNet   { capacity 2000000 }   # one bay for every deployed line
+    shared source  Field x50 { produces 4000 IronOre every 20 ticks }
 
     wire Miner -> OreBay -> Smelter
     wire Reactor -> CatBay { Catalyst }   # item-qualified
@@ -193,166 +391,82 @@ blueprint Line {
 deploy 125_000 x Line stagger 7
 ```
 
-New in v2:
+New in v3:
 
 | construct | meaning |
 |---|---|
-| `x N` on a machine | **population**, not N nodes. One class, count N. |
-| `initial Q I` | storage contents at t=0. Without it, a cycle can never turn. |
-| `policy P` | `index`, `round_robin` or `priority` |
-| `priority A, B` | declared service order |
-| `link N { moves Q I takes D ticks }` | batch transport with latency |
-| `wire A -> B { I, J }` | only these items travel this way |
+| `returns D ticks` | how long a vehicle takes to get home after unloading |
+| `distance D speed S base B` | latency `B + D/S`, symmetric, so both legs |
+| `shared storage` / `shared source` | one of these for the whole deployment |
 
-`x N` changing meaning is the load-bearing edit. In v1, `Smelter x4` lowered to
-four `ActorDef`s — fine for four, fatal for ten thousand, because the blueprint
-is the thing every analysis walks. A blueprint must stay small however many
-machines it stands for.
-
-A **`link` is not a new primitive.** It lowers to a process whose outputs equal
-its inputs and whose two ends are different storages. Batch transport with
-latency was already expressible; naming it only lets the domain analysis
-recognise what it is.
-
-## Cycles
-
-`configs/06-cycle.factory` is a reactor that consumes catalyst and gives it back.
-On paper the loop balances; in practice it turns only if something seeded it.
-
-Delete `initial 40 Catalyst` and T3 declares the plant dead before anything is
-simulated: catalyst is **unattainable**, because making it requires already
-having it. That is a least-fixpoint reachability check over items, and it costs
-nothing. The simulator agrees by simply never running the reactor.
-
-Catalysts, returned containers, recycled coolant and waste reprocessing are all
-this shape, so the check earns its place.
-
-## Domains: finding Room boundaries instead of declaring them
-
-Two nodes are in the same domain if a change to one can affect the other *at the
-same instant*. Wiring two machines to one storage does exactly that, so
-contention fuses its participants into a single indivisible unit of simulation.
-
-Transport is different. A batch departing at *t* and landing at *t+D* carries no
-information for those D ticks. So there are two decompositions:
-
-- **hard domains** — components of the whole wiring graph. These never interact.
-- **transit domains** — components once transports are cut. These interact only
-  through scheduled batches.
-
-On `configs/07-transport.factory`:
-
-```
-hard domains     1
-transit domains  2
-  domain 0: MineHead Minerx4
-    4 machines, 20,000 buffer; nothing ever arrives, independent forever
-  domain 1: Yard PlateBay Smelterx20 Shipping
-    21 machines, 25,000 buffer; can be advanced alone for 3,000 ticks
-```
-
-That second number is the Room answer: how long a region can run without hearing
-from anyone. It is derived from the graph, not declared by a player.
-
-## T3 was wrong in a more interesting way than v1 knew
-
-v1 found that the fluid model gets aggregate throughput right and individual
-machine utilisation wrong. v2 found *why*, and found a second bug.
-
-**The bug.** v1 balanced flows per item. A transport consumes IronOre and
-produces IronOre, so an item-global balance cannot tell ore at the mine from ore
-in the yard, concludes ore both feeds and starves itself, and converges to a
-fixpoint of nonsense (`0.0500 (10388959865371/207769559501340)` — a real number
-this repo used to print). Balancing at each **storage** separately asks the only
-question that was ever meaningful: is this bay filling faster than it drains.
-Config 7 then agrees with the exact solver to the last digit.
-
-The same fix exposed an older modelling wart: a storage was being given slots for
-items its *consumers* wanted, not only items its *producers* deposit. Wire an
-assembler needing gears and copper to a gear bay and a copper bay, and both bays
-acquired both slots. A storage now holds exactly what is put into it.
-
-**The deeper point.** Where T3 still diverges, it is not imprecise. On config 9:
-
-| class | T3 | exact |
-|---|---|---|
-| SmelterA | 15 cycles/tick | **10** |
-| SmelterB | 6.67 cycles/tick | **10** |
-
-A fluid model has to assume *some* rule for dividing a scarce input, and it
-assumes each machine takes a share proportional to its appetite. That is a
-contention policy — an unstated one, and not the one the plant declared.
-Aggregate throughput still comes out right; who did the work does not.
+Removed in v3: drawing one item from several bays, or posting one item to
+several bays. Route them through a link instead.
 
 ## Results
 
 Measured on Windows 11 / x86-64, single-threaded, `opt-level=3 lto=fat`.
 
-| config | objects | classes | pop cells | T5 solve | compression |
-|---|---|---|---|---|---|
-| 01-spec | 3 | 2 | 2 | 108 µs | 1× |
-| 02-balanced | 1,000,000 | 3 | 4 | 20 µs | 2× |
-| 03-megafactory | 1,000,000,005 | 5 | 9 | 2.9 ms | 1× |
-| 04-science | 220 | 7 | 11 | 747 µs | 1× |
-| 05-coupled | 9 | 4 | 4 | 1.1 ms | 2× |
-| 06-cycle | 7 | 3 | 3 | 189 µs | 1× |
-| 07-transport | 30 | 4 | 5 | 391 µs | 5× |
-| 08-policy | 7 | 5 | 5 | 49 µs | 1× |
-| 09-population | 10,087 | 6 | 60 | 447 µs | **168×** |
-| 10-billion | 1,008,500,002 | 6 | 60 | 705 µs | **16,808,333×** |
+| config | objects | classes | pop cells | regions | clock drift | T5 solve | compression |
+|---|---|---|---|---|---|---|---|
+| 01-spec | 3 | 2 | 2 | 1 | 0 | 65 µs | 1× |
+| 02-balanced | 1,000,000 | 3 | 4 | 1 | 0 | 18 µs | 2× |
+| 03-megafactory | 1,000,000,005 | 5 | 9 | 1 | 0 | 4.0 ms | 1× |
+| 04-science | 220 | 7 | 11 | 1 | 0 | 663 µs | 1× |
+| 05-coupled | 9 | 4 | 4 | 1 | 0 | 1.3 ms | 2× |
+| 06-cycle | 7 | 3 | 3 | 1 | 0 | 171 µs | 1× |
+| 07-transport | 30 | 4 | 5 | 2 | 3,000 | 402 µs | 5× |
+| 08-policy | 7 | 5 | 5 | 1 | 0 | 38 µs | 1× |
+| 09-population | 10,087 | 6 | 60 | 1 | 0 | 451 µs | 168× |
+| 10-billion | 1,008,500,002 | 6 | 60 | 1 | 0 | 871 µs | 16,808,333× |
+| 11-railchain | 133 | 6 | 25 | **3** | **2,300** | 83 ms | 5× |
+| 12-tradeloop | 54 | 7 | 24 | **2** | **600** | 24 ms | 2× |
+| 13-orefield | 1,000,000,092 | 3 | 5 | 1 | 0 | 27 µs | **200,000,018×** |
+| 14-privatebay | 98 | 33 | 69 | 1 | 0 | 104 ms | 1× |
+| 15-continent | 1,500,001,638 | 12 | 51 | **6** | **4,200** | 2.2 s | **29,411,797×** |
 
-Every one of these is cross-validated against the event simulator wherever the
-event simulator can run. "Exact" means every counter — cycles per class, units
-produced and consumed per item — matches bit for bit.
+Every configuration is cross-validated three ways: the lumped solver against the
+machine-by-machine simulator, the decomposed Room against the monolithic solver
+byte for byte, and the Room against the machine-by-machine simulator directly.
+Configs 1–10 are v2's, unchanged, and produce v2's numbers exactly — the return
+trip defaults to zero, so nothing that did not ask for the new physics got it.
 
-Still measured directly:
-
-- **1,000,000 objects fully materialised**, 48.3M events in 9.8 s, matching the
-  closed form exactly. (v1 needed 64.9M events for the same plant; rounds
-  removed the retry-event traffic.)
-- **29–61 bytes per object** of live arena, at 5–22M events/s single-threaded.
-- **1,000,000,005 objects** (config 3) solved by T4+T5 in 365 µs.
-
-### Did the orbit become monstrous?
-
-experiment-02.md's open question. `configs/05-coupled.factory` uses periods 60,
-73, 20 and 120 deliberately chosen not to line up — lcm 8,760 — with two sources
-fighting over one bay, a full 10,000-unit buffer to traverse, and live
-backpressure and starvation.
-
-**Orbit of period 300, entered at t=9,640.** The transient is long, because the
-ore bay has to fill first; the orbit is thirty times shorter than the lcm. Across
-all ten configurations the longest orbit is 3,000 ticks, and that one is a train
-timetable rather than an emergent period.
+On the two decomposed configurations the Room is also simply faster than the
+monolithic solver — 446 µs against 774 µs on config 15 — because a region that
+settles alone runs fewer arbitration rounds than one settling inside a plant-wide
+fixpoint. That was not the goal and it is not the point; it is a hint about what
+the parallel version is worth.
 
 ## Limitations
 
 These are real, and worth stating plainly.
 
-1. **Coupling is still within one blueprint instance.** Deployed lines remain
-   independent of each other, so T4 stacks on top of T5 unchanged. A shared ore
-   field feeding a million separate lines is still not expressible, and that is
-   the obvious next dragon.
-2. **Domains are found, not yet exploited.** The decomposition and the
-   independence window are computed and reported; nothing yet solves domains
-   separately or advances them at different rates. That is the machinery a Room
-   would actually be built from.
-3. **T2 no longer scales in object count**, by design. It walks machines. T5
-   covers the same ground, and on plants past a few million machines T2 simply
-   cannot start.
-4. **Batched feasibility assumes consistent bay ordering.** When several classes
-   draw the same item from the same *set* of storages, the lumped solver fills
-   them in one pass while the simulator interleaves. The totals agree as long as
-   those classes list the storages in the same order — true for everything here,
-   and the cross-validation would catch a violation, but it is an assumption and
-   not a proof.
-5. **Orbit length is bounded but not guaranteed small.** Finiteness guarantees an
-   orbit exists; nothing guarantees it is short. The solver takes a budget and
-   reports `found: false` rather than hanging.
-6. **Still single-threaded.** Instances never interact, so the deployment axis is
-   embarrassingly parallel. Untouched deliberately: v2's question was the
-   coupling model, and optimising before knowing the abstraction is how you get
-   an exceptionally fast implementation of the wrong thing.
+1. **Still single-threaded.** Every region is a separate `Blueprint` with a
+   separate clock exchanging timestamped messages, which is the shape a thread
+   pool or a network wants — and it is still stepped in one loop, on purpose.
+   v3's question was whether the decomposition is exact. Optimising before
+   knowing the abstraction is how you get an exceptionally fast implementation
+   of the wrong thing.
+2. **A conservative scheduler, not an optimistic one.** Regions never speculate
+   and never roll back, so the parallelism available is exactly the declared
+   slack. A plant built entirely from short belts decomposes into regions that
+   barely drift.
+3. **Lines with private state still do not compress.** Config 14 measures how
+   little they actually diverge, which is encouraging, but measuring is not
+   proving and nothing yet exploits it.
+4. **Orbit transients can be long.** Config 15's orbit is entered at
+   t = 29,125,400 and costs 2.2 s to find, all of it transient. The orbit itself
+   is 3,200 ticks. Nothing here bounds how long a plant takes to settle.
+5. **A region is found, not chosen.** Domain boundaries fall where transport
+   latency puts them. A player who builds one compact plant gets one region and
+   no decomposition, correctly, and there is no way to ask for a different one.
+6. **The event tier is not yet a per-region engine.** `sim.rs` can simulate any
+   whole plant machine by machine, and does, on every cross-validation. It
+   cannot yet be handed a single region with half a transport hanging off it,
+   so the bottom rung of the ladder is a whole-plant fallback rather than a
+   per-region one.
+7. **Deployment staggering and shared storage are mutually exclusive.** Lines
+   that share a bay and start at different phases would need per-phase line
+   populations, which is the same v4 dragon as item 3.
 
 ## Layout
 
@@ -362,10 +476,15 @@ src/dsl.rs        lexer, parser, lowering, validation
 src/sim.rs        T1 round-arbitrated event simulator over SoA columns
 src/pop.rs        T5 lumped population engine and its closed form
 src/analytic.rs   T2 orbit, T3 per-storage rate algebra, T4 archetypes
-src/domains.rs    causal decomposition, contention and feedback detection
+src/domains.rs    causal decomposition: transit domains, regions, channels
+src/rooms.rs      the Room: region blueprints, channels, conservative scheduler
 src/main.rs       experiment harness
-tests/            19 cross-validation tests
-configs/          the ten configurations
+tests/            34 cross-validation tests
+configs/          the fifteen configurations
 ```
 
 Zero dependencies outside `std`.
+
+> **v1:** compress repetition.
+> **v2:** compress interaction.
+> **v3:** compress causality.

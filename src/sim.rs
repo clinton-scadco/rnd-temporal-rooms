@@ -734,6 +734,21 @@ impl<'a> World<'a> {
             self.member_cycles[gi as usize] += 1;
         }
 
+        // A transport that has unloaded still has to get home. Until it does
+        // it is not available at the loading end, and that unavailability is
+        // the only channel by which the receiving end can tell the sending end
+        // to slow down. It is also the sending region's causal slack, so it
+        // has to be real time rather than an instant handshake.
+        let ret = self.bp.actors[class].return_latency;
+        if ret > 0 {
+            let dl = self.now + ret;
+            self.deadline[gi as usize] = dl;
+            self.status[gi as usize] = S_DORMANT;
+            self.link[gi as usize] = NIL;
+            self.heap.push(Reverse(Ev { at: dl, who: gi as u64 }));
+            return true;
+        }
+
         // The machine now joins the *back* of the withdraw queue rather than
         // starting its next cycle on the spot.
         //

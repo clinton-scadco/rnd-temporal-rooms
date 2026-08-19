@@ -85,11 +85,13 @@ impl ClosedForm {
         self.eval(bp, n_items, t - offset)
     }
 
-    /// Fraction of wall time one machine of a class spends working, exact.
+    /// Fraction of wall time one machine of a class spends occupied, exact.
+    /// For a transport that includes the trip home: a vehicle halfway back to
+    /// the mine is not available to load.
     pub fn steady_duty(&self, bp: &Blueprint, actor: usize) -> Rat {
         let ad = &bp.actors[actor];
         self.steady_cycles_per_tick(actor)
-            .mul(Rat::new(ad.duration as u128, 1))
+            .mul(Rat::new(ad.cycle() as u128, 1))
             .div(Rat::new(ad.count as u128, 1))
     }
 
@@ -307,7 +309,7 @@ pub fn rates(bp: &Blueprint, n_items: usize) -> RateReport {
     // A class of N machines has N times the capacity of one. This is the only
     // place the population size enters the rate algebra at all.
     let cap: Vec<Rat> =
-        bp.actors.iter().map(|a| Rat::new(a.count as u128, a.duration as u128)).collect();
+        bp.actors.iter().map(|a| Rat::new(a.count as u128, a.cycle() as u128)).collect();
 
     // Which bay each machine actually draws each ingredient from, and drops
     // each product into: the first wired storage that can hold it, matching the
@@ -401,7 +403,7 @@ pub fn rates(bp: &Blueprint, n_items: usize) -> RateReport {
     let duty: Vec<Rat> = (0..na)
         .map(|a| {
             cyc[a]
-                .mul(Rat::new(bp.actors[a].duration as u128, 1))
+                .mul(Rat::new(bp.actors[a].cycle() as u128, 1))
                 .div(Rat::new(bp.actors[a].count as u128, 1))
         })
         .collect();

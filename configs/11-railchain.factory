@@ -1,0 +1,63 @@
+# Configuration 11 -- the v3 headline: three regions on a rail line.
+#
+#   [ Mine ] ==OreTrain, 1400 each way==> [ Smelting ] ==PlateTrain, 900==> [ Works ]
+#
+# Nothing here is new physics. What is new is that the three regions are
+# *executed separately*, each with its own clock, exchanging nothing but
+# timestamped batches and timestamped empty vehicles.
+#
+# The trains declare a distance rather than a latency. That matters more than
+# it looks: a distance is symmetric, so the vehicle takes as long to come back
+# as it took to go, and it is the trip home that gives the *sending* region its
+# licence to run ahead. A v2 link teleported home, which is a zero-latency
+# channel running backwards through the transport, and it pins the loading end
+# to the unloading end forever.
+#
+# Rates, so the plant has real tension in it rather than a comfortable margin:
+#
+#   miners        6 x 300 / 60           = 30.00 ore  /tick
+#   ore train     8 x 6000 / 2800        = 17.14 ore  /tick   <- bottleneck
+#   smelters     40 x 25 / 50            = 20.00 ore  /tick of appetite
+#   plate train  10 x 3000 / 1800        = 16.67 plate/tick
+#   gear presses 60 x 20 / 60            = 20.00 plate/tick of appetite
+#   depots        4 x 150 / 60           = 10.00 gear /tick of appetite
+#
+# So the mine head fills and the miners take backpressure, both trains run
+# saturated, and both downstream regions run hungry. Every region therefore has
+# something to do at almost every tick, which is the case where an
+# independently-advancing scheduler has the least to gain -- deliberately, so
+# the measured speed-up is not an artifact of a plant that is mostly asleep.
+
+item IronOre
+item IronPlate
+item Gear
+
+blueprint RailChain {
+    source  Miner x6     { produces 300 IronOre every 60 ticks }
+    storage MineHead     { capacity 120000  policy round_robin }
+
+    link    OreTrain x8  {
+        moves 6000 IronOre
+        distance 2400 speed 2 base 200      # 200 + 1200 = 1400 ticks each way
+    }
+
+    storage Yard         { capacity 120000  policy round_robin }
+    process Smelter x40  { consumes 25 IronOre takes 50 ticks produces 25 IronPlate }
+    storage PlateBay     { capacity 80000   policy round_robin }
+
+    link    PlateTrain x10 {
+        moves 3000 IronPlate
+        takes 900 ticks
+        returns 900 ticks
+    }
+
+    storage Works        { capacity 80000   policy round_robin }
+    process GearPress x60 { consumes 20 IronPlate takes 60 ticks produces 10 Gear }
+    storage GearBay      { capacity 40000   policy round_robin }
+    sink    Depot x4     { consumes 150 Gear every 60 ticks }
+
+    wire Miner -> MineHead -> OreTrain -> Yard -> Smelter -> PlateBay
+    wire PlateBay -> PlateTrain -> Works -> GearPress -> GearBay -> Depot
+}
+
+deploy 1 x RailChain

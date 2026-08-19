@@ -2,7 +2,7 @@
 #
 # rustup installs the MSVC toolchain but does not set up the MSVC/Windows SDK
 # library search paths, so we import them from vcvars64.bat first.
-param([switch]$Test, [switch]$BuildOnly)
+param([switch]$Test, [switch]$BuildOnly, [Parameter(ValueFromRemainingArguments)]$Configs)
 
 $ErrorActionPreference = "Stop"
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
@@ -40,6 +40,8 @@ if ($Test) {
     cargo test --release
 } elseif ($BuildOnly) {
     cargo build --release
+} elseif ($Configs) {
+    cargo run --release -- @Configs
 } else {
     cargo run --release
 }
