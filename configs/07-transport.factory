@@ -1,0 +1,36 @@
+# Configuration 7 -- two causal domains joined by a slow train.
+#
+#   Miner x4 -> MineHead ==[ Train x2, 3000 ticks ]==> Yard -> Smelter x20 -> ...
+#
+# A `link` is an ordinary machine whose outputs equal its inputs and whose two
+# ends are different storages. Nothing new had to be invented for batch
+# transport with latency; it was already expressible. Naming it only lets the
+# domain analysis recognise what it is.
+#
+# What it buys is a boundary. Cut the two trains out of the wiring graph and it
+# falls into two pieces. For the 3000 ticks a batch is in transit those pieces
+# cannot influence each other at all, so each may be advanced on its own and
+# the answers stitched together afterwards. That is a Room boundary, discovered
+# from the graph rather than declared by a player.
+#
+# The train is the bottleneck on purpose: 2 x 4000 / 3000 = 2.67 ore/tick,
+# against 6.67 mined and 10.0 of smelting capacity waiting at the far end.
+
+item IronOre
+item IronPlate
+
+blueprint RailNetwork {
+    source  Miner x4    { produces 100 IronOre every 60 ticks }
+    storage MineHead    { capacity 20000  policy round_robin }
+
+    link    Train x2    { moves 4000 IronOre takes 3000 ticks }
+
+    storage Yard        { capacity 20000  policy round_robin }
+    process Smelter x20 { consumes 10 IronOre takes 20 ticks produces 10 IronPlate }
+    storage PlateBay    { capacity 5000 }
+    sink    Shipping    { consumes 500 IronPlate every 100 ticks }
+
+    wire Miner -> MineHead -> Train -> Yard -> Smelter -> PlateBay -> Shipping
+}
+
+deploy 1 x RailNetwork

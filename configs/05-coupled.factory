@@ -1,0 +1,41 @@
+# Configuration 5 -- the experiment experiment-02.md asked for by name.
+#
+#   MinerA --\
+#             >-- OreBay -- Smelter x4 -- PlateBay -- Shipping
+#   MinerB --/
+#
+# Two sources feed one buffer. Whether MinerA can deposit now depends on what
+# MinerB already deposited, and on how much the smelters have drawn out. That
+# is the first genuine coupling: no part of this plant can be solved alone.
+#
+# The periods 60, 73, 20 and 120 are deliberately rude to each other. Their lcm
+# is 8760, so nothing lines up neatly and the orbit solver gets no help.
+#
+# Supply is 100/60 + 100/73 = 3.037 ore/tick against 2.0 ore/tick of smelting,
+# so the ore bay fills, the miners take backpressure, and shipping is left
+# permanently short. Starvation, backpressure and contention are all live here
+# at the same time.
+
+item IronOre
+item IronPlate
+
+blueprint CoupledSmelting {
+    source  MinerA  { produces 100 IronOre every 60 ticks }
+    source  MinerB  { produces 100 IronOre every 73 ticks }
+
+    storage OreBay  {
+        capacity 10000
+        policy round_robin
+    }
+
+    process Smelter x4 { consumes 10 IronOre takes 20 ticks produces 10 IronPlate }
+
+    storage PlateBay { capacity 10000 }
+    sink    Shipping { consumes 300 IronPlate every 120 ticks }
+
+    wire MinerA -> OreBay
+    wire MinerB -> OreBay
+    wire OreBay -> Smelter -> PlateBay -> Shipping
+}
+
+deploy 1 x CoupledSmelting

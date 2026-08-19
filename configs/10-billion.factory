@@ -1,0 +1,42 @@
+# Configuration 10 -- configuration 9, scaled by one hundred thousand.
+#
+# 1,010,008,500 machines, every one coupled to every other through two shared
+# buffers, with two populous smelter classes dividing a permanent shortfall
+# between them at every tick. Materialising this needs tens of gigabytes and
+# T1 declines to try, which is the correct answer.
+#
+# The population form does not care. Its state is the same handful of cells
+# configuration 9 needed; the population appears only as the integer inside
+# each cell. Compare the two runs side by side: same shape, same cell count,
+# same solve time, one hundred thousand times the machines.
+#
+# Note that the ratios are preserved exactly, so this is not a different plant
+# running at a different operating point -- it is the same plant, and the
+# per-machine duty cycles come out identical to configuration 9.
+
+item IronOre
+item IronPlate
+
+blueprint OreRushMega {
+    source  MinerA x 2_000_000 { produces 100 IronOre every 20 ticks }
+    source  MinerB x 2_000_000 { produces 100 IronOre every 24 ticks }
+    source  MinerC x 2_000_000 { produces 100 IronOre every 30 ticks }
+
+    storage OreBay { capacity 5_000_000_000  policy round_robin }
+
+    process SmelterA x 600_000_000 { consumes 10 IronOre takes 200 ticks produces 10 IronPlate }
+    process SmelterB x 400_000_000 { consumes 15 IronOre takes 300 ticks produces 15 IronPlate }
+
+    storage PlateBay { capacity 5_000_000_000  policy round_robin }
+    sink    Shipping x 2_500_000 { consumes 100 IronPlate every 10 ticks }
+
+    wire MinerA -> OreBay
+    wire MinerB -> OreBay
+    wire MinerC -> OreBay
+
+    wire OreBay -> SmelterA -> PlateBay
+    wire OreBay -> SmelterB -> PlateBay
+    wire PlateBay -> Shipping
+}
+
+deploy 1 x OreRushMega

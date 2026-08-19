@@ -1,0 +1,51 @@
+# Configuration 8 -- three identical shops, one bay, not enough plate.
+#
+#                     +--> ShopA --\
+#   Furnace -> Bay ---+--> ShopB ----> WidgetBay --> Depot
+#                     +--> ShopC --/
+#
+# The furnace makes 1.667 plate/tick. Each shop wants 1.0. Two thirds of the
+# demand cannot be met, and the storage has to decide whose. That decision is
+# the entire configuration.
+#
+# This is experiment-02.md's complaint made concrete: four factories drawing
+# from one train station, and factory #0 always served first because it
+# happened to be built first. Under `index` -- v1's accidental rule -- ShopA
+# runs flat out, ShopB gets the leftovers, and ShopC never runs at all. Not
+# once, in either direction, forever. Under `round_robin` the same plant with
+# the same numbers gives all three an equal share.
+#
+# Both are exact and both are deterministic. They are different games.
+#
+# Note that these have to be three classes rather than one class of three: a
+# class is the set of machines the arbiter refuses to distinguish, and the
+# whole point here is a plant where it does distinguish them. Written as
+# `ShopA x3` they would be interchangeable and would share automatically --
+# which is the other half of the same idea.
+
+item IronPlate
+item Widget
+
+blueprint Contested {
+    source  Furnace { produces 50 IronPlate every 30 ticks }
+
+    storage Bay {
+        capacity 200
+        policy round_robin
+    }
+
+    process ShopA { consumes 30 IronPlate takes 30 ticks produces 10 Widget }
+    process ShopB { consumes 30 IronPlate takes 30 ticks produces 10 Widget }
+    process ShopC { consumes 30 IronPlate takes 30 ticks produces 10 Widget }
+
+    storage WidgetBay { capacity 500 }
+    sink    Depot     { consumes 10 Widget every 5 ticks }
+
+    wire Furnace -> Bay
+    wire Bay -> ShopA -> WidgetBay
+    wire Bay -> ShopB -> WidgetBay
+    wire Bay -> ShopC -> WidgetBay
+    wire WidgetBay -> Depot
+}
+
+deploy 1 x Contested

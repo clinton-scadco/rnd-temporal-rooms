@@ -19,6 +19,7 @@
 use crate::model::*;
 use crate::sim::{Counters, CountersBig, Snapshot, World};
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 // ===================================================================== T2
 
@@ -82,6 +83,14 @@ impl ClosedForm {
             return CountersBig::zeroed(bp.actors.len(), n_items);
         }
         self.eval(bp, n_items, t - offset)
+    }
+
+    /// Fraction of wall time one machine of a class spends working, exact.
+    pub fn steady_duty(&self, bp: &Blueprint, actor: usize) -> Rat {
+        let ad = &bp.actors[actor];
+        self.steady_cycles_per_tick(actor)
+            .mul(Rat::new(ad.duration as u128, 1))
+            .div(Rat::new(ad.count as u128, 1))
     }
 
     pub fn steady_cycles_per_tick(&self, actor: usize) -> Rat {
@@ -273,28 +282,79 @@ pub struct RateReport {
     /// Items that are produced but never consumed: with finite storage these
     /// eventually saturate and stall everything upstream.
     pub accumulators: Vec<ItemId>,
+    /// Items no machine can ever make, because making them needs them.
+    /// A production *cycle* with nothing seeded into it is the classic case:
+    /// perfectly well-formed on paper, permanently dead in practice.
+    pub unattainable: Vec<ItemId>,
     pub terminal: bool,
     /// Actors still running at their unconstrained maximum -- the bottlenecks.
     pub bottlenecks: Vec<usize>,
 }
 
-/// Fluid fixpoint. No time stepping at all: O(actors x iterations).
+/// Fluid fixpoint. No time stepping at all: O(nodes x iterations).
+///
+/// Flows are balanced **per storage**, not per item. v1 could get away with
+/// per-item balance because every item had one producer stage and one consumer
+/// stage. A transport breaks that immediately: it consumes IronOre and produces
+/// IronOre, so an item-global balance cannot tell ore sitting at the mine from
+/// ore sitting in the yard, concludes that ore both feeds and starves itself,
+/// and converges to a fixpoint of nonsense. Balancing at each storage separately
+/// asks the only question that was ever meaningful: is this *bay* filling faster
+/// than it drains.
 pub fn rates(bp: &Blueprint, n_items: usize) -> RateReport {
     let na = bp.actors.len();
-    let cap: Vec<Rat> = bp.actors.iter().map(|a| Rat::new(1, a.duration as u128)).collect();
-    let mut cyc = cap.clone();
+    let ns = bp.storages.len();
+    // A class of N machines has N times the capacity of one. This is the only
+    // place the population size enters the rate algebra at all.
+    let cap: Vec<Rat> =
+        bp.actors.iter().map(|a| Rat::new(a.count as u128, a.duration as u128)).collect();
 
-    // Structural check on the *unthrottled* flows: an item with producers but
-    // no consumers is a terminal accumulator once its storage fills.
-    let mut accumulators = Vec::new();
-    for item in 0..n_items as ItemId {
-        let produced = bp.actors.iter().any(|a| a.outputs.iter().any(|s| s.item == item));
-        let consumed = bp.actors.iter().any(|a| a.inputs.iter().any(|s| s.item == item));
-        if produced && !consumed {
-            accumulators.push(item);
+    // Which bay each machine actually draws each ingredient from, and drops
+    // each product into: the first wired storage that can hold it, matching the
+    // greedy fill in `sim.rs`.
+    let pick = |stores: &[u16], item: ItemId| -> Option<usize> {
+        stores
+            .iter()
+            .map(|&s| s as usize)
+            .find(|&s| bp.slot_of(s, item).is_some())
+    };
+
+    // Attainability. An item exists if something seeded it, or if some machine
+    // can make it from items that themselves exist. Least fixpoint, so a loop
+    // that feeds only itself never qualifies -- which is exactly the verdict a
+    // catalyst cycle with an empty buffer deserves.
+    let mut have: HashSet<ItemId> = HashSet::new();
+    for sd in &bp.storages {
+        for st in &sd.initial {
+            have.insert(st.item);
         }
     }
+    loop {
+        let before = have.len();
+        for a in &bp.actors {
+            if a.inputs.iter().all(|s| have.contains(&s.item)) {
+                for s in &a.outputs {
+                    have.insert(s.item);
+                }
+            }
+        }
+        if have.len() == before {
+            break;
+        }
+    }
+    let unattainable: Vec<ItemId> = (0..n_items as ItemId).filter(|i| !have.contains(i)).collect();
 
+    let mut cyc: Vec<Rat> = (0..na)
+        .map(|a| {
+            if bp.actors[a].inputs.iter().any(|s| !have.contains(&s.item)) {
+                Rat::zero()
+            } else {
+                cap[a]
+            }
+        })
+        .collect();
+
+    let idx = |s: usize, i: usize| s * n_items + i;
     let mut iterations = 0;
     let mut converged = false;
     for _ in 0..256 {
@@ -302,29 +362,29 @@ pub fn rates(bp: &Blueprint, n_items: usize) -> RateReport {
         let (prod, cons) = flows(bp, &cyc, n_items);
         let mut next = cyc.clone();
         for a in 0..na {
+            let ad = &bp.actors[a];
             let mut lim = cap[a];
-            // Starvation: consumers of a scarce item share it proportionally.
-            for s in &bp.actors[a].inputs {
-                let i = s.item as usize;
-                if cons[i].is_zero() {
+            // Starvation: everyone drawing from a bay that is filling too
+            // slowly scales back in proportion.
+            for st in &ad.inputs {
+                let Some(s) = pick(&ad.in_stores, st.item) else { continue };
+                let (p, c) = (prod[idx(s, st.item as usize)], cons[idx(s, st.item as usize)]);
+                if c.is_zero() {
                     continue;
                 }
-                if prod[i].lt(cons[i]) {
-                    lim = lim.min(cyc[a].mul(prod[i]).div(cons[i]));
+                if p.lt(c) {
+                    lim = lim.min(cyc[a].mul(p).div(c));
                 }
             }
-            // Backpressure: a full storage throttles producers to the drain rate.
-            for s in &bp.actors[a].outputs {
-                let i = s.item as usize;
-                if prod[i].is_zero() {
+            // Backpressure: a bay that cannot drain throttles whoever fills it.
+            for st in &ad.outputs {
+                let Some(s) = pick(&ad.out_stores, st.item) else { continue };
+                let (p, c) = (prod[idx(s, st.item as usize)], cons[idx(s, st.item as usize)]);
+                if p.is_zero() {
                     continue;
                 }
-                if cons[i].lt(prod[i]) {
-                    lim = if cons[i].is_zero() {
-                        Rat::zero()
-                    } else {
-                        lim.min(cyc[a].mul(cons[i]).div(prod[i]))
-                    };
+                if c.lt(p) {
+                    lim = if c.is_zero() { Rat::zero() } else { lim.min(cyc[a].mul(c).div(p)) };
                 }
             }
             next[a] = lim.min(cyc[a]);
@@ -337,39 +397,85 @@ pub fn rates(bp: &Blueprint, n_items: usize) -> RateReport {
     }
 
     let (prod, cons) = flows(bp, &cyc, n_items);
+    // Duty is per machine, so divide the class rate by the class population.
     let duty: Vec<Rat> = (0..na)
-        .map(|a| cyc[a].mul(Rat::new(bp.actors[a].duration as u128, 1)))
+        .map(|a| {
+            cyc[a]
+                .mul(Rat::new(bp.actors[a].duration as u128, 1))
+                .div(Rat::new(bp.actors[a].count as u128, 1))
+        })
         .collect();
+
+    // A bay that is filled with something nobody takes out of *it* saturates,
+    // however busily that item is handled elsewhere in the plant.
+    let mut accumulators = Vec::new();
+    for s in 0..ns {
+        for i in 0..n_items {
+            if !prod[idx(s, i)].is_zero() && cons[idx(s, i)].is_zero() {
+                if !accumulators.contains(&(i as ItemId)) {
+                    accumulators.push(i as ItemId);
+                }
+            }
+        }
+    }
+
+    let mut produced_per_tick = vec![Rat::zero(); n_items];
+    let mut consumed_per_tick = vec![Rat::zero(); n_items];
+    for i in 0..n_items {
+        for s in 0..ns {
+            produced_per_tick[i] = produced_per_tick[i].add(prod[idx(s, i)]);
+            consumed_per_tick[i] = consumed_per_tick[i].add(cons[idx(s, i)]);
+        }
+    }
+
     let terminal = cyc.iter().all(|r| r.is_zero());
     let bottlenecks: Vec<usize> = (0..na).filter(|&a| !terminal && cyc[a] == cap[a]).collect();
 
     RateReport {
         cycles: cyc,
         duty,
-        produced_per_tick: prod,
-        consumed_per_tick: cons,
+        produced_per_tick,
+        consumed_per_tick,
         iterations,
         converged,
         accumulators,
+        unattainable,
         terminal,
         bottlenecks,
     }
 }
 
+/// Deposit and withdrawal rates for every (storage, item) pair.
 fn flows(bp: &Blueprint, cyc: &[Rat], n_items: usize) -> (Vec<Rat>, Vec<Rat>) {
-    let mut prod = vec![Rat::zero(); n_items];
-    let mut cons = vec![Rat::zero(); n_items];
+    let n = bp.storages.len() * n_items;
+    let mut prod = vec![Rat::zero(); n];
+    let mut cons = vec![Rat::zero(); n];
     for (a, ad) in bp.actors.iter().enumerate() {
-        for s in &ad.outputs {
-            prod[s.item as usize] = prod[s.item as usize].add(cyc[a].mul(Rat::new(s.qty as u128, 1)));
+        for st in &ad.outputs {
+            if let Some(s) = ad
+                .out_stores
+                .iter()
+                .map(|&s| s as usize)
+                .find(|&s| bp.slot_of(s, st.item).is_some())
+            {
+                let k = s * n_items + st.item as usize;
+                prod[k] = prod[k].add(cyc[a].mul(Rat::new(st.qty as u128, 1)));
+            }
         }
-        for s in &ad.inputs {
-            cons[s.item as usize] = cons[s.item as usize].add(cyc[a].mul(Rat::new(s.qty as u128, 1)));
+        for st in &ad.inputs {
+            if let Some(s) = ad
+                .in_stores
+                .iter()
+                .map(|&s| s as usize)
+                .find(|&s| bp.slot_of(s, st.item).is_some())
+            {
+                let k = s * n_items + st.item as usize;
+                cons[k] = cons[k].add(cyc[a].mul(Rat::new(st.qty as u128, 1)));
+            }
         }
     }
     (prod, cons)
 }
-
 // ===================================================================== T4
 
 /// One phase archetype of a deployment: `count` instances that all start at

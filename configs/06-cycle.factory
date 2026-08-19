@@ -1,0 +1,51 @@
+# Configuration 6 -- a production cycle with a returned catalyst.
+#
+#   Pump -> Feed -> Reactor -> Out -> Ship
+#                    ^   |
+#                    |   v
+#                   CatBay
+#
+# The reactor consumes catalyst and gives it back. On paper the loop balances;
+# in practice it can only ever turn if something seeded it, which is what
+# `initial 40 Catalyst` is for. Delete that line and T3 declares the plant dead
+# before any simulation runs, because catalyst becomes unattainable: making it
+# requires already having it.
+#
+# The reactor has two outputs going to two different bays, so those wires are
+# item-qualified. Without that the greedy fill would post product into the
+# catalyst tank the moment the product bay filled up.
+#
+# Cycles are not an exotic case. Catalysts, returned containers, recycled
+# coolant and waste reprocessing all look exactly like this.
+
+item Slurry
+item Catalyst
+item Product
+
+blueprint CatalyticLoop {
+    source  Pump       { produces 60 Slurry every 30 ticks }
+    storage Feed       { capacity 500 }
+
+    process Reactor x2 {
+        consumes 20 Slurry
+        consumes 5 Catalyst
+        takes 40 ticks
+        produces 10 Product
+        produces 5 Catalyst
+    }
+
+    storage CatBay { capacity 100  initial 40 Catalyst }
+    storage Out    { capacity 400 }
+    sink    Ship   { consumes 20 Product every 60 ticks }
+
+    wire Pump -> Feed { Slurry }
+    wire Feed -> Reactor { Slurry }
+
+    wire CatBay  -> Reactor { Catalyst }
+    wire Reactor -> CatBay  { Catalyst }
+
+    wire Reactor -> Out { Product }
+    wire Out -> Ship { Product }
+}
+
+deploy 1 x CatalyticLoop
