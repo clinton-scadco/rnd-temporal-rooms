@@ -64,10 +64,34 @@
 //! plant have to be solved together in the first place; `rooms` runs the parts
 //! that do not.
 
+//! # Prototype 0 asks: what is it like to build one?
+//!
+//! The solver has done its job, and the next risk is not a missing tier -- it
+//! is optimising a magnificent mathematical creature nobody has tried to
+//! *play*. So the fourth experiment is a workbench rather than a solver: place
+//! nodes, wire them, compile them into the language the solver already speaks,
+//! and then seek to any tick and look.
+//!
+//! The rule it is built on is that rendering never drives simulation.
+//!
+//! ```text
+//!   Simulation  ->  RoomState(t)  ->  RenderSnapshot  ->  the screen
+//! ```
+//!
+//! `graph` is the document a mouse edits and the source it emits; `snap` is
+//! the state at tick *T* in the shape a view needs; `web` serves both to a
+//! browser over a socket. None of them may decide anything about physics: a
+//! plant built with a mouse is exactly as expressive as a plant written by
+//! hand, because it *is* a plant written by hand by the time it is run.
+
 pub mod analytic;
 pub mod domains;
 pub mod dsl;
+pub mod graph;
+pub mod json;
 pub mod model;
 pub mod pop;
 pub mod rooms;
 pub mod sim;
+pub mod snap;
+pub mod web;

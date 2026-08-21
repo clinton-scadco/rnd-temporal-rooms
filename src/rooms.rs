@@ -284,6 +284,28 @@ pub struct Room<'a> {
     pub max_skew: Tick,
     /// Every region's clock at the moment that gap was widest.
     pub skew_clocks: Vec<Tick>,
+    /// Every advance, in the order the scheduler made them, when switched on.
+    ///
+    /// Off by default: nothing in the solver needs it, and a run to a large
+    /// horizon makes a great many of these. The workbench turns it on to draw
+    /// the timetable -- which region ran alone, from when, to when -- because
+    /// causal decomposition is much easier to believe once you have watched it
+    /// happen than once you have read that it did.
+    pub trace: Option<Vec<Advance>>,
+}
+
+/// How many advances a switched-on trace will remember.
+pub const TRACE_CAP: usize = 200_000;
+
+/// One region running alone, from one clock to another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Advance {
+    pub region: usize,
+    pub from: Tick,
+    pub to: Tick,
+    /// True when the advance stopped because a neighbour had not caught up,
+    /// rather than because the region reached the horizon asked for.
+    pub blocked: bool,
 }
 
 impl<'a> Room<'a> {
@@ -335,6 +357,7 @@ impl<'a> Room<'a> {
             total_advance: 0,
             max_skew: 0,
             skew_clocks: Vec::new(),
+            trace: None,
         };
         // t=0 settles inside every region independently, and a link that can
         // load immediately does so. Those departures have to be handed over
@@ -435,6 +458,19 @@ impl<'a> Room<'a> {
         self.max_advance = self.max_advance.max(advanced);
         if target < horizon {
             self.rendezvous += 1;
+        }
+        if let Some(log) = &mut self.trace {
+            // Bounded on purpose. A run to t=10^9 makes more advances than
+            // anything will ever look at, and a debugging aid that can exhaust
+            // memory is not one.
+            if log.len() < TRACE_CAP {
+                log.push(Advance {
+                    region: r,
+                    from: before,
+                    to: self.pops[r].now,
+                    blocked: target < horizon,
+                });
+            }
         }
         self.drain(r);
 

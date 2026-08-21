@@ -19,6 +19,7 @@ use temporal_rooms::model::*;
 use temporal_rooms::pop;
 use temporal_rooms::rooms::{self, Room};
 use temporal_rooms::sim::{self, CountersBig, World};
+use temporal_rooms::web;
 
 const FAR: Tick = 1_000_000_000_000_000_000;
 /// Beyond this, materialising the machine list is not worth the RAM.
@@ -74,6 +75,61 @@ fn adhoc(path: &str) -> Cfg {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Two subcommands sit beside the harness. `serve` is the workbench; the
+    // harness prints tables, and a table is a poor way to look at a factory.
+    match args.first().map(String::as_str) {
+        Some("serve") => {
+            let port = args
+                .iter()
+                .position(|a| a == "--port")
+                .and_then(|i| args.get(i + 1))
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(8787);
+            if let Err(e) = web::serve(port) {
+                eprintln!("cannot serve on port {port}: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        // A self-contained deterministic trace: the same snapshots the
+        // workbench asks for, taken at a schedule of ticks and written out, so
+        // a viewer with no simulator can still render the plant at any of them.
+        Some("export") => {
+            let Some(path) = args.get(1) else {
+                eprintln!("usage: trooms export <config.factory> [--out FILE] [ticks...]");
+                std::process::exit(1);
+            };
+            let out = args
+                .iter()
+                .position(|a| a == "--out")
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+                .unwrap_or_else(|| "trace.json".to_string());
+            let mut ticks: Vec<Tick> =
+                args[2..].iter().filter_map(|a| a.parse().ok()).collect();
+            if ticks.is_empty() {
+                ticks = (0..=200).map(|k| k * 200).collect();
+            }
+            match web::export(path, &ticks) {
+                Ok(doc) => {
+                    if let Err(e) = std::fs::write(&out, doc.as_bytes()) {
+                        eprintln!("cannot write {out}: {e}");
+                        std::process::exit(1);
+                    }
+                    let bytes = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+                    println!("{} frames of {path} -> {out} ({} bytes)", ticks.len(), commas(bytes as u128));
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+
     let cfgs: Vec<Cfg> =
         if args.is_empty() { configs() } else { args.iter().map(|a| adhoc(a)).collect() };
 

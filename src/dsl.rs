@@ -16,8 +16,9 @@
 //! ```
 //!
 //! `x N` after a machine name sets its **population**: one class of N
-//! interchangeable machines, not N separate nodes. `x N` on a storage still
-//! makes N distinct storages, because two storages are never interchangeable.
+//! interchangeable machines, not N separate nodes. It is not allowed on a
+//! storage -- two storages are never interchangeable, and Prototype 0 found
+//! that the N bays it used to make could not be wired to at all.
 //!
 //! v2 additions:
 //!
@@ -490,6 +491,26 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
 
         match kindword.as_str() {
             "storage" => {
+                // `storage Bay x3` has been in this language since v1 and has
+                // never been usable. Wires resolve by *group* name, so the
+                // three bays it makes have no name a wire can reach; wiring the
+                // group instead wires all three, and then one machine posts one
+                // item to three storages, which v3's one-bay rule refuses. The
+                // instance names it invented could not even be typed -- they
+                // contained the comment character. Prototype 0 found it by
+                // trying to draw one.
+                //
+                // Two storages are never interchangeable, so a population of
+                // them was always the wrong idea. Declaring them separately is
+                // the same plant, spelled honestly.
+                if mult > 1 {
+                    bail!(
+                        line,
+                        "`storage {nodename} x{mult}` cannot be wired: a wire names the group, \
+                         so all {mult} would be wired at once and no machine may use {mult} bays \
+                         for one item. Declare them separately."
+                    );
+                }
                 let body = parse_storage_body(p, items, &nodename)?;
                 let mut ids = Vec::new();
                 for k in 0..mult {

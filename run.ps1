@@ -2,7 +2,13 @@
 #
 # rustup installs the MSVC toolchain but does not set up the MSVC/Windows SDK
 # library search paths, so we import them from vcvars64.bat first.
-param([switch]$Test, [switch]$BuildOnly, [Parameter(ValueFromRemainingArguments)]$Configs)
+param(
+    [switch]$Test,
+    [switch]$BuildOnly,
+    [switch]$Serve,
+    [int]$Port = 8787,
+    [Parameter(ValueFromRemainingArguments)]$Configs
+)
 
 $ErrorActionPreference = "Stop"
 $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
@@ -40,6 +46,12 @@ if ($Test) {
     cargo test --release
 } elseif ($BuildOnly) {
     cargo build --release
+} elseif ($Serve) {
+    # The workbench. Built first so a compile error is a compile error rather
+    # than a browser that will not connect.
+    cargo build --release
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & "$PSScriptRoot\target\release\trooms.exe" serve --port $Port
 } elseif ($Configs) {
     cargo run --release -- @Configs
 } else {

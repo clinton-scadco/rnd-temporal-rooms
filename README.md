@@ -26,11 +26,18 @@ Both answers still solved one plant as one object with one clock.
 
 Yes. And the thing that makes it work is a detail v2 got wrong.
 
+**Prototype 0** stops asking. Three experiments proved the architecture, and the
+next risk was not a missing tier — it was polishing a magnificent mathematical
+creature nobody had tried to *play*. So the fourth is a **factory workbench**:
+place nodes, wire them, compile them into the language the solver already
+speaks, and then drag a timeline across a billion ticks and watch.
+
 ## Quick start
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 34 cross-validation tests
+.\run.ps1 -Test    # 46 cross-validation tests
+.\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
 ```
 
@@ -342,6 +349,124 @@ of its regions on it. Nothing has needed that — with the one-bay rule in place
 the lumped form is exact on every topology the DSL can express, and the ladder
 exists for the day it is not.
 
+## Prototype 0: the workbench
+
+`.\run.ps1 -Serve` opens a canvas at `http://127.0.0.1:8787`. Place a source, a
+storage, a processor, a link, a sink; drag a wire between them; edit a recipe;
+then drag the timeline and watch the plant you built at any tick you like.
+
+The rule it is built on is one line:
+
+> The renderer never simulates.
+
+```
+   Simulation  ->  RoomState(t)  ->  RenderSnapshot  ->  the screen
+```
+
+The browser owns pixels, pointer input and a command log. It owns no factory
+state, no clock and no physics. It asks
+
+> what does this plant look like at tick 182,400?
+
+and draws the answer. Everything else is a consequence.
+
+### The graph is not the language, and does not get a vote
+
+The canvas edits a document; the document emits DSL source; `dsl::parse` decides
+what that source means. So a plant built with a mouse is exactly as expressive
+as a plant written by hand — because by the time it runs, it *is* a plant
+written by hand. `-Serve` shows the generated source beside the canvas.
+
+That is checked rather than asserted. All fifteen configurations are read into
+the document, written back out, and re-parsed, and the plant that comes back
+must be the same plant: same storage indices, same class indices, same
+arbitration queues, same `Pop::signature()` and same `Room::signature()` at
+every probe tick. A layout is a comment (`# @pos Miner 80 80`), so a saved
+sketch is still a `.factory` file the harness runs.
+
+### Nothing moves that was not already moving
+
+There is no xy coordinate anywhere in this crate, and the workbench did not add
+one. A train's position is derived from two ticks v3 already stored:
+
+```
+departure = arrival - latency
+progress  = (renderTime - departure) / (arrival - departure)
+```
+
+The four buckets of a transport class *are* the four places a vehicle can be, so
+the snapshot ships `(departure, arrival, vehicles)` for every leg in the air and
+the renderer draws each one wherever that implies. Between two events that
+interpolation is exact; past the next event it would be invention, so that is
+where the view stops guessing and asks again. `nextEvent` in each snapshot is
+where the line falls.
+
+The same trick answers `x 1,000,000`. A class is one number and a distribution
+over a handful of states, so far away it draws as one installation with a
+utilisation bar, and close up as a few thousand sampled machines in the
+proportions the snapshot reports. One placed object, a billion conceptual
+machines, no simulation object for either.
+
+### The layout is the decomposition
+
+Given a plant with no positions, the workbench lays out *regions*: each an
+internally layered block, blocks of equal causal rank side by side, ranks
+stacked down the page. `configs/15-continent.factory` therefore opens drawn as
+four mines railing to a smelting region railing to a works, which is what it is.
+That was not a goal; it is the most useful thing the layout does.
+
+Underneath sits the scheduler's own timetable — place down the side, time
+across, one bar per advance. Forty-two bars, six lanes, and you can watch a
+region run four thousand ticks alone while its neighbours wait.
+
+### What building it broke
+
+`experiment-04.md` predicted the builder would expose bad abstractions faster
+than another solver feature would. Here is what it actually said, with the
+compiler's own words:
+
+| the question | the answer, measured |
+|---|---|
+| Can I connect machine → machine? | ``REFUSED: `Miner -> Smelter` connects two machines; route them through a storage`` |
+| Storage → storage? | ``REFUSED: `A -> B` connects two storages; insert a machine between them`` |
+| What does a link connect to? | Bays, only. A link is a machine, so wiring one to a machine is refused by the same rule. |
+| Can two links enter the same bay? | Yes. They enter the same *slot*, and the bay's policy arbitrates. |
+| Does a storage have ports? | No — it has item slots, derived from whoever fills it, and a slot is not an input or an output. Machines withdraw from and deposit into the same one. |
+| Does a processor own an input inventory? | No. It has no inventory at all. |
+| Where does its output wait when blocked? | Inside the machine. Four smelters with a full output bay sit at `blocked: 4`, holding their finished batches, having completed 2 cycles between them. |
+| What does `x1000` mean spatially? | One object you place. The population is a property, not a count of things on the canvas. |
+| Can links cross? | Visually yes; it means nothing. Distance is declared, not measured off the canvas. |
+
+And one construct did not survive being drawn at all.
+
+`storage Bay x3` has been in this language since v1. It cannot be used. A wire
+names the *group*, so wiring `Bay` wires all three at once — and then one
+machine posts one item to three storages, which v3's one-bay rule refuses. The
+error suggested naming an instance, `Miner -> Bay#0 { Ore }`, and `#` opens a
+comment, so the suggested fix could not even be typed. Two storages are never
+interchangeable, so a population of them was always the wrong idea:
+
+```
+`storage Bay x3` cannot be wired: a wire names the group, so all 3 would be
+wired at once and no machine may use 3 bays for one item. Declare them
+separately.
+```
+
+Nothing in `configs/` used it. It took a mouse to notice.
+
+### And what the tests caught
+
+Two mistakes in the snapshot, both the same mistake:
+
+1. `render()` shipped the scheduler's statistics — advances, messages, widest
+   skew — alongside the state. Those are properties of a *run*, not of a tick,
+   so the same tick reached by scrubbing and by playing produced different
+   snapshots. `a_snapshot_is_the_same_snapshot_however_it_was_reached` failed
+   the moment it was written. They live in the timetable now.
+2. A lifted transport belongs to no region, and `of_class` says so with
+   `usize::MAX`. The first snapshot dutifully reported
+   `"region": 18446744073709551615`.
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -401,6 +526,10 @@ New in v3:
 
 Removed in v3: drawing one item from several bays, or posting one item to
 several bays. Route them through a link instead.
+
+Removed in Prototype 0: `x N` on a storage. It has been unusable since v1 and
+nobody noticed until it had to be drawn — see above. Declare the bays
+separately, which is the same plant, spelled honestly.
 
 ## Results
 
@@ -467,6 +596,18 @@ These are real, and worth stating plainly.
 7. **Deployment staggering and shared storage are mutually exclusive.** Lines
    that share a bay and start at different phases would need per-phase line
    populations, which is the same v4 dragon as item 3.
+8. **The workbench seeks forward cheaply and backward expensively.** A forward
+   seek advances the Room it already has; a backward one builds a new one and
+   replays. Scrubbing left across a long horizon is therefore the slow
+   direction, and the closed form is not yet wired into a seek.
+9. **Canvas 2D, not GPU instancing.** Close up, a population draws as a few
+   thousand sampled machines rather than the millions the experiment brief
+   imagines. The snapshot already carries what an instanced renderer would
+   need — class, population, state distribution, seed — so this is a renderer
+   limitation, not a model one.
+10. **One plant, one page.** No multiplayer, no shared editing, no power, no
+    splitters, no fluids. The document is a command log and generic nodes,
+    ports, links and storages precisely so those can arrive later.
 
 ## Layout
 
@@ -478,13 +619,21 @@ src/pop.rs        T5 lumped population engine and its closed form
 src/analytic.rs   T2 orbit, T3 per-storage rate algebra, T4 archetypes
 src/domains.rs    causal decomposition: transit domains, regions, channels
 src/rooms.rs      the Room: region blueprints, channels, conservative scheduler
-src/main.rs       experiment harness
-tests/            34 cross-validation tests
+src/graph.rs      Prototype 0: the placed document, and the source it emits
+src/snap.rs       Prototype 0: the state at tick T, in the shape a view needs
+src/json.rs       Prototype 0: a JSON value, a parser and a writer
+src/web.rs        Prototype 0: an HTTP server, in std
+src/main.rs       experiment harness, `serve` and `export`
+web/              the workbench: canvas, inspector, timeline, timetable
+tests/            46 cross-validation tests
 configs/          the fifteen configurations
+sketches/         where the workbench saves what you build
 ```
 
-Zero dependencies outside `std`.
+Zero dependencies outside `std`. The workbench added a JSON codec and an HTTP
+server rather than a dependency tree larger than the crate they serve.
 
 > **v1:** compress repetition.
 > **v2:** compress interaction.
 > **v3:** compress causality.
+> **Prototype 0:** stop compressing things and go and look at one.

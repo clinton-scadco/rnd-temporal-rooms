@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>temporal-rooms · workbench</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+
+<header id="bar">
+  <div class="brand">
+    <b>temporal&#8209;rooms</b><span>prototype 0 &middot; the factory workbench</span>
+  </div>
+
+  <div class="group">
+    <select id="open" title="open a plant">
+      <option value="">open&hellip;</option>
+    </select>
+    <button id="save" title="write this plant to sketches/">save</button>
+  </div>
+
+  <div class="group transport">
+    <button id="play" class="wide" title="space">&#9654;</button>
+    <button data-step="1">+1</button>
+    <button data-step="100">+100</button>
+    <button data-step="10000">+10k</button>
+    <span class="rule"></span>
+    <button class="speed" data-speed="1">&times;1</button>
+    <button class="speed" data-speed="10">&times;10</button>
+    <button class="speed" data-speed="100">&times;100</button>
+    <button class="speed" data-speed="10000">&times;10k</button>
+  </div>
+
+  <div class="clock">
+    <label>tick</label>
+    <output id="tick">0</output>
+  </div>
+</header>
+
+<div id="timeline">
+  <input id="seek" type="range" min="0" max="1000" value="0" step="1">
+  <div class="ends"><span>0</span><span id="horizon">10<sup>9</sup></span></div>
+</div>
+
+<main>
+  <aside id="build">
+    <h2>build</h2>
+    <div class="palette">
+      <button data-place="source"><i class="k-source"></i>source</button>
+      <button data-place="storage"><i class="k-storage"></i>storage</button>
+      <button data-place="process"><i class="k-process"></i>processor</button>
+      <button data-place="link"><i class="k-link"></i>link</button>
+      <button data-place="sink"><i class="k-sink"></i>sink</button>
+    </div>
+    <p class="hint" id="hint">click a tool, then the canvas</p>
+
+    <h2>items</h2>
+    <div id="items" class="items"></div>
+    <form id="additem"><input placeholder="new item" maxlength="24"><button>+</button></form>
+
+    <h2>view</h2>
+    <label class="check"><input type="checkbox" id="overlay" checked> regions</label>
+    <label class="check"><input type="checkbox" id="detail"> individual machines</label>
+    <label class="check"><input type="checkbox" id="showsrc"> generated source</label>
+
+    <h2>plant</h2>
+    <div class="field"><label>name</label><input id="plantname" maxlength="32"></div>
+    <div class="field"><label>deploy</label><input id="deploy" type="number" min="1" value="1"></div>
+
+    <h2>compiled</h2>
+    <dl id="plant"></dl>
+  </aside>
+
+  <section id="world">
+    <canvas id="c"></canvas>
+    <div id="err" hidden></div>
+    <pre id="src" hidden></pre>
+  </section>
+
+  <aside id="inspect">
+    <h2>inspector</h2>
+    <div id="detailpane"><p class="hint">click anything on the canvas</p></div>
+  </aside>
+</main>
+
+<footer id="timetable">
+  <h2>scheduler <span class="hint">which region ran alone, and when</span></h2>
+  <canvas id="tt"></canvas>
+</footer>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
