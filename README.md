@@ -43,17 +43,32 @@ every region to the edit's tick, harvest the plant's state, compile the new
 plant, pour the state back in. It costs `O(cells) + O(nodes)` — tens of
 numbers for a plant with a billion machines in it — and it is not a replay.
 
+**Experiment 06** stops asking about factories altogether and asks about one
+*building*. Everything above treats a machine as a recipe with a multiplier, and
+`xN` is a thin question to build a game on — so the machine designer is a
+standalone prototype in which the player assembles the inside of a building out
+of typed components, and the finished thing compiles to a startup transient plus
+an exact periodic orbit rather than to an average.
+
 ## Quick start
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 74 cross-validation tests
+.\run.ps1 -Test    # 92 cross-validation tests
 .\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
 
 # Prototype 1: play a scenario without a browser
 .\run.ps1 -Play scenarios/first-gears.scenario
 .\run.ps1 -Play scenarios/first-gears.scenario --buy "GearPress=3@15000"
+
+# Experiment 06: the machine designer, which shares nothing but the repo
+.\run.ps1 -Machine                             # every design, judged
+.\run.ps1 -Machine serve                       # the designer, at :8788
+.\run.ps1 -Machine run designs/03-compact.machine
+.\run.ps1 -Machine why designs/04-stalled.machine
+.\run.ps1 -Machine compile designs/05-pulsed.machine
+.\run.ps1 -Machine check                       # its front end, without a browser
 ```
 
 `run.ps1` exists because rustup installs the MSVC toolchain without setting the
@@ -687,6 +702,255 @@ make.
 | Then how do you place a machine? | This broke, and it is the best bug of the experiment. A machine you have just placed is not wired, so the *plant* does not compile — and the first version returned no document, so nothing appeared on the canvas and there was nothing to wire. A refused command and an unfinished plant are not the same failure: one can never work, the other is what a factory looks like halfway through being built. A `Fault` now carries `refused` and the document it is complaining about. |
 | Is dragging a node an edit? | No, and the cache has to know that. `Log::key` strips positions from the base source *and* from every command, or a plant would recompile once per pixel. |
 
+## Experiment 06: the machine designer
+
+Everything above treats a building as a recipe with a multiplier. The only
+decision a player makes about a smelter is *how many smelters*, and `xN` is a
+thin question to build a game on. So the sixth experiment is a standalone
+prototype — its own binary, its own front end, its own file format, nothing
+wired into the solver — asking a different one:
+
+> A building is a small deterministic factory graph the player assembles, then
+> compiled into a reusable macro-machine once its behaviour is known.
+>
+> **Is assembling machines from functional components a fun optimisation
+> problem that produces understandable but non-obvious designs?**
+
+One brief, with four halves that fight:
+
+> Produce at least **100 MW** from **one** fuel source, while minimising
+> **footprint**, **water use** and **wasted heat**.
+
+### Eight components, one constraint each
+
+| component | footprint | the one interesting thing about it |
+|---|---|---|
+| Fuel / Heat Source | 4×4 | burns at its throttle setting whether or not the heat is wanted |
+| Heat Pipe | 3×1 | 400 heat/tick, and it loses 2% of everything it carries |
+| Water Source | 2×2 | 200 water/tick, and no more |
+| Heat Exchanger | 3×3 | needs heat **and** water in a fixed 5:2 ratio; short of either it makes less |
+| Steam Pipe | 3×1 | 150 steam/tick |
+| Steam Buffer | 3×3 | holds 2000; in *pulse* mode it fills quietly and empties hard |
+| Turbine | 3×2 | 80 steam/tick at 75% — but stalls below 40, and spins up slowly |
+| Generator | 2×2 | 70 rotary/tick at 90%, so 63 MW and not one more |
+
+Ports are typed — `heat`, `fluid`, `steam`, `rotary`, `electrical` — and a
+connection is legal only between an output and an input of the same type. There
+is no pressure, no temperature, no torque and no phase change. Every component
+has a capacity, most have an efficiency, and exactly one has a *threshold*.
+
+### A tick
+
+```text
+1. transfer   move quantities along wires, obeying both ends
+2. step       every component consumes its inputs and fills its outputs
+```
+
+In that order, which is the whole latency model: a quantity put into an output
+buffer during step *t* cannot move until the transfer at *t+1*, so every hop
+costs a tick and every pipe costs two. Nobody wrote a delay line.
+
+Contention is a *stated* policy, because v2 already learned that lesson the
+expensive way: max-min fair, with the remainder rotating on a cursor that is
+part of the machine's state. That last detail is why a fan-out of three on a
+budget of ten has a period of three rather than a permanent favourite.
+
+### Why a pipe exists
+
+The first version had no reason for one. A reactor's heat port reached every
+exchanger on the plot for free, so a Heat Pipe was a 2% tax nobody would ever
+volunteer for. The fix is one constant:
+
+```text
+a direct connection spans 6 clear tiles. Further than that needs a pipe.
+```
+
+which makes the tile grid load-bearing. Things that work together have to sit
+together; a pipe is how you buy distance; the price of distance is the loss.
+That is the same sentence as *minimise footprint*, which is why it belongs in
+the brief rather than in a tooltip.
+
+### The compiled macro-machine
+
+The brief is explicit that a finished machine must not collapse into `input ×
+efficiency = output`, and it is right to be suspicious — that is what every
+factory game does, and it is why two plants with the same average behave
+identically under a supply that wobbles. What a machine compiles to here is
+
+```text
+startup transient  +  exact periodic orbit
+```
+
+found by the least clever method available: run it, and watch for it to repeat
+itself. A component's state is a handful of small integers — some buffers, a
+warmth, a spin, a tank's mind made up — so the whole machine's state is a short
+byte string, and the step function is a pure function of that string. Therefore
+
+```text
+key(s) == key(t),  s < t   =>   state(s + k) == state(t + k)  for all k
+```
+
+and that one observation buys everything:
+
+```powershell
+.\run.ps1 -Machine compile designs/05-pulsed.machine
+```
+
+```text
+{"name":"Pulsed",
+ "externalInputs":[{"what":"Fuel","rate":20},{"what":"Water","rate":80}],
+ "externalOutputs":[{"what":"Electricity","rate":51.714285714285715}],
+ "footprint":"16 x 8","internalComponents":10,"internalStateBytes":271,
+ "transient":211,"periodicOrbit":21,
+ "note":"211 ticks of startup, then the same 21 ticks forever"}
+
+tick 1,000,000,000 is indistinguishable from tick 223 — 223 steps, not 1,000,000,000
+by then: 51,714,277,321 MW-ticks, 20,000,000,000 fuel, 79,999,995,584 water
+```
+
+The average is `1086/21` MW, kept as a rational, because 51.71 is a rounding of
+a fact and comparing two designs by their roundings is how you end up unable to
+explain why the worse one won. And the orbit is the part an average throws
+away: two of the designs below produce **exactly** the same 216 MW and are not
+the same machine.
+
+Nothing here is trusted. `machine verify` reaches every probe twice — once by a
+straight tick-by-tick run, once by prefix + laps + remainder — and the tests do
+it either side of the transient, on exact multiples of the period, and on ticks
+that are not.
+
+### Six designs, one brief
+
+```powershell
+.\run.ps1 -Machine
+```
+
+```text
+design                           MW   water  wasted     plot   parts  util  start    period
+----------------------------------------------------------------------------------------------
+01-first-try                  54.00    80.0   800.0     15x6       5   65%    120         1
+                           ! 54.00 MW is short of 100 MW by 46.00
+02-more-of-everything        216.00   320.0   200.0    15x19      17   83%    127         4
+03-compact                   108.00   160.0     0.0     12x6       8   81%    122         2
+04-stalled                     0.00    80.0     0.0     16x8      10   18%    122         3
+                           ! 0.00 MW is short of 100 MW by 100.00
+05-pulsed                     51.71    80.0     0.0     16x8      10   36%    211        21
+                           ! 51.71 MW is short of 100 MW by 48.29
+06-radial                    216.00   320.0     0.0    14x13      15   87%    122         4
+```
+
+There is deliberately **no score**. A single number would be maximised within
+two attempts and the interesting part — that a *compact* 100 MW plant and a
+*clean* 216 MW plant are different machines — would be gone by the third.
+
+Three of the six meet the brief, and none of the three dominates:
+
+- **03-compact** noticed what the reactor is *for*. Two exchangers can take 500
+  heat a tick, so a reactor at full throttle is heating the sky with the other
+  half. Turned down to 40% it makes 108 MW on 40 fuel/tick, wastes nothing, and
+  fits in 12×6.
+- **02-more-of-everything** is the design everybody builds second: four of each,
+  full throttle, heat pipes to reach the far half of the plot. 216 MW — and 285
+  tiles, 200 wasted heat a tick, and seventeen components.
+- **06-radial** is the same 216 MW with the reactor in the *middle*, so all four
+  exchangers are in reach and both heat pipes are gone, and with the throttle
+  set to what four exchangers can actually swallow. Two thirds of the land,
+  fifteen components, nothing wasted at all.
+
+### The one nobody guesses first
+
+`04-stalled` and `05-pulsed` differ by a single word in the file.
+
+```diff
+-tank      TK1 at 7,0
++tank      TK1 at 7,0  pulse 400 0
+```
+
+Three turbines on 80 steam a tick is 26 each, and a turbine below 40 does not
+turn slowly — it does not turn at all. So the machine produces nothing, and
+quietly condenses every drop of steam it makes, forever. Gather the same trickle
+into 400 and throw it at them and it is 67 each for two ticks in seven, which is
+over the line; a turbine spins up faster than it spins down, so it does not
+quite fall back between pulses.
+
+**0.00 MW → 51.71 MW. Nothing was added and nothing was made bigger.** The
+period goes from 3 to 21, which is the orbit reporting that a genuinely
+different machine is now running.
+
+That is the shape of result the experiment was looking for: a decision that is
+non-obvious beforehand, explainable in one sentence afterwards, and visible in
+numbers the tool was already showing.
+
+### Saying why
+
+A design tool where the player can see that the machine is bad but not *why* is
+a puzzle with the solution torn out, so every component composes its own
+explanation out of state that was already there — the same sentences in the
+inspector, in `machine why`, and in the "holding it back" list.
+
+```powershell
+.\run.ps1 -Machine why designs/04-stalled.machine
+```
+
+```text
+HX1        Heat Exchanger       STARVED
+    needs: 250 heat + 100 water/tick
+    arriving: 200 heat, 80 water
+    short of heat: 200 of 250
+    making 80 steam/tick
+    utilisation: 80.0%
+
+T1         Turbine              STALLED
+    needs: 80 steam/tick
+    available: 27 steam/tick
+    spin: 0/30
+    below the 40 steam/tick it needs to turn over at all
+    a Steam Buffer in pulse mode can push a trickle over the line
+    steam condensed and lost: 27/tick
+    rotary out: 0/tick
+```
+
+### The designer
+
+```powershell
+.\run.ps1 -Machine serve        # http://127.0.0.1:8788
+```
+
+Place, move, wire, unwire, run, pause, and scrub — to tick 10⁹, which is free,
+and the timeline says so out loud: *`t=1,000,000,000 answered by simulating
+t=223`*. The rule the workbench is built on holds here too, and is the one thing
+that was never allowed to bend:
+
+```text
+Simulation  ->  State(t)  ->  RenderSnapshot  ->  Renderer
+```
+
+The canvas does not know that a heat pipe leaks 2%. It knows this wire carried
+392 units last tick and that its rate is 400, which is enough to draw it thick.
+
+The browser owns a copy of exactly two rules — whether a wire is legal, and what
+the file looks like — because refusing to draw an illegal connection has to
+happen while the pointer is still moving. Both copies are fetched from, or
+checked against, the Rust that has the final word, by a test that needs no
+browser:
+
+```powershell
+.\run.ps1 -Machine check
+```
+
+### What it answered, and what it did not
+
+| the question | the answer |
+|---|---|
+| Do genuinely different designs meet the same brief? | Yes. 108 MW on 72 tiles and 216 MW on 182, neither dominating, plus a worse 216 MW on 285. |
+| Is any of it non-obvious? | Throttling *down* to make the same power, and rescuing three dead turbines with one word, were both found by building the thing and reading its own complaints. |
+| Does the orbit survive compilation? | Yes, and it matters: periods of 1, 2, 3, 4, 4 and 21 across six designs, two of which have identical averages. |
+| Is the answer at tick 10⁹ cheap? | 223 steps rather than a billion, cross-checked against a straight run at every probe. |
+| Does a component always say why it is stopped? | Yes, and it is a test — a component that explains nothing fails it. |
+| Is water an interesting axis? | **No.** Water per megawatt is fixed by the chain unless steam is vented, so it only separates designs that are already wasteful. It is reported honestly and it is the weakest of the four halves. |
+| Is the Steam Buffer ever *optimal*? | Not found yet. It rescues a machine that is below the threshold; it never beats simply building fewer turbines. A real limitation of the current numbers, not a feature. |
+| Does it scale? | Not asked. That battle has already consumed enough innocent CPU cycles. |
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -866,10 +1130,22 @@ src/why.rs        Prototype 1: why a thing is not running, and what binds
 src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
 src/main.rs       experiment harness, `serve`, `export` and `play`
 web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            76 cross-validation tests
+tests/            92 cross-validation tests
 configs/          the fifteen configurations, plus the first scenario plant
 scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
+
+src/machine/parts.rs   Ex 06: eight components, five port types, and the numbers
+src/machine/design.rs  Ex 06: components on a tile grid, wires between their ports
+src/machine/sim.rs     Ex 06: transfer along wires, then every component steps
+src/machine/orbit.rs   Ex 06: run it until it repeats; keep transient + period
+src/machine/eval.rs    Ex 06: a brief with four competing halves, and no score
+src/machine/snap.rs    Ex 06: state(t) for a renderer, and why things are stopped
+src/machine/web.rs     Ex 06: its own small server, so it can be thrown away
+src/bin/machine.rs     Ex 06: run, why, compile, verify, serve
+web/machine/           Ex 06: the designer
+designs/               Ex 06: six answers to the same brief
+tests/machine_web.mjs  Ex 06: the front end, checked without a browser
 ```
 
 Zero dependencies outside `std`. The workbench added a JSON codec and an HTTP
@@ -881,6 +1157,7 @@ server rather than a dependency tree larger than the crate they serve.
 > **Prototype 0:** stop compressing things and go and look at one.
 > **Prototype 1:** let someone change it while it is running, and give them a
 > reason to want to.
+> **Experiment 06:** stop scaling buildings and start designing one.
 
 Next is **P2**: a server holding the command log and the canonical snapshots,
 one client playing normally, and a second client joining at tick 80,000,

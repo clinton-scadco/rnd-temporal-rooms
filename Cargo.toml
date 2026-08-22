@@ -2,6 +2,8 @@
 name = "temporal-rooms"
 version = "0.1.0"
 edition = "2021"
+# Experiment 06 added a second binary, and `cargo run` will not guess.
+default-run = "trooms"
 
 [lib]
 name = "temporal_rooms"
@@ -10,6 +12,12 @@ path = "src/lib.rs"
 [[bin]]
 name = "trooms"
 path = "src/main.rs"
+
+# Experiment 06 is a separate prototype with a separate front end, so it gets a
+# separate binary rather than another subcommand on the workbench.
+[[bin]]
+name = "machine"
+path = "src/bin/machine.rs"
 
 [profile.release]
 opt-level = 3

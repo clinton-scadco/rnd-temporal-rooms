@@ -1,0 +1,33 @@
+# Three turbines on a supply that would have run one.
+#
+# 80 steam a tick, split three ways, is 26 each -- and a turbine below 40 does
+# not turn slowly, it does not turn at all. So the machine produces nothing,
+# and quietly condenses every drop of steam it makes. The buffer does not help:
+# in pass-through mode it hands on exactly what it was given.
+#
+# 05-pulsed is this file with one word changed.
+
+machine "Stalled"
+
+reactor   R1  at 0,0  throttle 20
+exchanger HX1 at 4,0
+pump      W1  at 0,5
+tank      TK1 at 7,0
+
+turbine   T1  at 10,0
+turbine   T2  at 10,3
+turbine   T3  at 10,6
+
+generator G1  at 14,0
+generator G2  at 14,3
+generator G3  at 14,6
+
+wire R1.heat -> HX1.heat
+wire W1.water -> HX1.water
+wire HX1.steam -> TK1.in
+wire TK1.out -> T1.steam
+wire TK1.out -> T2.steam
+wire TK1.out -> T3.steam
+wire T1.rotary -> G1.rotary
+wire T2.rotary -> G2.rotary
+wire T3.rotary -> G3.rotary

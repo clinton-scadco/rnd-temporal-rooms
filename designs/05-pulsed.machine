@@ -1,0 +1,34 @@
+# The same machine, with the buffer told to hold rather than pass.
+#
+# A trickle of 26 steam a tick is below every turbine's threshold forever. The
+# same trickle gathered into 400 and thrown at them is 67 each for two ticks in
+# seven, which is over the line -- and a turbine spins up faster than it spins
+# down, so it does not quite fall back between pulses. Nothing was added and
+# nothing was made bigger. The steam that was being condensed is being used.
+#
+# This is the one decision in the experiment that nobody guesses first.
+
+machine "Pulsed"
+
+reactor   R1  at 0,0  throttle 20
+exchanger HX1 at 4,0
+pump      W1  at 0,5
+tank      TK1 at 7,0  pulse 400 0
+
+turbine   T1  at 10,0
+turbine   T2  at 10,3
+turbine   T3  at 10,6
+
+generator G1  at 14,0
+generator G2  at 14,3
+generator G3  at 14,6
+
+wire R1.heat -> HX1.heat
+wire W1.water -> HX1.water
+wire HX1.steam -> TK1.in
+wire TK1.out -> T1.steam
+wire TK1.out -> T2.steam
+wire TK1.out -> T3.steam
+wire T1.rotary -> G1.rotary
+wire T2.rotary -> G2.rotary
+wire T3.rotary -> G3.rotary

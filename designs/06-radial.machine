@@ -1,0 +1,52 @@
+# The same 216 MW as 02-more-of-everything, on two thirds of the land, with
+# fifteen components instead of seventeen and nothing wasted at all.
+#
+# Two things changed. The reactor sits in the middle, so all four exchangers
+# are within reach of it and the two heat pipes -- and their 2% -- are gone.
+# And the throttle is set to what four exchangers can actually swallow, which
+# is 800 of its 1000 heat, so the stack is cold.
+#
+# It is not the smallest answer to the brief. 03-compact is a third of the plot
+# for half the power. Which of the two is better depends on something this
+# experiment deliberately does not know.
+
+machine "Radial"
+
+reactor   R1  at 4,4  throttle 80
+
+exchanger HX1 at 4,0
+exchanger HX2 at 4,8
+exchanger HX3 at 0,4
+exchanger HX4 at 8,4
+
+pump      W1  at 0,0
+pump      W2  at 8,8
+
+turbine   T1  at 8,0
+generator G1  at 11,0
+turbine   T2  at 8,11
+generator G2  at 11,11
+turbine   T3  at 0,8
+generator G3  at 0,11
+turbine   T4  at 11,4
+generator G4  at 11,7
+
+wire R1.heat -> HX1.heat
+wire R1.heat -> HX2.heat
+wire R1.heat -> HX3.heat
+wire R1.heat -> HX4.heat
+
+wire W1.water -> HX1.water
+wire W1.water -> HX3.water
+wire W2.water -> HX2.water
+wire W2.water -> HX4.water
+
+wire HX1.steam -> T1.steam
+wire HX2.steam -> T2.steam
+wire HX3.steam -> T3.steam
+wire HX4.steam -> T4.steam
+
+wire T1.rotary -> G1.rotary
+wire T2.rotary -> G2.rotary
+wire T3.rotary -> G3.rotary
+wire T4.rotary -> G4.rotary

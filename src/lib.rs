@@ -113,12 +113,38 @@
 //! posed *about* a plant rather than inside it, in a file the solver never
 //! reads.
 
+//! # Experiment 06 asks: is a building worth designing?
+//!
+//! Everything above treats a machine as a recipe with a multiplier. Place a
+//! smelter, place fifty, place fifty thousand -- the interesting decision is
+//! *how many*, and `xN` is a poor question to build a game on.
+//!
+//! So `machine` asks whether the inside of one building is a better question:
+//!
+//! ```text
+//!   a building is a small deterministic factory graph the player assembles,
+//!   compiled into a reusable macro-machine once its behaviour is known
+//! ```
+//!
+//! It is deliberately not wired into any of the above. Its own front end, its
+//! own binary, its own file format, and an answer that can be thrown away
+//! without taking the solver with it.
+//!
+//! What it borrows is the discipline. Components are state machines,
+//! connections carry deterministic quantities, the renderer never simulates,
+//! and the clever answer is always compared against the stupid one. What it
+//! adds is a refusal: a finished machine does **not** reduce to `input x
+//! efficiency = output`. It reduces to a startup transient followed by an exact
+//! periodic orbit, and keeping the orbit is what lets two buildings with the
+//! same average behave differently when the world outside them changes.
+
 pub mod analytic;
 pub mod domains;
 pub mod dsl;
 pub mod graph;
 pub mod json;
 pub mod live;
+pub mod machine;
 pub mod model;
 pub mod pop;
 pub mod rooms;

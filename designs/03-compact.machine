@@ -1,0 +1,29 @@
+# The same brief, answered by asking what the reactor is actually for.
+#
+# Two exchangers can take 500 heat a tick and no more, so a reactor at full
+# throttle is heating the sky with the other half. Turn it down to 40% and the
+# plant makes the same power on a third of the fuel, wastes nothing, and fits
+# on a plot a quarter the size of 02-more-of-everything.
+
+machine "Compact"
+
+reactor   R1  at 0,0  throttle 40
+
+exchanger HX1 at 4,0
+turbine   T1  at 7,0
+generator G1  at 10,0
+
+exchanger HX2 at 4,3
+turbine   T2  at 7,3
+generator G2  at 10,3
+
+pump      W1  at 0,4
+
+wire R1.heat -> HX1.heat
+wire R1.heat -> HX2.heat
+wire W1.water -> HX1.water
+wire W1.water -> HX2.water
+wire HX1.steam -> T1.steam
+wire HX2.steam -> T2.steam
+wire T1.rotary -> G1.rotary
+wire T2.rotary -> G2.rotary

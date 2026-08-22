@@ -2,10 +2,22 @@
 #
 # rustup installs the MSVC toolchain but does not set up the MSVC/Windows SDK
 # library search paths, so we import them from vcvars64.bat first.
+#
+# Positional binding is off: without it `-Machine serve` hands "serve" to
+# whichever [string] parameter happens to be declared first, which is a very
+# confusing way to be told nothing is wrong.
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$Test,
     [switch]$BuildOnly,
     [switch]$Serve,
+    # Experiment 06's machine designer, which is a separate binary with a
+    # separate front end. Everything after the switch is passed straight to it:
+    #   -Machine                       every design in ./designs, judged
+    #   -Machine serve                 the designer, in a browser
+    #   -Machine run designs/x.machine
+    #   -Machine check                 the front end, against a live server
+    [switch]$Machine,
     [string]$Play,
     # PowerShell binds anything starting with `-` to a parameter, so the
     # scenario's own options get first-class ones rather than being smuggled
@@ -48,7 +60,31 @@ $env:LIB = ($libs -join ";")
 $env:PATH = (Join-Path $toolset.FullName "bin\HostX64\x64") + ";$env:PATH"
 
 Set-Location $PSScriptRoot
-if ($Test) {
+if ($Machine) {
+    cargo build --release --bin machine
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $exe = Join-Path $PSScriptRoot "target/release/machine.exe"
+    # `check` is the front end's own test, and it needs something to talk to.
+    # Starting and stopping that here is the difference between a test people
+    # run and a test people mean to run.
+    if ($Configs -and $Configs[0] -eq "check") {
+        $port = if ($Port -eq 8787) { 8799 } else { $Port }
+        $srv = Start-Process -FilePath $exe -ArgumentList "serve", "--port", $port `
+            -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 700
+            node (Join-Path $PSScriptRoot "tests\machine_web.mjs") $port
+            exit $LASTEXITCODE
+        } finally {
+            if (-not $srv.HasExited) { Stop-Process -Id $srv.Id -Force }
+        }
+    }
+    $cli = @()
+    if ($Configs) { $cli += $Configs }
+    if ($cli -contains "serve" -and $Port -ne 8787) { $cli += @("--port", $Port) }
+    & $exe @cli
+    exit $LASTEXITCODE
+} elseif ($Test) {
     cargo test --release
 } elseif ($BuildOnly) {
     cargo build --release

@@ -1,0 +1,19 @@
+# The design everybody builds first: one of each, wired in a line, and the
+# reactor left where the manual found it.
+#
+# It works, in the sense that electricity comes out. It is also burning a full
+# fuel load to heat a room, because a single exchanger can only take a quarter
+# of what the reactor makes and the rest goes up the stack.
+
+machine "First Try"
+
+reactor   R1  at 0,0
+exchanger HX1 at 5,0
+pump      W1  at 5,4
+turbine   T1  at 9,0
+generator G1  at 13,0
+
+wire R1.heat  -> HX1.heat
+wire W1.water -> HX1.water
+wire HX1.steam -> T1.steam
+wire T1.rotary -> G1.rotary
