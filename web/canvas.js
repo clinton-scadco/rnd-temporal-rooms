@@ -1,7 +1,7 @@
 // Camera and pointer. The canvas owns no factory state either -- it owns a
 // viewport, a selection and whichever drag is half finished.
 
-import { state, apply, markUndo, newNode, nodeOf, canWire, connect, removeNode, undoLast, onChange } from './doc.js';
+import { state, place, moveNode, nodeOf, canWire, connect, removeNode, undoLast, onChange } from './doc.js';
 import { draw, layout, hit, handleAt } from './render.js';
 
 export const view = { ox: 40, oy: 40, scale: 1, width: 0, height: 0, dpr: 1 };
@@ -25,9 +25,10 @@ export function initCanvas(el, hooks) {
     if (ui.place) {
       const kind = ui.place;
       ui.place = null;
-      apply(g => g.nodes.push(newNode(kind, Math.round(w.x / 20) * 20 - 70, Math.round(w.y / 20) * 20 - 30)));
-      const placed = state.graph.nodes[state.graph.nodes.length - 1];
-      select(placed.name);
+      // The node does not exist until the server agrees that it does, so the
+      // selection is by name rather than by object.
+      const proposed = place(kind, Math.round(w.x / 20) * 20 - 70, Math.round(w.y / 20) * 20 - 30);
+      select(proposed.name);
       hooks.onPlaced && hooks.onPlaced();
       return;
     }
@@ -63,13 +64,10 @@ export function initCanvas(el, hooks) {
       view.oy = drag.oy + (e.clientY - drag.y);
       invalidate();
     } else if (drag.kind === 'node') {
-      const n = nodeOf(drag.name);
-      if (!n) return;
       // Moving is not a structural edit: the plant is the same plant wherever
-      // it is drawn, so it does not recompile.
-      if (!drag.moved) { drag.moved = true; markUndo(); }
-      n.x = Math.round((w.x - drag.dx) / 10) * 10;
-      n.y = Math.round((w.y - drag.dy) / 10) * 10;
+      // it is drawn, so it does not become a command and does not recompile.
+      drag.moved = true;
+      moveNode(drag.name, Math.round((w.x - drag.dx) / 10) * 10, Math.round((w.y - drag.dy) / 10) * 10);
       invalidate();
     } else if (drag.kind === 'wire') {
       invalidate();

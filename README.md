@@ -32,13 +32,28 @@ creature nobody had tried to *play*. So the fourth is a **factory workbench**:
 place nodes, wire them, compile them into the language the solver already
 speaks, and then drag a timeline across a billion ticks and watch.
 
+**Prototype 1** asks the first question that is about a game rather than about a
+solver:
+
+> Can the simulation stay deterministic and cheap while the player is
+> continuously changing the graph?
+
+Yes, and the price is one sentence long: **an edit is a rendezvous.** Bring
+every region to the edit's tick, harvest the plant's state, compile the new
+plant, pour the state back in. It costs `O(cells) + O(nodes)` — tens of
+numbers for a plant with a billion machines in it — and it is not a replay.
+
 ## Quick start
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 46 cross-validation tests
+.\run.ps1 -Test    # 74 cross-validation tests
 .\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
+
+# Prototype 1: play a scenario without a browser
+.\run.ps1 -Play scenarios/first-gears.scenario
+.\run.ps1 -Play scenarios/first-gears.scenario --buy "GearPress=3@15000"
 ```
 
 `run.ps1` exists because rustup installs the MSVC toolchain without setting the
@@ -467,6 +482,211 @@ Two mistakes in the snapshot, both the same mistake:
    `usize::MAX`. The first snapshot dutifully reported
    `"region": 18446744073709551615`.
 
+## Prototype 1: a factory you can change while it runs
+
+Prototype 0's document was a *drawing*. You edited it, the whole thing was
+compiled, and the run started again from tick zero. That is fine for a workbench
+and useless for a game, because a player does not design a factory and then
+watch it: they build a bad one, watch it fail, and fix it at tick 12,000 without
+losing the twelve thousand ticks.
+
+So the document stops being a drawing and becomes a **history**:
+
+```text
+  base plant at t=0
+  tick 12,000: place  Smelter2
+  tick 12,000: wire   OreYard -> Smelter2
+  tick 12,500: retune GearPress    (recipe changed)
+  tick 13,000: retune Rail         (8 vehicles -> 12)
+```
+
+and the thing the solver is asked for is still a pure function of two arguments:
+
+```text
+  state(log, T)
+```
+
+That matters more than it looks. v1 to v3 all leaned on *the state at tick T is a
+function of the plant and T*, and every convenience in the stack is downstream of
+it: the stateless server, the scrubbable timeline, the reload that cannot
+desynchronise. A log is still one argument. Nothing above that line had to change
+its mind about anything.
+
+### An edit is a rendezvous
+
+A region in v3 runs alone, at its own clock, as far ahead as its causal slack
+allows. Two regions of one plant are routinely thousands of ticks apart. So
+"apply this edit at tick 12,000" has to answer: **whose** tick 12,000?
+
+There is one honest answer, and `Room::run_until` had already stated it — in
+between global barriers there is no such thing as "the state of the plant". An
+edit therefore forces one:
+
+```text
+  1. bring every region to the edit's tick        (a barrier)
+  2. harvest the plant's state                    (O(cells))
+  3. compile the new plant                        (O(nodes))
+  4. pour the state back in, and settle           (O(cells))
+```
+
+```text
+  cost of an edit  =  O(cells) + O(nodes)
+  cost of a replay =  O(ticks)
+```
+
+`cells` is the compressed width of the population state: tens, for a plant with
+a billion machines in it. So a player may edit as often as they like and the
+cost never becomes proportional to what they have built.
+
+### What crosses the boundary, and what does not
+
+A `Carry` is contents, populations, arbitration pointers and counters, keyed by
+**name** — because a name is the only identity a document has. Storage indices,
+class indices and region membership are all things the next compile is entitled
+to choose differently, and an edit that adds a link moves the region boundaries
+underneath everything.
+
+Two details are load-bearing and neither is obvious:
+
+- **The round-robin pointer is a client, not an index.** A storage's fairness
+  pointer is a position in its client list, and an edit is exactly the thing
+  that changes that list. Carrying the index silently hands the next turn to a
+  different machine — a policy change nobody asked for. The pointer is carried
+  as the *class it is resting on* and re-resolved.
+- **A closed form is a claim about a plant that started empty at t=0**, and a
+  resumed region did not. `Room::new` may label a sealed region `Closed`; a
+  resumed one is honestly a population run.
+
+What does *not* cross is every opinion the scheduler formed on the way here:
+advances, messages, skew. Those are properties of a run, not of a tick — the
+lesson Prototype 0 already learned once when the same snapshot came out
+different depending on whether it was scrubbed to or played to.
+
+### The test that carries the whole thing
+
+The load-bearing test is the one where the edit **does nothing**.
+
+Retune a node to exactly what it already is at tick *k*: the plant is the same
+plant, the emitted source is byte-identical, and the only difference between the
+two runs is that one went through the barrier, the harvest, the recompile and
+the reseed. If the states still agree at every probe afterwards, the machinery
+carries everything and invents nothing.
+
+```text
+an_edit_that_changes_nothing_changes_nothing    12 plants x 4 cut points x 5 probes
+edits_do_not_accumulate_error                   9 no-op edits in a row
+a_carry_is_worth_the_ticks_it_replaces          snapshot at a boundary + the rest of the log
+a_plant_that_does_not_compile_still_has_a_document
+                                                the half-built case, which broke once
+```
+
+That last one is the networking proof rehearsed early. `POST /api/verify?t=N`
+answers tick *N* twice — once from the beginning, once from the canonical
+snapshot at *N/2* — and compares signatures. It is also printed by every
+headless `play`, so a desync would have to survive being noticed by accident.
+
+### The carry is the snapshot
+
+The cache that makes scrubbing fast and the object a joining client would be
+sent turned out to be the same type. Prototype 0 cached a compiled `Plan` and a
+live `Room`, which meant leaking both into `'static` to escape a
+self-referential borrow. A `Carry` is plain owned data with a JSON encoding and
+a canonical signature, so that machinery is simply gone — and P2's *server:
+command log + canonical snapshots* is now a description of code that exists.
+
+### Prototype 1 also has pressure
+
+A simulator becomes a problem the moment somebody wants something out of it that
+it cannot currently deliver. `scenarios/first-gears.scenario` is a budget, an
+order and a deadline, posed *about* `configs/p1-gears.factory` rather than
+inside it — its own file, its own parser, and the solver never hears about any
+of it. The plant runs identically with the scenario deleted.
+
+Three things came for free, or nearly:
+
+- **Finite resources needed no new construct.** An ore deposit is a storage with
+  contents and no producer wired to it. When it empties the mine starves for the
+  ordinary reason, and every part of the machinery that explains starvation
+  explains this too.
+- **Delivery is what leaves through a sink** — `cycles x batch`, summed over the
+  sink classes that consume the item. Not the item's total consumption: a gear
+  press eating plates is not a delivery of plates, and an order that counted it
+  would be satisfiable by building a machine that eats its own supply chain.
+- **Costs are per member.** `Smelter x40` is forty smelters and is priced as
+  forty smelters, because the object on the canvas is a bookkeeping convenience.
+
+### Why is this not running?
+
+The usual answer is a status word floating over a machine. What a player needs
+is the sentence after it, and every number in that sentence was already in the
+simulation state:
+
+```text
+Smelter                          Smelter
+STARVED                          BLOCKED
+needs 25 IronOre                 holding 25 IronPlate
+OreYard holds 0                  PlateBay: 1,985 of 2,000 · 99.2% full
+from Rail: 100% busy, 0 idle     to GearPress: 100% busy, 0.250/tick
+next delivery t=14,200 (+840)
+```
+
+Bay contents are in `Pop::qty`; populations are the four buckets; the arrival
+tick of the next train is the deadline v3 has stored for every batch in the air
+since transports became channels. `why.rs` reads. It computes no physics, which
+is exactly why it was worth writing now.
+
+It also answers the question one level up. A class is a **constraint** when it
+never waits — no member idle, no member blocked — and something drawing on it
+*is* waiting. That definition is mechanical rather than clever, and it finds the
+honest bottleneck instead of the loud one.
+
+### What the scenario caught
+
+`p1-gears.factory` is underbuilt in two places at once: a rail moving 0.5
+ore/tick, and a gear press consuming 0.25 plate/tick behind it. The rail is the
+bottleneck a player notices, because it is the one with a queue in front of it.
+The press is the one that binds.
+
+```powershell
+.\run.ps1 -Play scenarios/first-gears.scenario
+#   holding the plant back: GearPress at 0.125/tick, starving Delivery
+#   [MISS] deliver 12,000 Gear by tick 60,000 — 7,200 of 12,000
+
+.\run.ps1 -Play scenarios/first-gears.scenario --buy "Rail=8@15000"
+#   spent 420
+#   holding the plant back: GearPress at 0.125/tick, starving Delivery
+#   [MISS] deliver 12,000 Gear by tick 60,000 — 7,200 of 12,000
+
+.\run.ps1 -Play scenarios/first-gears.scenario --buy "GearPress=3@15000"
+#   spent 240
+#   holding the plant back: Rail at 0.500/tick, starving Smelter
+#   [MET ] deliver 12,000 Gear by tick 60,000 — 14,500 of 12,000
+```
+
+Seven extra rail vehicles deliver **exactly** as many gears as none did — to the
+unit — and the constraint report never stops pointing at the press. Two extra
+presses cost less, meet the order, and move the bottleneck down the chain, at
+which point the smelters start reporting `TRANSPORT LIMITED` and the rail
+*becomes* worth buying.
+
+`buying_the_wrong_upgrade_buys_nothing` is a test now. It was written asserting
+the opposite and failed, which is a fair description of how the mistake feels to
+make.
+
+### What changing it while it runs broke
+
+| the question | the answer, measured |
+|---|---|
+| Can a mid-run edit break the plant? | Yes, and it names its own tick: ``t=30,000 · Smelter · `Smelter` produces items but has nowhere to put them``. Demolishing a load-bearing bay is an ordinary way to hit it. |
+| Then how do you demolish anything? | All at once. Several commands at one tick are **one** recompile, so the half-demolished states in between are never compiled and never have to be legal. |
+| When does an edit take effect? | At its own tick. `sig(plain, 20_000) != sig(edited, 20_000)` is a test; an off-by-one here would be a command log that does not mean what it says. |
+| What happens to a machine you scale down mid-cycle? | It is taken out of service and the batch is lost — idle members first, then vehicles running home empty, then finished batches, then work in progress. Only the last two lose anything, and the player is told what it cost. |
+| What happens to a bay you demolish with ore in it? | The ore is scrapped, and `scrapped` says so. A game that quietly deleted it would be lying about what the player just did. |
+| Can you rename a node? | No. A name is the identity everything crosses an edit by, so renaming is a demolition and a rebuild — and the inspector stopped offering a name field rather than pretending otherwise. |
+| Does the browser apply edits? | No. It *proposes* them: append the command, ask again, take the graph that comes back. There is one implementation of what an edit means, it is in Rust, and it is the one a replaying client would use. |
+| Then how do you place a machine? | This broke, and it is the best bug of the experiment. A machine you have just placed is not wired, so the *plant* does not compile — and the first version returned no document, so nothing appeared on the canvas and there was nothing to wire. A refused command and an unfinished plant are not the same failure: one can never work, the other is what a factory looks like halfway through being built. A `Fault` now carries `refused` and the document it is complaining about. |
+| Is dragging a node an edit? | No, and the cache has to know that. `Log::key` strips positions from the base source *and* from every command, or a plant would recompile once per pixel. |
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -597,9 +817,11 @@ These are real, and worth stating plainly.
    that share a bay and start at different phases would need per-phase line
    populations, which is the same v4 dragon as item 3.
 8. **The workbench seeks forward cheaply and backward expensively.** A forward
-   seek advances the Room it already has; a backward one builds a new one and
-   replays. Scrubbing left across a long horizon is therefore the slow
-   direction, and the closed form is not yet wired into a seek.
+   seek resumes from the carry it already has; a backward one starts again from
+   the last boundary at or before the target. Scrubbing left across a long
+   horizon is therefore the slow direction, and the closed form is not yet
+   wired into a seek. One carry is cached, not a ladder of them, so there is an
+   obvious next move here and it has not been made.
 9. **Canvas 2D, not GPU instancing.** Close up, a population draws as a few
    thousand sampled machines rather than the millions the experiment brief
    imagines. The snapshot already carries what an instanced renderer would
@@ -608,6 +830,22 @@ These are real, and worth stating plainly.
 10. **One plant, one page.** No multiplayer, no shared editing, no power, no
     splitters, no fluids. The document is a command log and generic nodes,
     ports, links and storages precisely so those can arrive later.
+11. **The edit barrier is global.** An edit synchronises *every* region, not
+    just the ones it touches. Placing a smelter on one continent stops a mine
+    on another. The cost is small — the barrier is the only thing paid for, and
+    a region that is already ahead simply waits — but the *scope* is wrong, and
+    a plant with many independent regions and a busy player will feel it before
+    the cost does.
+12. **An edit is only ever at the present or the beginning.** The log is
+    required to be in order, so there is no editing the past and no branching
+    timeline. Scrubbing back and building would need the log to fork, which is
+    a different feature wearing this one's clothes.
+13. **A refused command is refused by the server, one round trip later.** The
+    browser proposes and un-proposes; for one person on loopback that is
+    invisible, and for a player on a real connection it would not be.
+14. **The costs in `scenarios/` are guesses.** They are a rules file, they are
+    meant to be edited between playtests, and nothing checks that they make a
+    good game — only that they mean the same thing twice.
 
 ## Layout
 
@@ -623,10 +861,14 @@ src/graph.rs      Prototype 0: the placed document, and the source it emits
 src/snap.rs       Prototype 0: the state at tick T, in the shape a view needs
 src/json.rs       Prototype 0: a JSON value, a parser and a writer
 src/web.rs        Prototype 0: an HTTP server, in std
-src/main.rs       experiment harness, `serve` and `export`
-web/              the workbench: canvas, inspector, timeline, timetable
-tests/            46 cross-validation tests
-configs/          the fifteen configurations
+src/live.rs       Prototype 1: the command log, the barrier, and the carry
+src/why.rs        Prototype 1: why a thing is not running, and what binds
+src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
+src/main.rs       experiment harness, `serve`, `export` and `play`
+web/              the workbench: canvas, inspector, timeline, timetable, brief
+tests/            76 cross-validation tests
+configs/          the fifteen configurations, plus the first scenario plant
+scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
 ```
 
@@ -637,3 +879,11 @@ server rather than a dependency tree larger than the crate they serve.
 > **v2:** compress interaction.
 > **v3:** compress causality.
 > **Prototype 0:** stop compressing things and go and look at one.
+> **Prototype 1:** let someone change it while it is running, and give them a
+> reason to want to.
+
+Next is **P2**: a server holding the command log and the canonical snapshots,
+one client playing normally, and a second client joining at tick 80,000,
+loading a snapshot, replaying the commands, and hashing identically — while
+someone is actively building. Both of those objects now exist and have a
+signature; what is missing is a second process.

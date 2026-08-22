@@ -614,3 +614,137 @@ fn merge_into(dst: &mut Vec<(Tick, u64)>, src: &[(Tick, u64)]) {
         }
     }
 }
+
+// ==================================================== P1: resuming mid-run
+
+impl<'a> Room<'a> {
+    /// A decomposed plant that starts at tick `now` holding state harvested
+    /// from the plant it replaces.
+    ///
+    /// `classes()` merges the two ends of every lifted transport back into one
+    /// population; this splits one back into two. The rule is the same one in
+    /// both directions and it is forced, not chosen -- a vehicle waiting to
+    /// load is at the loading end, one waiting to unload is at the unloading
+    /// end, and there is nowhere else for either of them to be:
+    ///
+    /// ```text
+    ///   starved   -> the sending region      done      -> the receiving one
+    ///   returning -> the sending region      working   -> the receiving one
+    /// ```
+    ///
+    /// The decomposition itself may be a different decomposition: an edit that
+    /// adds or removes a link moves the region boundaries, and a class that
+    /// was lifted is now whole, or the reverse. That costs nothing here
+    /// because the four buckets never belonged to a region in the first place.
+    pub fn resume(
+        plan: &'a Plan,
+        bp: &Blueprint,
+        n_items: usize,
+        now: Tick,
+        seed: pop::Seed,
+    ) -> Room<'a> {
+        let nr = plan.regions();
+        let mut cycles_left: Vec<u64> = seed.c.cycles.clone();
+        let mut pops: Vec<Pop<'a>> = Vec::with_capacity(nr);
+        for r in 0..nr {
+            let rbp = &plan.bps[r];
+            let mut qty = vec![0; rbp.qty_stride as usize];
+            for (l, &g) in plan.store_up[r].iter().enumerate() {
+                let sd = &rbp.storages[l];
+                for (k, &item) in sd.slots.iter().enumerate() {
+                    if let Some(slot) = bp.slot_of(g as usize, item) {
+                        qty[sd.qty_offset as usize + k] = seed.qty[slot as usize];
+                    }
+                }
+            }
+            let mut rr = vec![0u16; rbp.storages.len() * 2];
+            for (l, &g) in plan.store_up[r].iter().enumerate() {
+                rr[l * 2] = seed.rr[g as usize * 2];
+                rr[l * 2 + 1] = seed.rr[g as usize * 2 + 1];
+            }
+            let mut classes: Vec<ClassPop> = Vec::with_capacity(rbp.actors.len());
+            let mut c = Counters::zeroed(rbp.actors.len(), n_items);
+            for (l, &g) in plan.class_up[r].iter().enumerate() {
+                let src = &seed.classes[g as usize];
+                classes.push(match plan.ports[r][l] {
+                    Port::Whole => src.clone(),
+                    Port::Out => ClassPop {
+                        working: Vec::new(),
+                        starved: src.starved,
+                        done: 0,
+                        returning: src.returning.clone(),
+                    },
+                    Port::In => ClassPop {
+                        working: src.working.clone(),
+                        starved: 0,
+                        done: src.done,
+                        returning: Vec::new(),
+                    },
+                });
+                // Cycles are per class and `counters()` adds the regions up,
+                // so a class that stands in two regions must have its history
+                // handed to exactly one of them.
+                c.cycles[l] = std::mem::take(&mut cycles_left[g as usize]);
+            }
+            if r == 0 {
+                c.produced.clone_from(&seed.c.produced);
+                c.consumed.clone_from(&seed.c.consumed);
+            }
+            pops.push(Pop::resume(rbp, n_items, plan.ports[r].clone(), now, pop::Seed {
+                qty,
+                classes,
+                rr,
+                c,
+            }));
+        }
+
+        // A closed form is a claim about a region that started empty at t=0,
+        // and none of these did. `Room::new` may label a sealed region
+        // `Closed`; a resumed one is honestly a population run.
+        let modes = vec![Mode::Population; nr];
+        let mut room = Room {
+            plan,
+            n_items,
+            pops: Vec::new(),
+            modes,
+            forms: (0..nr).map(|_| None).collect(),
+            steps: 0,
+            messages: 0,
+            rendezvous: 0,
+            max_advance: 0,
+            total_advance: 0,
+            max_skew: 0,
+            skew_clocks: Vec::new(),
+            trace: None,
+        };
+        std::mem::swap(&mut room.pops, &mut pops);
+        for r in 0..nr {
+            room.drain(r);
+        }
+        room
+    }
+
+    /// Everything a successor plant needs, indexed the way this one indexes it.
+    ///
+    /// The counterpart of `resume`, and deliberately not a `clone`: what comes
+    /// out is the *plant's* state -- contents, populations, arbitration
+    /// pointers, counters -- with nothing in it about regions, clocks or how
+    /// the run got here. A plant that is about to be edited has no use for the
+    /// scheduler's opinions about the plant it used to be.
+    pub fn harvest(&self, bp: &Blueprint) -> pop::Seed {
+        let mut qty = vec![0; bp.qty_stride as usize];
+        for (s, sd) in bp.storages.iter().enumerate() {
+            for (k, &item) in sd.slots.iter().enumerate() {
+                qty[sd.qty_offset as usize + k] = self.storage_qty(s, item);
+            }
+        }
+        let mut rr = vec![0u16; bp.storages.len() * 2];
+        for s in 0..bp.storages.len() {
+            let r = self.plan.graph.of_storage[s];
+            let local = self.plan.store_down[r][s] as usize;
+            rr[s * 2] = self.pops[r].rr_at(local, 0);
+            rr[s * 2 + 1] = self.pops[r].rr_at(local, 1);
+        }
+        pop::Seed { qty, classes: self.classes(), rr, c: self.counters() }
+    }
+}

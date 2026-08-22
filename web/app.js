@@ -1,9 +1,13 @@
 // Wiring. Everything interesting is in the other four files; this one decides
 // when to ask the solver a question.
 
-import { state, seek, onChange, listPlants, openPlant, savePlant, fetchTimetable, apply, num } from './doc.js';
+import {
+  state, seek, onChange, listPlants, openPlant, openScenario, savePlant, fetchTimetable,
+  addItem, setPlantName, setDeploy, num,
+} from './doc.js';
 import { initCanvas, onSelect, ui, invalidate, focusAll } from './canvas.js';
 import { renderPlant, renderItems, renderInspector, drawTimetable } from './panels.js';
+import { renderMission, renderConstraints, renderScrap, renderLog, initVerify } from './play.js';
 
 const $ = s => document.querySelector(s);
 
@@ -39,9 +43,7 @@ function main() {
     // While playing, the view is deliberately ahead of the last answer; only
     // a paused view snaps back to the tick it was told about.
     if (!state.playing && state.snapshot) {
-      ui.renderTime = Number(state.snapshot.tick);
-      $('#tick').textContent = num(Math.round(ui.renderTime));
-      $('#seek').value = toSlider(ui.renderTime);
+      clockTo(Number(state.snapshot.tick));
     }
     refreshPanels();
     invalidate();
@@ -55,6 +57,8 @@ function main() {
   plantFields();
   plants();
   toggles();
+  editMode();
+  initVerify();
 
   requestAnimationFrame(loop);
 }
@@ -69,7 +73,7 @@ function palette() {
     e.preventDefault();
     const input = e.target.querySelector('input');
     const name = input.value.trim().replace(/[^A-Za-z0-9_]/g, '');
-    if (name && !state.graph.items.includes(name)) apply(g => g.items.push(name));
+    if (name && !state.graph.items.includes(name)) addItem(name);
     input.value = '';
   });
 }
@@ -126,7 +130,7 @@ function setPlaying(on) {
 
 function goto(tick) {
   tick = Math.max(0, Math.min(MAX_TICK, tick));
-  ui.renderTime = tick;
+  clockTo(tick);
   $('#seek').value = toSlider(tick);
   $('#tick').textContent = num(Math.round(tick));
   seek(tick);
@@ -134,16 +138,27 @@ function goto(tick) {
 }
 
 // ------------------------------------------------------------------- loop
+//
+// There is one clock, and both the canvas and the document have to be looking
+// at it. `ui.renderTime` is where the view is; `state.renderTime` is the tick
+// a new command would land on. They were two fields once, which is a bug
+// waiting for its first player to place a machine at the wrong moment.
+
+function clockTo(t) {
+  ui.renderTime = t;
+  state.renderTime = t;
+  $('#tick').textContent = num(Math.round(t));
+  $('#seek').value = toSlider(t);
+}
+
 
 function loop(now) {
   const dt = Math.min(0.25, (now - last) / 1000);
   last = now;
 
   if (state.playing) {
-    ui.renderTime += dt * TICKS_PER_SECOND * state.speed;
-    if (ui.renderTime > MAX_TICK) { ui.renderTime = MAX_TICK; setPlaying(false); }
-    $('#tick').textContent = num(Math.round(ui.renderTime));
-    $('#seek').value = toSlider(ui.renderTime);
+    clockTo(ui.renderTime + dt * TICKS_PER_SECOND * state.speed);
+    if (ui.renderTime >= MAX_TICK) { clockTo(MAX_TICK); setPlaying(false); }
     invalidate();
 
     // Interpolating past the next event would be making things up, so that is
@@ -194,12 +209,21 @@ function refreshPanels() {
   renderPlant();
   renderItems();
   renderInspector();
+  renderMission();
+  renderConstraints();
+  renderScrap();
+  renderLog();
   const e = $('#err');
-  if (state.error) {
+  // A refusal is about a command that is no longer on the log, so it outranks
+  // a compile error about a plant that is: it is the more recent news.
+  if (state.refused) {
     e.hidden = false;
-    e.textContent = state.error.line
-      ? `line ${state.error.line}${state.error.node ? ` · ${state.error.node}` : ''}: ${state.error.error}`
-      : state.error.error;
+    e.textContent = 'refused — ' + state.refused;
+  } else if (state.error) {
+    e.hidden = false;
+    const where = state.error.at !== null && state.error.at !== undefined
+      ? `t=${num(state.error.at)}` : state.error.line ? `line ${state.error.line}` : '';
+    e.textContent = [where, state.error.node, state.error.error].filter(Boolean).join(' · ');
   } else {
     e.hidden = true;
   }
@@ -213,13 +237,28 @@ function plantFields() {
   $('#plantname').addEventListener('change', e => {
     const name = e.target.value.trim().replace(/[^A-Za-z0-9_]/g, '') || 'Sketch';
     e.target.value = name;
-    apply(g => { g.name = name; });
+    setPlantName(name);
   });
   $('#deploy').addEventListener('change', e => {
     const n = Math.max(1, Math.round(Number(e.target.value) || 1));
     e.target.value = n;
-    apply(g => { g.deploy = n; });
+    setDeploy(n);
   });
+}
+
+/// Where an edit lands. The whole of the difference between designing a
+/// factory and playing one is which tick a command carries.
+function editMode() {
+  const box = $('#liveedits');
+  const show = () => {
+    box.checked = state.liveEdits;
+    $('#editwhen').textContent = state.liveEdits
+      ? 'commands land on the clock'
+      : 'commands land at tick 0';
+  };
+  box.addEventListener('change', e => { state.liveEdits = e.target.checked; show(); });
+  onChange(show);
+  show();
 }
 
 function toggles() {
@@ -248,15 +287,22 @@ async function plants() {
     });
     sel.appendChild(g);
   };
+  group('scenarios', list.scenarios || []);
   group('configs', list.configs || []);
   group('sketches', list.sketches || []);
 
-  sel.addEventListener('change', async () => {
-    if (!sel.value) return;
-    await openPlant(sel.value);
-    sel.selectedIndex = 0;
+  const open = async name => {
+    if (name.endsWith('.scenario')) await openScenario(name);
+    else await openPlant(name);
     goto(0);
     setTimeout(focusAll, 0);
+  };
+
+  sel.addEventListener('change', async () => {
+    if (!sel.value) return;
+    const name = sel.value;
+    sel.selectedIndex = 0;
+    await open(name);
   });
 
   $('#save').addEventListener('click', async () => {
@@ -268,14 +314,16 @@ async function plants() {
   // particular tick. A deterministic simulator makes that a real address:
   // the link names a state, not a session.
   const q = new URLSearchParams(location.search);
-  const asked = q.get('plant');
-  const named = asked && (list.configs || []).concat(list.sketches || [])
-    .find(n => n === asked || n === asked + '.factory' || n.includes(asked));
+  const all = (list.scenarios || []).concat(list.configs || [], list.sketches || []);
+  const asked = q.get('scenario') || q.get('plant');
+  const named = asked && all
+    .find(n => n === asked || n === asked + '.factory' || n === asked + '.scenario' || n.includes(asked));
   const first = named
     || (list.configs || []).find(n => n.includes('railchain'))
     || (list.configs || [])[0];
   if (first) {
-    await openPlant(first);
+    if (first.endsWith('.scenario')) await openScenario(first);
+    else await openPlant(first);
     if (q.has('detail')) { $('#detail').checked = true; ui.detail = true; }
     if (q.has('source')) { $('#showsrc').checked = true; $('#src').hidden = false; }
     if (q.has('overlay')) { $('#overlay').checked = q.get('overlay') !== '0'; ui.overlay = $('#overlay').checked; }

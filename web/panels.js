@@ -1,7 +1,7 @@
 // The panels around the canvas: what the plant is, what one thing in it is
 // doing right now, and what the scheduler did to get here.
 
-import { state, apply, num, toNum, ticks } from './doc.js';
+import { state, retune, num, toNum, ticks } from './doc.js';
 import { compact, regionColour } from './render.js';
 
 const $ = s => document.querySelector(s);
@@ -44,10 +44,14 @@ export function renderInspector() {
   const store = snap && snap.storages.find(s => s.name === node.name);
   const link = snap && snap.links.find(l => l.name === node.name);
 
+  // A name is the identity everything carries across an edit -- the bay that
+  // keeps its ore, the class that keeps its machines -- so renaming one is a
+  // demolition and a rebuild, and the form does not pretend otherwise.
   el.innerHTML = `
-    <div class="field"><label>name</label><input data-p="name" value="${esc(node.name)}"></div>
+    <div class="who"><b>${esc(node.name)}</b><span>${esc(node.kind)}</span></div>
     ${node.kind === 'storage' ? storageForm(node) : machineForm(node)}
     <h2>state${snap ? ` <span class="hint">at t=${num(snap.tick)}</span>` : ''}</h2>
+    ${cls && cls.why ? whyBlock(cls.why, cls) : ''}
     ${cls ? classState(cls, link) : store ? storeState(store) : '<p class="hint">not compiled</p>'}
   `;
   wireForm(el, node);
@@ -95,19 +99,11 @@ function wireForm(el, node) {
       const p = input.dataset.p;
       const v = input.type === 'checkbox' ? input.checked
         : input.type === 'number' ? Math.max(0, Number(input.value)) : input.value.trim();
-      apply(g => {
-        const n = g.nodes.find(x => x.name === node.name);
-        if (!n) return;
-        if (p === 'name') {
-          const old = n.name;
-          const name = String(v).replace(/[^A-Za-z0-9_]/g, '') || old;
-          n.name = name;
-          g.edges.forEach(e => {
-            if (e.from === old) e.from = name;
-            if (e.to === old) e.to = name;
-          });
-          state.selected = { name };
-        } else if (p === 'in0qty') { if (n.inputs[0]) n.inputs[0].qty = v || 1; if (n.kind === 'link' && n.outputs[0]) n.outputs[0].qty = v || 1; }
+      // Every one of these is a `retune`: one command carrying the whole node
+      // as it should now be. A form that sent field-sized commands would be a
+      // second opinion about what a machine is.
+      retune(node.name, n => {
+        if (p === 'in0qty') { if (n.inputs[0]) n.inputs[0].qty = v || 1; if (n.kind === 'link' && n.outputs[0]) n.outputs[0].qty = v || 1; }
         else if (p === 'out0qty') { if (n.outputs[0]) n.outputs[0].qty = v || 1; }
         else if (p === 'in0item') { if (n.inputs[0]) n.inputs[0].item = v; if (n.kind === 'link' && n.outputs[0]) n.outputs[0].item = v; }
         else if (p === 'out0item') { if (n.outputs[0]) n.outputs[0].item = v; }
@@ -117,6 +113,43 @@ function wireForm(el, node) {
       });
     });
   });
+}
+
+/// Why this is not running, in the shape the question is actually asked in.
+function whyBlock(w, cls) {
+  const good = w.state === 'RUNNING';
+  const rows = [];
+  for (const n of w.needs) {
+    rows.push(`<tr><td class="k">needs</td><td>${num(n.perCycle)} ${esc(n.item)} per cycle</td></tr>`);
+    rows.push(`<tr><td class="k">${esc(n.bay)} holds</td>
+      <td class="${n.short ? 'bad' : ''}">${num(n.available)}</td></tr>`);
+  }
+  for (const h of w.holding) {
+    rows.push(`<tr><td class="k">holding</td><td>${num(h.qty)} ${esc(h.item)}</td></tr>`);
+    rows.push(`<tr><td class="k">${esc(h.bay)}</td>
+      <td class="${h.full >= 99.9 ? 'bad' : ''}">${num(h.used)} of ${num(h.capacity)} · ${h.full.toFixed(1)}% full</td></tr>`);
+  }
+  if (w.nextDelivery !== null && w.nextDelivery !== undefined) {
+    rows.push(`<tr><td class="k">next delivery</td>
+      <td>t=${num(w.nextDelivery)} <span class="hint">(+${num(w.nextDeliveryIn)}, ${esc(w.nextDeliveryBy || '')})</span></td></tr>`);
+  }
+  const neighbours = (list, verb) => list.map(u =>
+    `<tr><td class="k">${verb} ${esc(u.name)}</td>
+       <td>${(u.utilisation * 100).toFixed(0)}% busy · ${u.rate.toFixed(3)}/tick${
+         toNum(u.idle) ? ` · ${num(u.idle)} idle` : ''}${
+         toNum(u.blocked) ? ` · ${num(u.blocked)} blocked` : ''}</td></tr>`).join('');
+
+  return `
+    <div class="why ${good ? 'ok' : 'bad'}">
+      <b>${esc(w.state)}</b>
+      <span>${esc(w.headline)}</span>
+    </div>
+    <table class="rows">
+      ${rows.join('')}
+      ${neighbours(w.upstream, 'from')}
+      ${neighbours(w.downstream, 'to')}
+      <tr><td class="k">utilisation</td><td>${(w.utilisation * 100).toFixed(1)}% of ${num(cls.count)}</td></tr>
+    </table>`;
 }
 
 function bar(parts, total) {

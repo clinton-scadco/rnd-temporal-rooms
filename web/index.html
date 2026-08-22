@@ -11,7 +11,7 @@
 
 <header id="bar">
   <div class="brand">
-    <b>temporal&#8209;rooms</b><span>prototype 0 &middot; the factory workbench</span>
+    <b>temporal&#8209;rooms</b><span>prototype 1 &middot; a factory you can change while it runs</span>
   </div>
 
   <div class="group">
@@ -69,6 +69,13 @@
     <div class="field"><label>name</label><input id="plantname" maxlength="32"></div>
     <div class="field"><label>deploy</label><input id="deploy" type="number" min="1" value="1"></div>
 
+    <h2>edits</h2>
+    <label class="check"><input type="checkbox" id="liveedits"> apply at the current tick</label>
+    <p class="hint" id="editwhen">commands land at tick 0</p>
+    <div id="log" class="log"></div>
+    <button id="verifybtn" class="wide">replay from a snapshot</button>
+    <div id="verified" class="hint"></div>
+
     <h2>compiled</h2>
     <dl id="plant"></dl>
   </aside>
@@ -80,8 +87,12 @@
   </section>
 
   <aside id="inspect">
+    <div id="mission" hidden></div>
     <h2>inspector</h2>
     <div id="detailpane"><p class="hint">click anything on the canvas</p></div>
+    <div id="scrap" hidden></div>
+    <h2>holding the plant back</h2>
+    <div id="constraints"></div>
   </aside>
 </main>
 

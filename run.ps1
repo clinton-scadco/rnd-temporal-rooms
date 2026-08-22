@@ -6,6 +6,12 @@ param(
     [switch]$Test,
     [switch]$BuildOnly,
     [switch]$Serve,
+    [string]$Play,
+    # PowerShell binds anything starting with `-` to a parameter, so the
+    # scenario's own options get first-class ones rather than being smuggled
+    # through the remaining arguments.
+    [string[]]$Buy,
+    [long]$At = 0,
     [int]$Port = 8787,
     [Parameter(ValueFromRemainingArguments)]$Configs
 )
@@ -52,6 +58,15 @@ if ($Test) {
     cargo build --release
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & "$PSScriptRoot\target\release\trooms.exe" serve --port $Port
+} elseif ($Play) {
+    # A scenario, played headlessly: the brief, why every class is stopped,
+    # what is binding, whether the order was met, and the replay check.
+    cargo build --release
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $opts = @()
+    foreach ($b in $Buy) { $opts += @("--buy", $b) }
+    if ($At -gt 0) { $opts += @("--at", $At) }
+    & "$PSScriptRoot\target\release\trooms.exe" play $Play @opts
 } elseif ($Configs) {
     cargo run --release -- @Configs
 } else {

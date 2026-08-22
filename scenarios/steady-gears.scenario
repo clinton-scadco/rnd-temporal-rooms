@@ -1,0 +1,24 @@
+# The same works, asked for a rate rather than a pile.
+#
+# A total can be met by a warehouse: build storage, let it fill for fifty
+# thousand ticks, and ship it all at the end. A sustained rate cannot, which
+# makes it a question about the *plant* rather than about the buffer in front
+# of it -- and it is the order that punishes a player for buying the bottleneck
+# that is not binding.
+
+scenario Steady Gears {
+    plant   p1-gears.factory
+    brief   Twenty gears every hundred ticks, held for the last twenty thousand.
+
+    budget  1400
+
+    cost process 120 each
+    cost link    60  per vehicle
+    cost storage 40  per 1000 capacity
+    cost source  200 each
+    cost sink    80  each
+    cost wire    5   each
+
+    order deliver 8000 Gear by 40000
+    order sustain 20 Gear per 100 ticks from 40000 to 60000
+}

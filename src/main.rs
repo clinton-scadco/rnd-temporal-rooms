@@ -15,9 +15,12 @@ use std::time::{Duration, Instant};
 use temporal_rooms::analytic::{self, Rat};
 use temporal_rooms::domains;
 use temporal_rooms::dsl;
+use temporal_rooms::graph::Graph;
+use temporal_rooms::live::{self, Command, Edit, Log};
 use temporal_rooms::model::*;
 use temporal_rooms::pop;
 use temporal_rooms::rooms::{self, Room};
+use temporal_rooms::scenario;
 use temporal_rooms::sim::{self, CountersBig, World};
 use temporal_rooms::web;
 
@@ -124,6 +127,20 @@ fn main() {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }
+            }
+            return;
+        }
+        // A scenario, played headlessly. The workbench is a nicer way to look
+        // at this, and a scoreboard that only exists inside a browser is a
+        // scoreboard nobody can put in a test or a shell pipe.
+        Some("play") => {
+            let Some(path) = args.get(1) else {
+                eprintln!("usage: trooms play <scenario.scenario> [--buy Name=N@Tick]... [--at TICK]");
+                std::process::exit(1);
+            };
+            if let Err(e) = play(path, &args[2..]) {
+                eprintln!("{e}");
+                std::process::exit(1);
             }
             return;
         }
@@ -1037,6 +1054,168 @@ fn with_policy(bp: &Blueprint, pol: Policy) -> Blueprint {
         s.givers.sort_unstable();
     }
     b
+}
+
+// ------------------------------------------------------------- prototype 1
+
+/// Play a scenario without a browser.
+///
+/// `--buy Name=N@T` retunes a machine class to `N` members at tick `T`, which
+/// is the only kind of purchase worth making from a command line and quite
+/// enough to demonstrate the thing: an edit at tick T, the plant carrying its
+/// state across it, and the order met or not met at the deadline.
+fn play(path: &str, args: &[String]) -> Result<(), String> {
+    let src = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+    let sc = scenario::parse(&src).map_err(|e| format!("{path}: {e}"))?;
+
+    let plant = format!("configs/{}", sc.plant);
+    let psrc = std::fs::read_to_string(&plant).map_err(|e| format!("cannot read {plant}: {e}"))?;
+    let prog = dsl::parse(&psrc).map_err(|e| format!("{plant}: {e}"))?;
+    let mut base = Graph::from_program(&prog);
+    base.apply_positions(&psrc);
+    let mut log = Log::new(base);
+
+    let mut at = sc.orders.iter().map(|o| o.deadline()).max().unwrap_or(60_000);
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--at" => {
+                at = args
+                    .get(i + 1)
+                    .and_then(|v| v.replace('_', "").parse().ok())
+                    .ok_or("--at needs a tick")?;
+                i += 2;
+            }
+            "--buy" => {
+                let spec = args.get(i + 1).ok_or("--buy needs Name=N@Tick")?;
+                let (name, rest) = spec.split_once('=').ok_or("--buy needs Name=N@Tick")?;
+                let (count, tick) = rest.split_once('@').ok_or("--buy needs Name=N@Tick")?;
+                let count: u64 = count.parse().map_err(|_| format!("`{count}` is not a count"))?;
+                let tick: Tick = tick.parse().map_err(|_| format!("`{tick}` is not a tick"))?;
+                let mut node = log
+                    .base
+                    .node(name)
+                    .ok_or(format!("`{name}` is not in {}", sc.plant))?
+                    .clone();
+                node.count = count;
+                log.commands.push(Command { at: tick, edit: Edit::Retune(node) });
+                i += 2;
+            }
+            other => return Err(format!("`{other}` is not a play option")),
+        }
+    }
+    log.commands.sort_by_key(|c| c.at);
+
+    rule('=');
+    println!("{}  --  {}", sc.name, sc.plant);
+    rule('=');
+    println!("{}", sc.brief);
+    println!();
+
+    let started = Instant::now();
+    let verdict = scenario::evaluate(&sc, &log, at).map_err(|e| match e.at {
+        Some(t) => format!("the command at t={}: {}", commas(t as u128), e.msg),
+        None => e.msg,
+    })?;
+    let elapsed = started.elapsed();
+
+    println!("at tick {}", commas(at as u128));
+    println!();
+    for c in &log.commands {
+        println!("  t={:>12}  {} {}", commas(c.at as u128), c.edit.verb(), c.edit.subject());
+    }
+    if !log.commands.is_empty() {
+        println!();
+    }
+
+    // What the plant is doing, and why it is not doing more.
+    live::with_state(&log, at, |a| {
+        let snap = temporal_rooms::snap::render(a.prog, a.bp, a.plan, a.room, at);
+        println!("  {:<12} {:<18} {}", "class", "state", "why");
+        for c in snap.at("classes").as_arr() {
+            let w = c.at("why");
+            println!(
+                "  {:<12} {:<18} {}",
+                c.at("name").as_str().unwrap_or(""),
+                w.at("state").as_str().unwrap_or(""),
+                w.at("headline").as_str().unwrap_or(""),
+            );
+        }
+        println!();
+        let cons = snap.at("constraints").as_arr();
+        if cons.is_empty() {
+            println!("  nothing is flat out while something waits on it");
+        } else {
+            for c in cons {
+                println!(
+                    "  holding the plant back: {} at {:.3}/tick, starving {}",
+                    c.at("name").as_str().unwrap_or(""),
+                    c.at("rate").as_f64().unwrap_or(0.0),
+                    c.at("starving")
+                        .as_arr()
+                        .iter()
+                        .filter_map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+        for s in a.scrapped {
+            println!("  scrapped: {} -- {}", s.what, s.detail);
+        }
+    })
+    .map_err(|e| e.msg)?;
+
+    println!();
+    println!(
+        "  budget {}   spent {}   left {}",
+        commas(sc.budget as u128),
+        commas(verdict.at("spent").as_u64().unwrap_or(0) as u128),
+        commas(verdict.at("remaining").as_u64().unwrap_or(0) as u128),
+    );
+    if let Some(t) = verdict.at("overspent").as_u64() {
+        println!("  OVER BUDGET from t={}", commas(t as u128));
+    }
+    println!();
+    for o in verdict.at("orders").as_arr() {
+        let have = o.at("have").as_u64().unwrap_or(0);
+        let need = o.at("need").as_u64().unwrap_or(1);
+        println!(
+            "  [{}] {}",
+            if o.at("met").as_bool() == Some(true) {
+                "MET "
+            } else if o.at("failed").as_bool() == Some(true) {
+                "MISS"
+            } else {
+                " .. "
+            },
+            o.at("text").as_str().unwrap_or(""),
+        );
+        println!(
+            "         {} of {}  ({:.1}%)",
+            commas(have as u128),
+            commas(need as u128),
+            100.0 * have as f64 / need.max(1) as f64
+        );
+    }
+    println!();
+
+    // The same tick, reached from a snapshot halfway through: the networking
+    // proof rehearsed against itself, for free, every time anyone plays.
+    let whole = live::carry_at(&log, at).map_err(|e| e.msg)?;
+    let mid = live::carry_at(&log, at / 2).map_err(|e| e.msg)?;
+    let joined = live::with_state_from(&log, at, Some((at / 2, &mid)), |a| {
+        live::Carry::take(a.room, a.prog, a.bp, at)
+    })
+    .map_err(|e| e.msg)?;
+    println!(
+        "  replay from a snapshot at t={}: {}",
+        commas((at / 2) as u128),
+        if whole.signature() == joined.signature() { "identical" } else { "DESYNC" }
+    );
+    println!("  answered in {:?}", elapsed);
+    rule('=');
+    Ok(())
 }
 
 // ------------------------------------------------------------ formatting

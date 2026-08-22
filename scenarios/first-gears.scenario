@@ -1,0 +1,21 @@
+# Prototype 1's first problem.
+#
+# The plant is real and the numbers are guesses. That asymmetry is the point:
+# a scenario file is a rules file, it is meant to be edited between playtests,
+# and nothing in it can reach the solver.
+
+scenario First Gears {
+    plant   p1-gears.factory
+    brief   The works are underbuilt in two places. Only one of them has a queue in front of it.
+
+    budget  1000
+
+    cost process 120 each
+    cost link    60  per vehicle
+    cost storage 40  per 1000 capacity
+    cost source  200 each
+    cost sink    80  each
+    cost wire    5   each
+
+    order deliver 12000 Gear by 60000
+}

@@ -1,0 +1,64 @@
+# Prototype 1 -- the first plant that is a *problem* rather than a diagram.
+#
+#   Deposit -> Mine -> OreBay ==[ Rail ]==> OreYard -> Smelter -> PlateBay
+#                                                   -> GearPress -> GearBay -> Delivery
+#
+# Everything in configs/ before this one was built to stress the solver. This
+# one is built to be annoying, and it is deliberately underbuilt in two places
+# at once so that fixing the obvious problem exposes the next one.
+#
+# Rates as it stands:
+#
+#   Mine       1 x 50 / 60      = 0.833 ore  /tick
+#   Rail       1 x 1000 / 2000  = 0.500 ore  /tick   <- first bottleneck
+#   Smelter    2 x 25 / 50      = 1.000 plate/tick of appetite
+#   GearPress  1 x 20 / 80      = 0.250 plate/tick of appetite  <- second
+#   Delivery   1 x 50 / 100     = 0.500 gear /tick of appetite
+#
+# So it fails in a very specific order, and each failure looks different:
+#
+#   t ~ 0        everything runs; the plant looks fine
+#   t ~ 12,000   OreBay fills, and the Mine goes BLOCKED
+#   t ~ 16,000   PlateBay fills, and the Smelters go BLOCKED behind the press
+#   thereafter   the whole plant runs at the press's 0.125 gear/tick
+#
+# A player who buys rail vehicles first has fixed the bottleneck that is no
+# longer the bottleneck. That is the entire lesson of the scenario and it is
+# not stated anywhere in it.
+#
+# # The deposit is a bay
+#
+# `Deposit` is a storage with contents and no producer wired to it, which is
+# all a finite ore body is. It needed no new construct: when it empties, the
+# Mine starves for the ordinary reason, and every part of the machinery that
+# explains starvation explains this too. 50,000 crude ore is roughly 25,000
+# gears if none of it is wasted, so the deposit is a real ceiling rather than
+# scenery -- a player who over-builds mining burns through the field early.
+
+item CrudeOre
+item IronOre
+item IronPlate
+item Gear
+
+blueprint GearWorks {
+    storage Deposit     { capacity 50000  initial 50000 CrudeOre  policy round_robin }
+    process Mine        { consumes 50 CrudeOre takes 60 ticks produces 50 IronOre }
+    storage OreBay      { capacity 4000   policy round_robin }
+
+    link    Rail        {
+        moves 1000 IronOre
+        distance 1600 speed 2 base 200      # 200 + 800 = 1000 ticks each way
+    }
+
+    storage OreYard     { capacity 4000   policy round_robin }
+    process Smelter x2  { consumes 25 IronOre takes 50 ticks produces 25 IronPlate }
+    storage PlateBay    { capacity 2000   policy round_robin }
+    process GearPress   { consumes 20 IronPlate takes 80 ticks produces 10 Gear }
+    storage GearBay     { capacity 2000   policy round_robin }
+    sink    Delivery    { consumes 50 Gear every 100 ticks }
+
+    wire Deposit -> Mine -> OreBay -> Rail -> OreYard -> Smelter -> PlateBay
+    wire PlateBay -> GearPress -> GearBay -> Delivery
+}
+
+deploy 1 x GearWorks

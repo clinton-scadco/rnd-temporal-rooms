@@ -136,6 +136,105 @@ impl Node {
             None
         }
     }
+
+    /// One node, on its own.
+    ///
+    /// A document is a list of these -- and so is a command that places or
+    /// retunes one, which is why serialising a node is a node's business
+    /// rather than the document's.
+    pub fn to_json(&self) -> Json {
+        let mut j = Json::obj()
+            .set("name", self.name.clone())
+            .set("kind", self.kind.word())
+            .set("count", Json::big(self.count as u128))
+            .set("shared", self.shared)
+            .set("x", self.x)
+            .set("y", self.y);
+        if self.kind.is_machine() {
+            j = j
+                .set("inputs", amounts_json(&self.inputs))
+                .set("outputs", amounts_json(&self.outputs))
+                .set("duration", self.duration)
+                .set("returns", self.returns)
+                .set(
+                    "geometry",
+                    match self.geometry {
+                        Some(g) => Json::obj()
+                            .set("base", g.base)
+                            .set("distance", g.distance)
+                            .set("speed", g.speed),
+                        None => Json::Null,
+                    },
+                );
+        } else {
+            j = j
+                .set("capacity", Json::big(self.capacity as u128))
+                .set("policy", self.policy.label())
+                .set("priority", Json::arr(self.priority.clone()))
+                .set("initial", amounts_json(&self.initial));
+        }
+        j
+    }
+
+    pub fn from_json(n: &Json) -> Result<Node, String> {
+        let name = n.at("name").as_str().ok_or("a node has no name")?.to_string();
+        let kw = n.at("kind").as_str().unwrap_or("process");
+        let kind = Kind::parse(kw).ok_or(format!("`{name}` has unknown kind `{kw}`"))?;
+        let mut node = Node::new(&name, kind);
+        node.count = n.at("count").as_u64().unwrap_or(1).max(1);
+        node.shared = n.at("shared").as_bool().unwrap_or(false);
+        node.x = n.at("x").as_f64().unwrap_or(0.0);
+        node.y = n.at("y").as_f64().unwrap_or(0.0);
+        if kind.is_machine() {
+            node.inputs = amounts_from(n.at("inputs"));
+            node.outputs = amounts_from(n.at("outputs"));
+            node.duration = n.at("duration").as_u64().unwrap_or(60);
+            node.returns = n.at("returns").as_u64().unwrap_or(0);
+            let g = n.at("geometry");
+            node.geometry = if g.is_null() {
+                None
+            } else {
+                Some(Geometry {
+                    base: g.at("base").as_u64().unwrap_or(0),
+                    distance: g.at("distance").as_u64().unwrap_or(0),
+                    speed: g.at("speed").as_u64().unwrap_or(1).max(1),
+                })
+            };
+        } else {
+            node.count = 1;
+            node.capacity = n.at("capacity").as_u64().unwrap_or(0);
+            node.policy = match n.at("policy").as_str().unwrap_or("index") {
+                "round_robin" => Policy::RoundRobin,
+                "priority" => Policy::Priority,
+                _ => Policy::Index,
+            };
+            node.priority = n
+                .at("priority")
+                .as_arr()
+                .iter()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .collect();
+            node.initial = amounts_from(n.at("initial"));
+        }
+        Ok(node)
+    }
+}
+
+pub(crate) fn amounts_json(v: &[Amount]) -> Json {
+    Json::arr(
+        v.iter()
+            .map(|a| Json::obj().set("item", a.item.clone()).set("qty", Json::big(a.qty as u128)))
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub(crate) fn amounts_from(v: &Json) -> Vec<Amount> {
+    v.as_arr()
+        .iter()
+        .filter_map(|a| {
+            Some(Amount { item: a.at("item").as_str()?.to_string(), qty: a.at("qty").as_u64()? })
+        })
+        .collect()
 }
 
 /// A wire. `item` qualifies it where a machine has more than one product and
@@ -555,50 +654,7 @@ impl Graph {
     // ================================================================ json
 
     pub fn to_json(&self) -> Json {
-        let amounts = |v: &[Amount]| {
-            Json::arr(
-                v.iter()
-                    .map(|a| Json::obj().set("item", a.item.clone()).set("qty", Json::big(a.qty as u128)))
-                    .collect::<Vec<_>>(),
-            )
-        };
-        let nodes: Vec<Json> = self
-            .nodes
-            .iter()
-            .map(|n| {
-                let mut j = Json::obj()
-                    .set("name", n.name.clone())
-                    .set("kind", n.kind.word())
-                    .set("count", Json::big(n.count as u128))
-                    .set("shared", n.shared)
-                    .set("x", n.x)
-                    .set("y", n.y);
-                if n.kind.is_machine() {
-                    j = j
-                        .set("inputs", amounts(&n.inputs))
-                        .set("outputs", amounts(&n.outputs))
-                        .set("duration", n.duration)
-                        .set("returns", n.returns)
-                        .set(
-                            "geometry",
-                            match n.geometry {
-                                Some(g) => Json::obj()
-                                    .set("base", g.base)
-                                    .set("distance", g.distance)
-                                    .set("speed", g.speed),
-                                None => Json::Null,
-                            },
-                        );
-                } else {
-                    j = j
-                        .set("capacity", Json::big(n.capacity as u128))
-                        .set("policy", n.policy.label())
-                        .set("priority", Json::arr(n.priority.clone()))
-                        .set("initial", amounts(&n.initial));
-                }
-                j
-            })
-            .collect();
+        let nodes: Vec<Json> = self.nodes.iter().map(Node::to_json).collect();
         let edges: Vec<Json> = self
             .edges
             .iter()
@@ -619,60 +675,9 @@ impl Graph {
     }
 
     pub fn from_json(j: &Json) -> Result<Graph, String> {
-        let amounts = |v: &Json| -> Vec<Amount> {
-            v.as_arr()
-                .iter()
-                .filter_map(|a| {
-                    Some(Amount {
-                        item: a.at("item").as_str()?.to_string(),
-                        qty: a.at("qty").as_u64()?,
-                    })
-                })
-                .collect()
-        };
         let mut nodes = Vec::new();
         for n in j.at("nodes").as_arr() {
-            let name = n.at("name").as_str().ok_or("a node has no name")?.to_string();
-            let kw = n.at("kind").as_str().unwrap_or("process");
-            let kind = Kind::parse(kw).ok_or(format!("`{name}` has unknown kind `{kw}`"))?;
-            let mut node = Node::new(&name, kind);
-            node.count = n.at("count").as_u64().unwrap_or(1).max(1);
-            node.shared = n.at("shared").as_bool().unwrap_or(false);
-            node.x = n.at("x").as_f64().unwrap_or(0.0);
-            node.y = n.at("y").as_f64().unwrap_or(0.0);
-            if kind.is_machine() {
-                node.inputs = amounts(n.at("inputs"));
-                node.outputs = amounts(n.at("outputs"));
-                node.duration = n.at("duration").as_u64().unwrap_or(60);
-                node.returns = n.at("returns").as_u64().unwrap_or(0);
-                let g = n.at("geometry");
-                node.geometry = if g.is_null() {
-                    None
-                } else {
-                    Some(Geometry {
-                        base: g.at("base").as_u64().unwrap_or(0),
-                        distance: g.at("distance").as_u64().unwrap_or(0),
-                        speed: g.at("speed").as_u64().unwrap_or(1).max(1),
-                    })
-                };
-                node.count = node.count.max(1);
-            } else {
-                node.count = 1;
-                node.capacity = n.at("capacity").as_u64().unwrap_or(0);
-                node.policy = match n.at("policy").as_str().unwrap_or("index") {
-                    "round_robin" => Policy::RoundRobin,
-                    "priority" => Policy::Priority,
-                    _ => Policy::Index,
-                };
-                node.priority = n
-                    .at("priority")
-                    .as_arr()
-                    .iter()
-                    .filter_map(|p| p.as_str().map(str::to_string))
-                    .collect();
-                node.initial = amounts(n.at("initial"));
-            }
-            nodes.push(node);
+            nodes.push(Node::from_json(n)?);
         }
         let mut edges = Vec::new();
         for e in j.at("edges").as_arr() {

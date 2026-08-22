@@ -84,14 +84,46 @@
 //! plant built with a mouse is exactly as expressive as a plant written by
 //! hand, because it *is* a plant written by hand by the time it is run.
 
+//! # Prototype 1 asks: can it be changed while it is running?
+//!
+//! Prototype 0's document was a drawing, and editing it started the run again
+//! from tick zero. A player does not design a factory and then watch it: they
+//! build a bad one, watch it fail, and fix it at tick 12,000 without losing
+//! the twelve thousand ticks. So the document becomes a **command log**, and
+//! the question the solver is asked keeps its shape:
+//!
+//! ```text
+//!   state(log, T)
+//! ```
+//!
+//! The answer is that an edit is a **rendezvous**. Regions run at different
+//! clocks, so "at tick 12,000" only means something at a barrier: bring every
+//! region there, harvest the plant's state, compile the new plant, pour the
+//! state back in.
+//!
+//! ```text
+//!   cost of an edit  =  O(cells) + O(nodes)
+//!   cost of a replay =  O(ticks)
+//! ```
+//!
+//! `live` is the log, the barrier and the `Carry` that crosses it -- which is
+//! also, unchanged, the canonical snapshot a joining client would be sent.
+//! `why` reads the state and says why a thing is stopped, computing no physics
+//! at all. `scenario` is the pressure: a budget, an order and a deadline,
+//! posed *about* a plant rather than inside it, in a file the solver never
+//! reads.
+
 pub mod analytic;
 pub mod domains;
 pub mod dsl;
 pub mod graph;
 pub mod json;
+pub mod live;
 pub mod model;
 pub mod pop;
 pub mod rooms;
+pub mod scenario;
 pub mod sim;
 pub mod snap;
 pub mod web;
+pub mod why;

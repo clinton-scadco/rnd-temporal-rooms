@@ -7,30 +7,40 @@
 //!
 //! ```text
 //!   GET  /                     the workbench itself
-//!   GET  /api/configs          the plants on disk
-//!   POST /api/state?t=N        the graph, compiled, run to N, rendered
+//!   GET  /api/configs          the plants and scenarios on disk
+//!   GET  /api/scenario?name=X  a scenario, and the plant it is posed about
+//!   POST /api/state?t=N        the log, compiled, run to N, rendered
 //!   POST /api/trace?t=N        the scheduler's own log of getting there
+//!   POST /api/verify?t=N       the same tick, reached two ways, compared
 //!   POST /api/save?name=X      a sketch, written to sketches/
 //! ```
 //!
-//! The browser sends the whole document every time and the server holds no
-//! session. That is not laziness -- it is the same property the rest of the
-//! crate turns on: state at tick *T* is a pure function of the plant and *T*,
-//! so there is nothing to keep in sync, nothing to invalidate, and a reload
-//! cannot desynchronise from a simulation it does not own.
+//! The browser sends the whole *command log* every time and the server holds
+//! no session. That is not laziness -- it is the same property the rest of the
+//! crate turns on, and Prototype 1 did not weaken it: state at tick *T* is a
+//! pure function of the log and *T*, so there is nothing to keep in sync,
+//! nothing to invalidate, and a reload cannot desynchronise from a simulation
+//! it does not own.
 //!
-//! What *is* cached is the compiled plan and a Room already advanced to some
-//! tick, because dragging a timeline asks the same plant the same question
-//! five hundred times a second and the honest answer is usually "a bit further
-//! than last time". A forward seek advances the Room it has; a backward seek
-//! builds a new one.
+//! What *is* cached is one [`Carry`]: the plant's state at the last tick
+//! anyone asked about. Dragging a timeline asks the same plant the same
+//! question five hundred times a second and the honest answer is usually "a
+//! bit further than last time", so a forward seek resumes from the carry and a
+//! backward seek starts again.
+//!
+//! Prototype 0 cached a compiled `Plan` and a live `Room` instead, which meant
+//! leaking both into `'static` to escape a self-referential borrow. A carry is
+//! plain owned data, so that machinery is gone -- and the thing that replaced
+//! it is the same object the networking proof needs.
 
 use crate::dsl;
 use crate::graph::Graph;
 use crate::json::{self, Json};
-use crate::model::{Blueprint, Program, Tick};
+use crate::live::{self, Carry, Log};
+use crate::model::Tick;
 use crate::pop::Pop;
-use crate::rooms::{self, Plan, Room};
+use crate::rooms::{self, Room};
+use crate::scenario::{self, Scenario};
 use crate::snap;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -47,6 +57,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("/canvas.js", "text/javascript; charset=utf-8", include_str!("../web/canvas.js")),
     ("/render.js", "text/javascript; charset=utf-8", include_str!("../web/render.js")),
     ("/panels.js", "text/javascript; charset=utf-8", include_str!("../web/panels.js")),
+    ("/play.js", "text/javascript; charset=utf-8", include_str!("../web/play.js")),
 ];
 
 // ------------------------------------------------------------------- server
@@ -55,7 +66,8 @@ pub fn serve(port: u16) -> std::io::Result<()> {
     let listener = bind(port)?;
     let addr = listener.local_addr()?;
     println!("the workbench is at  http://{addr}/");
-    println!("plants come from     ./configs, sketches are saved to ./sketches");
+    println!("plants come from     ./configs, scenarios from ./scenarios");
+    println!("sketches are saved to ./sketches");
     println!("ctrl-c to stop.");
     for stream in listener.incoming() {
         match stream {
@@ -160,21 +172,27 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
                 Err(e) => ("404 Not Found", json_mime, err(&e).to_string()),
             };
         }
+        if req.path == "/api/scenario" {
+            let name = req.query.get("name").cloned().unwrap_or_default();
+            return match open_scenario(&name) {
+                Ok(j) => ("200 OK", json_mime, j.to_string()),
+                Err(e) => ("404 Not Found", json_mime, err(&e).to_string()),
+            };
+        }
     }
     if req.method == "POST" {
+        let t = || req.query.get("t").and_then(|s| s.parse().ok()).unwrap_or(0);
         match req.path.as_str() {
             "/api/open" => return ("200 OK", json_mime, open_source(&req.body).to_string()),
             "/api/state" => {
-                let t = req.query.get("t").and_then(|s| s.parse().ok()).unwrap_or(0);
-                return ("200 OK", json_mime, state(&req.body, t).to_string());
+                let sc = req.query.get("scenario").cloned().unwrap_or_default();
+                return ("200 OK", json_mime, state(&req.body, t(), &sc).to_string());
             }
-            "/api/trace" => {
-                let t = req.query.get("t").and_then(|s| s.parse().ok()).unwrap_or(0);
-                return ("200 OK", json_mime, trace(&req.body, t).to_string());
-            }
+            "/api/trace" => return ("200 OK", json_mime, trace(&req.body, t()).to_string()),
+            "/api/verify" => return ("200 OK", json_mime, verify(&req.body, t()).to_string()),
             "/api/save" => {
                 let name = req.query.get("name").cloned().unwrap_or_default();
-                return ("200 OK", json_mime, save(&name, &req.body).to_string());
+                return ("200 OK", json_mime, save(&name, &req.body, t()).to_string());
             }
             _ => {}
         }
@@ -184,30 +202,6 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
 
 fn err(msg: &str) -> Json {
     Json::obj().set("ok", false).set("error", msg)
-}
-
-/// A DSL error, and the node it is probably about. The generated source is
-/// one declaration per line, so the line number is enough to name a node --
-/// which is what puts a red ring on the canvas rather than a line number in a
-/// panel nobody is looking at.
-fn dsl_error(e: &dsl::DslError, src: &str) -> Json {
-    let line = src.lines().nth(e.line.saturating_sub(1)).unwrap_or("");
-    let node = line
-        .split_whitespace()
-        .find(|w| {
-            !matches!(
-                *w,
-                "shared" | "source" | "storage" | "process" | "sink" | "link" | "wire"
-            )
-        })
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_').to_string())
-        .filter(|w| !w.is_empty());
-    Json::obj()
-        .set("ok", false)
-        .set("error", e.msg.clone())
-        .set("line", e.line)
-        .set("node", node)
-        .set("source", src.to_string())
 }
 
 // -------------------------------------------------------------- the routes
@@ -235,12 +229,52 @@ fn configs() -> Json {
             }
         }
     }
+    let mut scenarios: Vec<String> = Vec::new();
+    if let Ok(dir) = std::fs::read_dir("scenarios") {
+        for e in dir.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "scenario") {
+                if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                    scenarios.push(n.to_string());
+                }
+            }
+        }
+    }
     names.sort();
     sketches.sort();
+    scenarios.sort();
     Json::obj()
         .set("ok", true)
         .set("configs", Json::arr(names))
         .set("sketches", Json::arr(sketches))
+        .set("scenarios", Json::arr(scenarios))
+}
+
+/// A scenario, and the plant it is posed about, in one answer -- because a
+/// client that fetched them separately could be shown a brief for a factory it
+/// had not loaded yet.
+fn open_scenario(name: &str) -> Result<Json, String> {
+    let file = safe_named(name, "scenario")?;
+    let src = std::fs::read_to_string(format!("scenarios/{file}"))
+        .map_err(|_| format!("no scenario called `{name}`"))?;
+    let sc = scenario::parse(&src).map_err(|e| format!("{file}: {e}"))?;
+    let plant = read_config(&sc.plant)?;
+    let opened = open_source(&plant);
+    if opened.at("ok").as_bool() != Some(true) {
+        return Ok(opened);
+    }
+    Ok(Json::obj()
+        .set("ok", true)
+        .set("scenario", sc.to_json())
+        .set("graph", opened.at("graph").clone())
+        .set("source", opened.at("source").clone()))
+}
+
+fn load_scenario(name: &str) -> Result<Scenario, String> {
+    let file = safe_named(name, "scenario")?;
+    let src = std::fs::read_to_string(format!("scenarios/{file}"))
+        .map_err(|_| format!("no scenario called `{name}`"))?;
+    scenario::parse(&src).map_err(|e| format!("{file}: {e}"))
 }
 
 fn read_config(name: &str) -> Result<String, String> {
@@ -259,61 +293,123 @@ fn read_config(name: &str) -> Result<String, String> {
 fn open_source(src: &str) -> Json {
     let prog = match dsl::parse(src) {
         Ok(p) => p,
-        Err(e) => return dsl_error(&e, src),
+        Err(e) => return live::Fault::of_dsl(&e, src).to_json(),
     };
     let mut g = Graph::from_program(&prog);
     g.apply_positions(src);
     Json::obj().set("ok", true).set("graph", g.to_json()).set("source", src.to_string())
 }
 
-fn compile(body: &str) -> Result<(Graph, String), Json> {
+/// The document the browser sent.
+///
+/// A client that has not caught up with Prototype 1 -- or a test, or a curl --
+/// may still post a bare `graph`, which is a log with nothing having happened
+/// to it yet.
+fn incoming(body: &str) -> Result<Log, Json> {
     let j = json::parse(body).map_err(|e| err(&format!("malformed request: {e}")))?;
-    let g = Graph::from_json(j.at("graph")).map_err(|e| err(&e))?;
-    let src = g.emit();
-    Ok((g, src))
+    if !j.at("log").is_null() {
+        return Log::from_json(j.at("log")).map_err(|e| err(&e));
+    }
+    Ok(Log::new(Graph::from_json(j.at("graph")).map_err(|e| err(&e))?))
 }
 
-fn state(body: &str, t: Tick) -> Json {
-    let (_, src) = match compile(body) {
-        Ok(v) => v,
+fn state(body: &str, t: Tick, scenario_name: &str) -> Json {
+    let log = match incoming(body) {
+        Ok(l) => l,
         Err(e) => return e,
     };
-    with_plant(&src, t, |prog, bp, plan, room| {
-        Json::obj()
-            .set("ok", true)
-            .set("source", src.clone())
-            .set("plant", snap::plant(prog, bp, plan, room))
-            .set("snapshot", snap::render(prog, bp, plan, room, t))
-    })
+    let mut out = with_log(&log, t);
+    if out.at("ok").as_bool() != Some(true) || scenario_name.is_empty() {
+        return out;
+    }
+    out = match load_scenario(scenario_name) {
+        Ok(sc) => match scenario::evaluate(&sc, &log, t) {
+            Ok(j) => out.set("play", j),
+            Err(f) => return f.to_json(),
+        },
+        Err(e) => out.set("play", err(&e)),
+    };
+    out
 }
 
 fn trace(body: &str, t: Tick) -> Json {
-    let (_, src) = match compile(body) {
-        Ok(v) => v,
+    let log = match incoming(body) {
+        Ok(l) => l,
         Err(e) => return e,
     };
-    let prog = match dsl::parse(&src) {
-        Ok(p) => p,
-        Err(e) => return dsl_error(&e, &src),
-    };
-    let d = prog.deploys[0];
-    let bp = &prog.blueprints[d.blueprint as usize];
-    let plan = rooms::plan(bp);
-    let mut room = Room::new(&plan, prog.items.len());
-    room.trace = Some(Vec::new());
-    room.run_until(t);
-    Json::obj().set("ok", true).set("timetable", snap::timetable(&room))
+    match live::timetable(&log, t) {
+        Ok(tt) => Json::obj().set("ok", true).set("timetable", tt),
+        Err(f) => f.to_json(),
+    }
 }
 
-fn save(name: &str, body: &str) -> Json {
-    let (_, src) = match compile(body) {
-        Ok(v) => v,
+/// The same tick, reached two ways, compared.
+///
+/// This is the networking proof rehearsed against itself. One run starts at
+/// tick 0 and plays the whole log; the other takes the canonical snapshot at
+/// the halfway point, throws the first half away, and replays the rest. If the
+/// signatures differ, a joining client would have desynchronised -- and this
+/// is the cheapest possible place to find that out.
+fn verify(body: &str, t: Tick) -> Json {
+    let log = match incoming(body) {
+        Ok(l) => l,
         Err(e) => return e,
+    };
+    let whole = match live::carry_at(&log, t) {
+        Ok(c) => c,
+        Err(f) => return f.to_json(),
+    };
+    let half = t / 2;
+    let mid = match live::carry_at(&log, half) {
+        Ok(c) => c,
+        Err(f) => return f.to_json(),
+    };
+    let joined =
+        match live::with_state_from(&log, t, Some((half, &mid)), |a| Carry::take(a.room, a.prog, a.bp, t))
+        {
+            Ok(c) => c,
+            Err(f) => return f.to_json(),
+        };
+    let a = whole.signature();
+    let b = joined.signature();
+    Json::obj()
+        .set("ok", true)
+        .set("tick", t)
+        .set("joinedAt", half)
+        .set("matches", a == b)
+        .set("bytes", a.len())
+        .set("digest", digest(&a))
+        .set("joinedDigest", digest(&b))
+        .set("commands", log.commands.iter().filter(|c| c.at <= t).count())
+}
+
+/// A short, stable fingerprint of a signature, so two of them can be compared
+/// by eye in a panel.
+fn digest(v: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in v {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+fn save(name: &str, body: &str, t: Tick) -> Json {
+    let log = match incoming(body) {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+    // What gets written is the plant as it stands at `t`: a sketch is a
+    // factory, not a history of one. The history is the log, and the log is
+    // the browser's to keep.
+    let src = match log.graph_at(t) {
+        Ok(g) => g.emit(),
+        Err(f) => return f.to_json(),
     };
     // Compiling before writing means a sketch on disk is always a plant the
     // harness can run.
     if let Err(e) = dsl::parse(&src) {
-        return dsl_error(&e, &src);
+        return live::Fault::of_dsl(&e, &src).to_json();
     }
     let name = match safe_name(name) {
         Ok(n) => n,
@@ -332,87 +428,88 @@ fn save(name: &str, body: &str) -> Json {
 /// `configs/` and `sketches/` are the only places this server reads or writes,
 /// and a name is a file name -- never a path.
 fn safe_name(name: &str) -> Result<String, String> {
+    safe_named(name, "factory")
+}
+
+fn safe_named(name: &str, ext: &str) -> Result<String, String> {
     let stem: String = name
-        .trim_end_matches(".factory")
+        .trim_end_matches(&format!(".{ext}"))
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
         .collect();
     if stem.is_empty() || stem.contains("..") {
-        return Err(format!("`{name}` is not a usable plant name"));
+        return Err(format!("`{name}` is not a usable name"));
     }
-    Ok(format!("{stem}.factory"))
+    Ok(format!("{stem}.{ext}"))
 }
 
 // --------------------------------------------------------------- the cache
 
-/// A compiled plant, kept between requests.
+/// The plant's state at the last tick anybody asked about.
 ///
-/// `Room<'a>` borrows its `Plan`, so a cache holding both would be
-/// self-referential. The plan is therefore leaked into `'static` and memoised
-/// by source text: scrubbing a timeline reuses one plan for the whole session,
-/// and only genuinely editing the plant costs another. A `Plan` is a handful
-/// of blueprints of a few dozen nodes -- the billions live in counts -- so the
-/// bound is a few kilobytes per distinct plant a session compiles.
+/// One entry, not a map. A session is one person dragging one timeline, and
+/// the question they ask five hundred times a second is always about the tick
+/// just after the last one -- so the only cache worth having is the answer to
+/// that.
+///
+/// `key` is the identity of the log *up to* `at`, which is what makes appended
+/// commands safe: a purchase made at tick 40,000 does not invalidate a state
+/// cached at 12,000, because the log up to 12,000 has not changed.
 struct Cache {
-    plans: HashMap<String, &'static Plan>,
-    progs: HashMap<String, &'static Program>,
-    /// The plant the live Room belongs to, and how far it has run.
-    live: Option<(String, Tick, Room<'static>)>,
+    key: String,
+    at: Tick,
+    carry: Carry,
 }
 
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
-/// Answer a question about a plant at tick `t`, reusing whatever is already
-/// compiled and however far it has already run.
-fn with_plant(
-    src: &str,
-    t: Tick,
-    f: impl FnOnce(&Program, &Blueprint, &Plan, &Room) -> Json,
-) -> Json {
+/// The whole answer about a log at tick `t`, resuming from the cache when the
+/// cache is about this plant and about this plant's past.
+fn with_log(log: &Log, t: Tick) -> Json {
     let mut guard = match CACHE.lock() {
         Ok(g) => g,
         // A panic in another request must not take the tool down with it.
         Err(p) => p.into_inner(),
     };
-    let cache = guard.get_or_insert_with(|| Cache {
-        plans: HashMap::new(),
-        progs: HashMap::new(),
-        live: None,
+    let resume = guard.as_ref().and_then(|c| {
+        (c.at <= t && c.key == log.key(c.at)).then(|| (c.at, c.carry.clone()))
     });
-
-    if !cache.plans.contains_key(src) {
-        let prog = match dsl::parse(src) {
-            Ok(p) => p,
-            Err(e) => return dsl_error(&e, src),
-        };
-        if prog.deploys.is_empty() {
-            return err("the plant is never deployed");
+    let answered = live::with_state_from(log, t, resume.as_ref().map(|(a, c)| (*a, c)), |a| {
+        (
+            Json::obj()
+                .set("ok", true)
+                .set("source", a.source.to_string())
+                .set("graph", a.graph.to_json())
+                .set("plant", snap::plant(a.prog, a.bp, a.plan, a.room))
+                .set("snapshot", snap::render(a.prog, a.bp, a.plan, a.room, t))
+                .set(
+                    "scrapped",
+                    Json::Arr(
+                        a.scrapped
+                            .iter()
+                            .map(|s| {
+                                Json::obj()
+                                    .set("what", s.what.clone())
+                                    .set("detail", s.detail.clone())
+                            })
+                            .collect(),
+                    ),
+                )
+                .set("resumedFrom", resume.as_ref().map(|(at, _)| Json::Int(*at as i128))),
+            Carry::take(a.room, a.prog, a.bp, t),
+        )
+    });
+    match answered {
+        Ok((j, carry)) => {
+            *guard = Some(Cache { key: log.key(t), at: t, carry });
+            j
         }
-        let prog: &'static Program = Box::leak(Box::new(prog));
-        let d = prog.deploys[0];
-        let bp = &prog.blueprints[d.blueprint as usize];
-        let plan: &'static Plan = Box::leak(Box::new(rooms::plan(bp)));
-        cache.plans.insert(src.to_string(), plan);
-        cache.progs.insert(src.to_string(), prog);
-        cache.live = None;
+        Err(f) => {
+            // A plant that does not compile leaves the cache alone: the state
+            // it holds is still a true statement about an earlier tick.
+            f.to_json()
+        }
     }
-    let plan = cache.plans[src];
-    let prog = cache.progs[src];
-    let bp = &prog.blueprints[prog.deploys[0].blueprint as usize];
-
-    // Reuse the running Room when this is the same plant and the question is
-    // about its future; rebuild when it is about its past.
-    let reuse = match &cache.live {
-        Some((s, tick, _)) => s == src && *tick <= t,
-        None => false,
-    };
-    if !reuse {
-        cache.live = Some((src.to_string(), 0, Room::new(plan, prog.items.len())));
-    }
-    let (_, tick, room) = cache.live.as_mut().unwrap();
-    room.run_until(t);
-    *tick = t;
-    f(prog, bp, plan, room)
 }
 
 /// Percent-decoding, for query strings.

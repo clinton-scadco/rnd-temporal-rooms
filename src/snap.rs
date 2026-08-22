@@ -160,6 +160,7 @@ pub fn render(prog: &Program, bp: &Blueprint, plan: &Plan, room: &Room, t: Tick)
         .enumerate()
         .map(|(c, a)| {
             let pop = &merged[c];
+            let why = crate::why::diagnose(prog, bp, plan, room, &merged, c, t);
             let working: Vec<Json> = pop
                 .working
                 .iter()
@@ -197,6 +198,7 @@ pub fn render(prog: &Program, bp: &Blueprint, plan: &Plan, room: &Room, t: Tick)
                 .set("inputs", stacks(prog, &a.inputs))
                 .set("outputs", stacks(prog, &a.outputs))
                 .set("shared", a.shared)
+                .set("why", why)
         })
         .collect();
 
@@ -305,6 +307,7 @@ pub fn render(prog: &Program, bp: &Blueprint, plan: &Plan, room: &Room, t: Tick)
         .set("links", Json::Arr(links))
         .set("regions", Json::Arr(regions))
         .set("items", Json::Arr(produced))
+        .set("constraints", crate::why::constraints(bp, room, &merged))
 }
 
 /// A class lifted out of two regions belongs to neither, and `of_class` says

@@ -981,3 +981,68 @@ pub fn deployment_totals(
     }
     (total, arch.len())
 }
+
+// ==================================================== P1: resuming mid-run
+
+/// A population state addressed by *index*, ready to be poured into a fresh
+/// engine.
+///
+/// The indices are the new blueprint's, not the old one's. Resolving old names
+/// to new indices is `live.rs`'s job precisely because it is the only part of
+/// this that can be wrong: nothing here can tell whether `qty[7]` used to be
+/// somewhere else.
+pub struct Seed {
+    pub qty: Vec<Qty>,
+    pub classes: Vec<ClassPop>,
+    pub rr: Vec<u16>,
+    pub c: Counters,
+}
+
+impl<'a> Pop<'a> {
+    /// A population engine that starts at tick `now` holding somebody else's
+    /// state.
+    ///
+    /// This is what a player edit costs. `new_ported` starts every machine
+    /// idle at t=0 and settles; this starts them wherever they were when the
+    /// plant changed under them and settles *there*, because an edit is
+    /// precisely a claim that what could not happen a moment ago now can.
+    ///
+    /// `used` is recomputed rather than carried. A bay whose capacity has just
+    /// been cut below its contents is a legal state -- it holds more than it
+    /// can take, refuses deposits, and drains -- and a carried `used` would be
+    /// a second opinion about a number that has exactly one source.
+    pub fn resume(
+        bp: &'a Blueprint,
+        n_items: usize,
+        ports: Vec<Port>,
+        now: Tick,
+        seed: Seed,
+    ) -> Pop<'a> {
+        assert_eq!(ports.len(), bp.actors.len());
+        assert_eq!(seed.qty.len(), bp.qty_stride as usize);
+        assert_eq!(seed.classes.len(), bp.actors.len());
+        let mut used = vec![0; bp.storages.len()];
+        for (s, sd) in bp.storages.iter().enumerate() {
+            for k in 0..sd.slots.len() {
+                used[s] += seed.qty[sd.qty_offset as usize + k];
+            }
+        }
+        let mut p = Pop {
+            bp,
+            n_items,
+            qty: seed.qty,
+            used,
+            classes: seed.classes,
+            rr: seed.rr,
+            now,
+            c: seed.c,
+            grants: 0,
+            rounds: 0,
+            cand: Vec::with_capacity(16),
+            ports,
+            outbox: Vec::new(),
+        };
+        p.settle();
+        p
+    }
+}
