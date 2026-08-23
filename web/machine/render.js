@@ -28,6 +28,9 @@ const STATUS = {
   VENTING: '--signal',
   BLOCKED: '--bad',
   STALLED: '--bad',
+  // New in experiment 07, and the one worth spotting from across the canvas: a
+  // component that is not short of anything and is refusing what it was given.
+  REFUSED: '--bad',
   IDLE: '--muted',
 };
 
@@ -293,13 +296,14 @@ function unit(ctx, b, snap, ui) {
     ctx.fillRect(b.x, b.y + b.h - (b.h - 2) * util, b.w, (b.h - 2) * util);
     ctx.restore();
   }
-  // A tank shows what is actually in it, because that is its whole job.
-  if (b.u.kind === 'tank' && snap && snap.detail && snap.detail.cap) {
+  // A store shows what is actually in it, because that is its whole job -- and
+  // in the colour of whatever domain it is holding.
+  if (snap && snap.detail && snap.detail.cap && snap.detail.level !== undefined) {
     const f = snap.detail.level / snap.detail.cap;
     ctx.save();
     ctx.clip();
     ctx.globalAlpha = 0.32;
-    ctx.fillStyle = portColour('steam');
+    ctx.fillStyle = portColour(p.ports[0].type);
     ctx.fillRect(b.x, b.y + b.h - (b.h - 2) * f, b.w, (b.h - 2) * f);
     ctx.restore();
   }
@@ -377,7 +381,10 @@ function mono() {
 }
 
 function shortKind(k) {
-  return { heatpipe: 'heat pipe', steampipe: 'steam pipe', pump: 'water', exchanger: 'exchanger' }[k] || k;
+  return {
+    heatpipe: 'heat pipe', steampipe: 'gas pipe', fluidpipe: 'fluid pipe',
+    exchanger: 'exchanger', rollmill: 'rolling mill', separator: 'separator',
+  }[k] || k;
 }
 
 // ------------------------------------------------------- the orbit strip
@@ -437,5 +444,5 @@ export function drawWave(canvas, compiled, note) {
 
   ctx.fillStyle = colour('--muted');
   ctx.font = `9px ${mono()}`;
-  ctx.fillText(`${hi} MW`, pad + 2, py(hi) - 3);
+  ctx.fillText(`${hi} ${compiled.unit || ''}`.trim(), pad + 2, py(hi) - 3);
 }

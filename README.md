@@ -50,11 +50,18 @@ standalone prototype in which the player assembles the inside of a building out
 of typed components, and the finished thing compiles to a startup transient plus
 an exact periodic orbit rather than to an average.
 
+**Experiment 07** asks whether that generalises past a power plant. It expands
+the eight components into a construction kit of thirty-eight across eight
+families, makes a wire carry a *substance with properties* rather than a number,
+and then tries to answer four different briefs with the one vocabulary. The
+recipe stays `Iron → Gear`; the machine that performs it is where the
+complexity lives.
+
 ## Quick start
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 92 cross-validation tests
+.\run.ps1 -Test    # 106 cross-validation tests
 .\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
 
@@ -951,6 +958,325 @@ browser:
 | Is the Steam Buffer ever *optimal*? | Not found yet. It rescues a machine that is below the threshold; it never beats simply building fewer turbines. A real limitation of the current numbers, not a feature. |
 | Does it scale? | Not asked. That battle has already consumed enough innocent CPU cycles. |
 
+## Experiment 07: the construction kit
+
+Experiment 06 proved that assembling a *power plant* out of parts is an
+interesting optimisation problem. It proved nothing about assembling anything
+else, because it had eight components and they were the eight a power plant
+needs. The follow-up asks the obvious next question and names the obvious trap
+in the same breath:
+
+> Expand the vocabulary into a general industrial construction kit — but define
+> a few **families of primitives** that combine into many machines, or you will
+> accidentally recreate a parts catalogue from an engineering supplier, which is
+> a thrilling prospect for roughly seven people.
+
+So the target is not "more components". It is:
+
+> **Recipes define what transformation is required. Machines are player-designed
+> networks that provide the physical processes needed to perform it.**
+
+`Iron Plate → Gear` stays one line. The forty-ton monstrosity that performs it
+7% more efficiently is where the game is.
+
+### What a wire carries
+
+Experiment 06 had five port types and a connection carried a *number*. That can
+never express the sentence above, because a machine that only moves amounts can
+never change what a thing **is**. So a quantity is now a `Stuff`: a substance,
+plus five small properties.
+
+```text
+domains     material  fluid  gas  heat  rotary  mech  electrical
+properties  temperature  particle size  purity  form  speed
+substances  water coal ore iron slag crude light middle heavy
+            + heat, torque, stroke, electricity
+```
+
+And a component's job is to *modify* it:
+
+```text
+crusher     size    lump      -> coarse -> crushed
+mill        size    crushed   -> powder
+separator   purity  40%       -> 82% rich  +  12% tailings
+furnace     temp    ambient   -> red
+rolling     form    billet    -> strip
+press       form    strip     -> gear
+```
+
+The outer game still has one item called Iron Ore. Nothing here needs
+`CrushedIronOre`, `FineIronOre` or `SlightlyMoistFineIronOre` to exist as
+separate icons. Pyanodons, please remain seated.
+
+**Phase is not a property — it is a domain.** Water boiled by an exchanger comes
+out in `gas`; iron melted past band 7 leaves a furnace through a different port,
+in `fluid`. A phase change is therefore something you can *see*: the wire changes
+colour, and it will not plug in where the old one did.
+
+```text
+furnace   heat in  +  material in
+              -> out     material, five bands hotter
+              -> molten   fluid, if that took it past melting
+```
+
+That also settles the thing the note was firm about: `steam` is not a port type.
+Steam is water, in gas, at a temperature.
+
+Every property is a small integer — a band, a percent, one of four words —
+because `orbit` compiles a design by watching its state repeat, and a state
+containing a float repeats approximately, which is to say never. A whole stuff
+is six bytes, and two stuffs are equal or they are not.
+
+### A component is a row in a table
+
+Thirty-eight components in eight families, and fourteen of them are pure data:
+
+```text
+Crusher {
+    draws  drive  5 rotary   at speed <= 2
+           in    10 material hardness <= 8, no finer than coarse
+    makes  out   10 material one size finer
+    rate   10 batches/tick
+}
+```
+
+```powershell
+.\run.ps1 -Machine parts process
+```
+
+The other twenty-four are hand-written, but not twenty-four times over: one
+`conduit` is six kinds of pipe, one `store` is four kinds of buffer, one
+`source` is three kinds of inlet, one `dump` is three kinds of boundary. Six
+components are genuinely one of a kind — reactor, gearbox, turbine, generator,
+furnace, column — and each has a warm-up, a ratio, a spin-up curve, a rounding,
+a phase change or a separation split that a table row could not have expressed.
+The generator is on that list for an unglamorous reason: rounding its intake to
+whole batches would discard up to nine rotary a tick, and experiment 06's six
+designs are reported to two decimal places.
+
+The payoff is the one the note was really after:
+
+> a motor is not part of the crusher's recipe. It supplies the rotary domain.
+
+Six crushers can hang off one engine through a shared shaft, and nobody had to
+write that down as a special case:
+
+```text
+             ┌→ Crusher
+Engine → Shaft → Crusher
+             ├→ Crusher
+             └→ Crusher
+```
+
+### Four briefs, one component set
+
+One brief proves a component set can answer one question. Four of them, answered
+by the same thirty-eight components, is the only evidence that the vocabulary is
+a vocabulary rather than an elaborate way of writing `Boiler Mk2`.
+
+```powershell
+.\run.ps1 -Machine
+```
+
+```text
+GENERATE ELECTRICITY  --  heat, fluid, gas, rotary, electrical
+design                          made     grid   water  wasted     plot  parts  util  start   period
+01-first-try                   54.00      0.0    80.0   800.0     15x6      5   65%    120        1
+02-more-of-everything         216.00      0.0   320.0   200.0    15x19     17   83%    127        4
+03-compact                    108.00      0.0   160.0     0.0     12x6      8   81%    123        2
+04-stalled                      0.00      0.0    80.0     0.0     16x8     10   18%    122        3
+05-pulsed                      51.71      0.0    80.0     0.0     16x8     10   36%    212       21
+06-radial                     216.00      0.0   320.0     0.0    14x13     15   87%    123        4
+
+CRUSH ORE  --  motor, gearbox, rotary, material transformation
+07-crushline                   35.67    220.2     0.0     2.0    21x14     15   64%    152      108
+11-steamcrusher                37.40      0.0   311.2   224.1    32x16     25   70%    120       60
+
+DISTIL MIXED FLUID  --  heat, phase change, fluid separation
+10-refinery                    36.00      0.0    18.0    30.0    26x10     10   46%    192        6
+
+MANUFACTURE GEARS  --  material handling, forming, buffering
+08-stamping                    49.50    121.0     0.0     5.4    22x12     13   56%     57       40
+09-machining                   24.00    128.9     0.0     0.0     11x9      9   49%      4       18
+12-onemotor                    18.00     60.0     0.0    15.1    22x12     11   27%     58       50
+```
+
+Experiment 06's six are unchanged to the decimal place, which was a constraint
+rather than a coincidence: they are the regression test for everything
+underneath. The three transients that moved by one tick moved because a boundary
+port now exports *after* the transfer rather than during the step, so that a
+generator can power a motor inside its own machine and export the difference.
+
+### The same brief, twice, differently
+
+`07-crushline` and `11-steamcrusher` both crush ore past the target. Neither
+dominates, and the difference is not a number — it is which domain the rotary
+comes from.
+
+| | 07-crushline | 11-steamcrusher |
+|---|---|---|
+| concentrate | 35.67/tick | 37.40/tick |
+| grid | **220 MW** | **none** |
+| fuel | none | 100/tick |
+| water | none | 311/tick |
+| plot | 21×14, 15 parts | 32×16, 25 parts |
+
+The steam crusher has no generator and no motor anywhere in it. Four turbines
+drive two line shafts directly, because rotary is a *domain* and a turbine
+already makes it — putting it through a generator and back through a motor
+would be two conversions and 19% for nothing. What it costs is precisely
+everything the power brief was trying to minimise.
+
+### Refusal is the mechanic, not the error case
+
+Experiment 06 had one refusal in the whole simulation: a turbine below its
+threshold. Experiment 07 has a general one, and it is *the* interesting
+addition, because it creates a design that is wired correctly, is short of
+nothing, and produces nothing.
+
+```powershell
+.\run.ps1 -Machine why designs/08-stamping.machine
+```
+
+```text
+R1         Rolling Mill         REFUSED
+    needs 60 drive/tick — speed 3+
+    needs 60 in/tick — billet, scorching or hotter
+    drive: Rotary (speed 6) (60 held)
+    in: Iron Ore (lump, 40% pure, red) (120 held)
+    REFUSED — wants billet, and this is raw
+    something upstream has to shape it first
+```
+
+That is a real transcript from building the gear line: the iron inlet had been
+left on its default substance, so a rolling mill was being handed hot *ore*. The
+tool found it, named the property, and said what fixes it — which is the whole
+argument for making a component's constraints data rather than code, because the
+sentence is generated from the same table the simulation obeys.
+
+The load-bearing one is the drive train. A crusher will not take a shaft turning
+at speed 6; a mill will not take one turning at speed 1. So a motor cannot drive
+both, and the diff between a machine that makes nothing and a machine that works
+is one component:
+
+```diff
++ gearbox   GB1 at 6,0   ratio 4
+- wire MO1.rotary -> C1.drive
++ wire MO1.rotary -> GB1.in
++ wire GB1.out    -> C1.drive
+```
+
+### Half the drive is not half the gears
+
+`12-onemotor` is `08-stamping` with one motor instead of two. The shaft splits
+54 rotary fairly: 27 to the rolling mill, 27 to the crank. The mill is content
+to run slowly and does. The crank is content to run slowly and does, at 23
+strokes a tick. The press is not — **a press fed half the strokes it needs does
+not make half a gear, it fails to close** — and a stroke that arrives unused does
+not queue for later. It has happened.
+
+```text
+08-stamping    two motors    49.50 gears/tick    MET
+12-onemotor    one motor     18.00 gears/tick    short by 2.00, and 15 heat/tick of
+                                                 strokes falling on nothing
+```
+
+`mech` is the only domain in the kit that cannot be stored, which is the same
+decision the turbine's condensation was in experiment 06 and produces the same
+shape of result: a threshold plus something that perishes is where non-obvious
+designs live.
+
+### The compiled machine keeps the properties
+
+The whole point of compiling an orbit was that a finished machine advertises
+exact external rates. Now those rates have properties attached, and the outer
+factory sees this and never opens it again:
+
+```powershell
+.\run.ps1 -Machine compile designs/07-crushline.machine
+```
+
+```text
+in    Iron Ore (lump, 40% pure)      89.17/tick
+in    Electricity                   220.19/tick
+out   Iron Ore (powder, 82% pure)    35.67/tick
+waste Iron Ore (powder, 12% pure)    53.50/tick
+waste Heat (ambient)                  2.00/tick
+
+plot  21 x 14 · 15 parts inside · 675 bytes to resume it
+loop  152 ticks of startup, then the same 108 ticks forever
+
+tick 1,000,000,000 is indistinguishable from tick 244 — 244 steps, not a billion
+```
+
+One item goes in, the same item comes out, and everything that happened to it is
+in the parentheses. That is the sentence the whole `stuff` module exists to make
+printable.
+
+### Counting the primitives instead of arguing about them
+
+The note proposed its own acceptance test, so it is a command rather than a
+paragraph:
+
+> If the same motor, pump, heat exchanger, buffer and shaft naturally appear
+> across several designs, you have found good primitives. If every challenge
+> requires ten bespoke components used nowhere else, the abstraction is wrong.
+
+```powershell
+.\run.ps1 -Machine reuse
+```
+
+```text
+reactor      source             8        8  power distil crush
+pump         source             8       13  power distil crush
+exchanger    heat               7       17  power crush
+turbine      mechanical         7       21  power crush
+outlet       sink               5        5  crush gears distil
+inlet        source             4        5  crush gears
+shaft        transport          3        5  crush gears
+motor        mechanical         3        8  crush gears
+...
+  28 of 38 components are used at all, and 11 of those appear in more than one
+  brief.
+
+  not used by any shipped design: heater, steampipe, fluidpipe, chute, screw,
+  hopper, drum, flywheel, valve, clutch
+```
+
+The infrastructure passed: reactors, pumps, exchangers, turbines, shafts, motors
+and outlets all turn up across two or three briefs, and a reactor that was built
+for a power plant now heats a distillation column. The process components did
+not span briefs and were never going to — a crusher belongs to the crush brief
+the way a verb belongs to a sentence.
+
+**Ten components earned nothing, and that is the most useful thing the
+experiment produced.** It is not that they are badly designed. It is that
+*every port already has a capacity*, so every component in the kit is already a
+buffer, and a dedicated store has nothing left to do. Experiment 06's Steam
+Buffer only mattered because a turbine **discards** what it cannot use; nothing
+else in the kit does, so nothing else can be rescued by putting a tank in front
+of it. The control family has the same problem from the other end: a valve
+limits a flow nobody was over-supplying.
+
+The fix is not more components. It is smaller port capacities — roughly one
+tick's worth — so that a store is a decision instead of a decoration. That is a
+one-line change to the table and a different experiment.
+
+### What it answered, and what it did not
+
+| the question | the answer |
+|---|---|
+| Can one component set answer four different briefs? | Yes. 38 components, 8 families, and a met design for each of power, crush, distil and gears. |
+| Does a recipe stay simple while the machine gets complicated? | Yes. `Iron → Gear` is performed by a 13-part stamping line and a 9-part machining cell with no component in common except the inlet and the outlet. |
+| Do properties beat intermediate items? | Yes, and the macro-machine is the proof: `Iron Ore (lump, 40%)` in, `Iron Ore (powder, 82%)` out, one item, five properties. |
+| Is a constraint better than a rate penalty? | Yes, and it was not close. "REFUSED — wants billet, and this is raw" teaches the mechanic in one line; a component quietly running at 40% teaches nothing. |
+| Does the orbit survive the richer state? | Yes. Periods of 6, 18, 40, 50, 60 and 108 across the new designs, tick 10⁹ still answered in a few hundred steps, still cross-checked against a straight run. |
+| Are the primitives primitives? | Mostly. Seven infrastructure components span two or three briefs each; ten components are used by nothing. |
+| Do stores and controls earn their place? | **No.** Every port is already a buffer, so a buffer buys nothing. Diagnosed above; the fix is smaller capacities, not more parts. |
+| Is `mech` a domain or an affectation? | Honestly, an affectation — one producer, one consumer. It pays for itself only because it is the domain that cannot be stored, which is what makes the press interesting. |
+| Is the chemistry family in? | No. Mixers, reactor vessels, electrolysers and scrubbers were cut. The four briefs did not need them, and adding components no brief needs is exactly the parts-catalogue failure the note warned about. |
+| Does it scale? | Still not asked. Still not the point. |
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -1110,6 +1436,24 @@ These are real, and worth stating plainly.
 14. **The costs in `scenarios/` are guesses.** They are a rules file, they are
     meant to be edited between playtests, and nothing checks that they make a
     good game — only that they mean the same thing twice.
+15. **Experiment 07's stores buy nothing.** Every port has its own capacity, so
+    every component is already a buffer and a dedicated one has no work to do.
+    Ten of thirty-eight components are used by no shipped design for this
+    reason. The fix is smaller port capacities, not more components.
+16. **A property is a band, not a quantity.** Temperature is one of ten, size is
+    one of four, speed is one of ten. That is what keeps an orbit findable and
+    it is also why nothing here can express "hot enough, but only just". A
+    finer scale would need a different way of closing the orbit.
+17. **Blending averages, and averaging is lossy.** Two lots of the same
+    substance meeting in a port come out weighted and rounded. It is
+    deterministic and it is not reversible, so a design that mixes 82% and 12%
+    ore has genuinely thrown the separation away — correct, but it means purity
+    can be destroyed by a careless wire and the tool does not warn first.
+18. **The machine designer is still not the game.** Experiments 06 and 07 share
+    a binary, a server and a directory with the workbench and touch none of its
+    code. Nothing decides yet whether a compiled macro-machine is placed into a
+    `Blueprint` as one node or as its own sub-plant, and that is the actual
+    integration question.
 
 ## Layout
 
@@ -1130,21 +1474,22 @@ src/why.rs        Prototype 1: why a thing is not running, and what binds
 src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
 src/main.rs       experiment harness, `serve`, `export` and `play`
 web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            92 cross-validation tests
+tests/            106 cross-validation tests
 configs/          the fifteen configurations, plus the first scenario plant
 scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
 
-src/machine/parts.rs   Ex 06: eight components, five port types, and the numbers
+src/machine/stuff.rs   Ex 07: seven domains, thirteen substances, five properties
+src/machine/parts.rs   Ex 07: thirty-eight components in eight families, and the numbers
 src/machine/design.rs  Ex 06: components on a tile grid, wires between their ports
 src/machine/sim.rs     Ex 06: transfer along wires, then every component steps
 src/machine/orbit.rs   Ex 06: run it until it repeats; keep transient + period
-src/machine/eval.rs    Ex 06: a brief with four competing halves, and no score
+src/machine/eval.rs    Ex 07: four briefs, competing costs, and no score
 src/machine/snap.rs    Ex 06: state(t) for a renderer, and why things are stopped
 src/machine/web.rs     Ex 06: its own small server, so it can be thrown away
-src/bin/machine.rs     Ex 06: run, why, compile, verify, serve
+src/bin/machine.rs     Ex 07: run, why, compile, verify, parts, reuse, serve
 web/machine/           Ex 06: the designer
-designs/               Ex 06: six answers to the same brief
+designs/               Ex 07: twelve answers to four briefs
 tests/machine_web.mjs  Ex 06: the front end, checked without a browser
 ```
 
@@ -1158,6 +1503,7 @@ server rather than a dependency tree larger than the crate they serve.
 > **Prototype 1:** let someone change it while it is running, and give them a
 > reason to want to.
 > **Experiment 06:** stop scaling buildings and start designing one.
+> **Experiment 07:** and then design something that is not a power plant.
 
 Next is **P2**: a server holding the command log and the canonical snapshots,
 one client playing normally, and a second client joining at tick 80,000,

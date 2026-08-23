@@ -1,0 +1,40 @@
+# The same gears, out of the same billet, by a completely different machine.
+#
+# No furnace, no burner, no coal, no rolling mill and no press: a lathe takes
+# cold billet straight from the inlet and cuts gears out of it. Ten components
+# instead of thirteen, on a third of the plot, and nothing is burned.
+#
+# What it costs is throughput, grid power and metal. Twenty billet a tick
+# becomes twelve gears and eight swarf, so two fifths of the iron leaves in the
+# skip -- and the gears that do come out are cut rather than stamped, which is
+# the one thing this brief does not ask for and the reason stamping wins it.
+
+machine "Machining Cell"
+brief gears
+
+inlet     I1  at 0,0   draws iron
+lathe     L1  at 4,0
+lathe     L2  at 4,3
+outlet    O1  at 9,0
+skip      SK1 at 9,4
+
+cable     CB1 at 0,4
+mains     M1  at 0,7
+motor     MO1 at 4,7
+motor     MO2 at 7,7
+
+wire I1.out -> L1.in
+wire I1.out -> L2.in
+
+wire M1.power -> CB1.in
+wire M1.power -> MO1.power
+wire M1.power -> MO2.power
+wire CB1.out -> L1.power
+wire CB1.out -> L2.power
+wire MO1.rotary -> L1.drive
+wire MO2.rotary -> L2.drive
+
+wire L1.out -> O1.solid
+wire L2.out -> O1.solid
+wire L1.swarf -> SK1.solid
+wire L2.swarf -> SK1.solid

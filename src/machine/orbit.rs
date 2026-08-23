@@ -41,6 +41,7 @@
 
 use super::design::Design;
 use super::sim::{Delta, Machine, Tick, Totals};
+use super::stuff::Subst;
 use std::collections::HashMap;
 
 /// How far to look for the machine repeating itself.
@@ -75,16 +76,16 @@ impl Compiled {
     /// large, once the orbit is known.
     pub fn totals_at(&self, t: Tick) -> Totals {
         if (t as usize) < self.cum.len() {
-            return self.cum[t as usize];
+            return self.cum[t as usize].clone();
         }
         if self.period == 0 {
             // Nothing honest to say beyond what was simulated.
-            return *self.cum.last().unwrap_or(&Totals::default());
+            return self.cum.last().cloned().unwrap_or_default();
         }
         let s = self.transient;
         let laps = ((t - s) / self.period) as u128;
         let rem = (t - s) % self.period;
-        let base = self.cum[s as usize];
+        let base = self.cum[s as usize].clone();
         let part = self.cum[(s + rem) as usize].minus(&base);
         base.plus(&self.orbit.scaled(laps)).plus(&part)
     }
@@ -135,7 +136,7 @@ impl Compiled {
     /// Per-tick power across the transient and one full orbit, downsampled to
     /// something a strip chart can draw. This is the picture that makes "same
     /// average, different machine" visible.
-    pub fn waveform(&self, points: usize) -> (Vec<u64>, usize) {
+    pub fn waveform(&self, points: usize, what: Subst) -> (Vec<u64>, usize) {
         let end = if self.period > 0 {
             ((self.transient + self.period) as usize).min(self.deltas.len())
         } else {
@@ -151,7 +152,9 @@ impl Compiled {
             // The maximum over the bucket, not the mean: a strip chart that
             // averages away a spike is lying about a periodic machine.
             let hi = (i + stride).min(end);
-            out.push(self.deltas[i..hi].iter().map(|d| d.power).max().unwrap_or(0));
+            out.push(
+                self.deltas[i..hi].iter().map(|d| d.qty_out(what)).max().unwrap_or(0),
+            );
             i += stride;
         }
         (out, stride)
@@ -177,7 +180,7 @@ pub fn compile(d: &Design) -> Result<Compiled, String> {
         }
         seen.insert(k, t);
         let delta = m.step();
-        let mut c = cum[t as usize];
+        let mut c = cum[t as usize].clone();
         c.add(&delta);
         deltas.push(delta);
         cum.push(c);
@@ -222,7 +225,8 @@ pub fn verify(d: &Design, ticks: &[Tick]) -> Result<Vec<Check>, String> {
             at += 1;
         }
         let compiled = c.totals_at(t);
-        out.push(Check { tick: t, simulated: running, compiled, agrees: running == compiled });
+        let agrees = running == compiled;
+        out.push(Check { tick: t, simulated: running.clone(), compiled, agrees });
     }
     Ok(out)
 }

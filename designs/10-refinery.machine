@@ -1,0 +1,45 @@
+# The third brief, and the one that needed a phase change to exist.
+#
+# Crude arrives ambient and a column will not separate anything below the
+# scorching band, so two preheaters lift it two bands each. The column then
+# sends the light fraction off the top as a *vapour* -- a different domain, a
+# different colour of wire, and a fraction that will not plug into the outlet
+# the middle fraction goes to. That is what the condenser is for, and it is why
+# there is a second pump drawing cold water and a heat sink taking the heat
+# straight back out again.
+#
+# The reactor is at 60% because that is very nearly what three heat wires
+# actually swallow. At 100% it would produce the same light and middle and
+# waste 400 heat a tick doing it.
+
+machine "Refinery Unit"
+brief distil
+
+pump      P1  at 0,0   draws crude
+preheater PH1 at 4,0
+preheater PH2 at 9,0
+column    CO1 at 14,0  stages 2
+condenser CD1 at 19,0
+outlet    O1  at 19,5
+skip      SK1 at 19,8
+
+pump      P2  at 24,0
+radiator  RD1 at 24,3
+
+reactor   R1  at 4,4   throttle 42
+
+wire P1.water -> PH1.in
+wire PH1.out -> PH2.in
+wire PH2.out -> CO1.feed
+
+wire R1.heat -> PH1.heat
+wire R1.heat -> PH2.heat
+wire R1.heat -> CO1.heat
+
+wire CO1.light -> CD1.vapour
+wire P2.water -> CD1.coolant
+wire CD1.out -> O1.liquid
+wire CD1.heat -> RD1.heat
+
+wire CO1.middle -> O1.liquid
+wire CO1.heavy -> SK1.liquid

@@ -1,0 +1,56 @@
+# The second brief, answered the obvious way: a line, and a drive train for it.
+#
+# The whole lesson of this design is in two words on one component. A crusher
+# will not take a drive turning at speed 6, and a mill will not take one turning
+# at speed 1, so a motor cannot drive both. Two trains, one geared down and one
+# not, and the gearbox is the only part of the machine that does nothing to the
+# ore.
+#
+# The mill is the bottleneck and says so: two motors on a shared shaft give it
+# 67 rotary of the 80 it wants, so the line runs at 80/tick rather than 100 and
+# everything upstream backs up behind it.
+
+machine "Crush Line"
+brief crush
+
+inlet     I1  at 0,4   draws ore
+
+crusher   C1  at 0,0
+crusher   C2  at 4,0
+mill      MI1 at 9,0
+separator S1  at 14,0
+outlet    O1  at 19,0
+skip      SK1 at 19,3
+
+gearbox   GB1 at 0,7   ratio 4
+shaft     SH1 at 2,10
+shaft     SH2 at 12,6
+
+mains     M1  at 10,9
+motor     MO1 at 6,9
+motor     MO2 at 6,12
+motor     MO3 at 14,9
+motor     MO4 at 14,12
+
+wire M1.power -> MO1.power
+wire M1.power -> MO2.power
+wire M1.power -> MO3.power
+wire M1.power -> MO4.power
+
+wire MO1.rotary -> SH1.in
+wire MO2.rotary -> SH1.in
+wire SH1.out -> GB1.in
+wire GB1.out -> C1.drive
+wire GB1.out -> C2.drive
+
+wire MO3.rotary -> SH2.in
+wire MO4.rotary -> SH2.in
+wire SH2.out -> MI1.drive
+wire SH2.out -> S1.drive
+
+wire I1.out -> C1.in
+wire C1.out -> C2.in
+wire C2.out -> MI1.in
+wire MI1.out -> S1.in
+wire S1.rich -> O1.solid
+wire S1.tails -> SK1.solid

@@ -8,13 +8,18 @@
 // draws it.
 //
 // What it *does* own a copy of is the catalogue -- footprints, port names,
-// port types, the reach limit -- because refusing to draw an illegal wire is a
+// domains, the reach limit -- because refusing to draw an illegal wire is a
 // thing that has to happen while the pointer is still moving. That copy is
-// fetched from the server at startup rather than typed in here, so the eight
-// components still have exactly one definition and it is in Rust.
+// fetched from the server at startup rather than typed in here, so the
+// thirty-eight components still have exactly one definition and it is in Rust.
+//
+// Experiment 07 added a second thing worth saying about the boundary: what a
+// wire carries is now a *stuff* rather than a number, and the browser is told
+// what it is rather than working it out. `Iron Ore (powder, 82% pure)` is
+// composed in Rust, arrives as a string, and is printed.
 
 export const state = {
-  design: { name: 'Machine', units: [], wires: [] },
+  design: { name: 'Machine', brief: 'power', units: [], wires: [] },
   cat: null,            // { parts: {tag: part}, order: [tag], constants }
   snapshot: null,       // the machine at `tick`
   macro: null,          // what it looks like from outside
@@ -28,6 +33,7 @@ export const state = {
   playing: false,
   speed: 1,
   selected: null,       // { what: 'unit', name } | { what: 'wire', i }
+  family: '',           // which palette family is showing, '' for all
   dirty: true,
 };
 
@@ -77,10 +83,9 @@ export function wireProblem(a, ai, b, bi) {
   const pa = part(a.kind).ports[ai], pb = part(b.kind).ports[bi];
   if (!pa || !pb) return 'no such port';
   if (pa.dir !== 'out' || pb.dir !== 'in') return 'an output goes to an input';
-  // The boundary before the type, because a generator's power port fails both
-  // and only one of the two answers is useful.
-  if (pa.external) return `${a.name}.${pa.name} is the machine's boundary — electricity leaves here`;
-  if (pb.external) return `${b.name}.${pb.name} is the machine's boundary, not a socket`;
+  // Experiment 06 refused to wire a boundary port at all. Experiment 07 does
+  // not: a generator that runs a conveyor motor and exports the difference is
+  // a design, so the only rule left is the domain.
   if (pa.type !== pb.type) return `${pa.name} carries ${pa.type}, ${pb.name} takes ${pb.type}`;
   const g = gap(a, b);
   const reach = state.cat.constants.reach;
@@ -111,8 +116,16 @@ export function firstCompatible(a, ai, b) {
 
 export function uniqueName(kind) {
   const stem = {
-    reactor: 'R', heatpipe: 'HP', pump: 'W', exchanger: 'HX',
-    steampipe: 'SP', tank: 'TK', turbine: 'T', generator: 'G',
+    reactor: 'R', burner: 'BN', heater: 'EH', mains: 'M', pump: 'W', inlet: 'I',
+    outlet: 'O', skip: 'SK', radiator: 'RD',
+    heatpipe: 'HP', steampipe: 'SP', fluidpipe: 'FP', chute: 'CH', screw: 'SC',
+    shaft: 'SH', cable: 'CB',
+    hopper: 'HO', tank: 'TK', drum: 'DR', flywheel: 'FW',
+    valve: 'V', clutch: 'CL',
+    exchanger: 'HX', preheater: 'PH', condenser: 'CD', furnace: 'F',
+    turbine: 'T', generator: 'G', motor: 'MO', gearbox: 'GB', crank: 'CR',
+    crusher: 'C', mill: 'MI', separator: 'S', rollmill: 'RM', press: 'P',
+    lathe: 'L', column: 'CO',
   }[kind] || 'U';
   for (let i = 1; ; i++) {
     const name = stem + i;
@@ -121,7 +134,11 @@ export function uniqueName(kind) {
 }
 
 export function place(kind, x, y) {
-  const u = { name: uniqueName(kind), kind, x, y, throttle: 100, pulse: false, high: 1200, low: 0 };
+  const u = {
+    name: uniqueName(kind), kind, x, y,
+    throttle: 100, pulse: false, high: 1200, low: 0,
+    draws: kind === 'inlet' ? 'ore' : 'water', ratio: 4, limit: 100, stages: 2,
+  };
   state.design.units.push(u);
   changed(true);
   return u;
@@ -169,6 +186,17 @@ export function retune(name, patch) {
 export function rename(name) {
   state.design.name = name;
   changed(true);
+}
+
+/// Which of the four briefs this machine is judged against. A structural edit,
+/// because everything on the scoreboard changes.
+export function setBrief(tag) {
+  state.design.brief = tag;
+  changed(true);
+}
+
+export function brief() {
+  return (state.cat.briefs || []).find(b => b.tag === state.design.brief) || null;
 }
 
 // ------------------------------------------------------------ the server
@@ -236,6 +264,9 @@ export async function catalogue() {
     parts: Object.fromEntries(res.parts.map(p => [p.kind, p])),
     order: res.parts.map(p => p.kind),
     portKinds: res.portKinds,
+    substances: res.substances || [],
+    briefs: res.briefs || [],
+    families: [...new Set(res.parts.map(p => p.family))],
     constants: res.constants,
   };
   return state.cat;
@@ -262,6 +293,7 @@ export function adopt(design) {
   // what keeps `retune` from having to know which fields a kind cares about.
   state.design = {
     name: design.name,
+    brief: design.brief || 'power',
     units: design.units.map(u => ({ ...u })),
     wires: design.wires.map(w => ({ ...w })),
   };

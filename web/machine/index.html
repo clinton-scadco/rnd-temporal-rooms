@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>machine designer &middot; experiment 06</title>
+<title>machine designer &middot; experiment 07</title>
 <link rel="stylesheet" href="/machine.css">
 <link rel="icon" href="data:,">
 </head>
@@ -11,7 +11,7 @@
 
 <header id="bar">
   <div class="brand">
-    <b>machine&nbsp;designer</b><span>experiment 06 &middot; a building made of parts</span>
+    <b>machine&nbsp;designer</b><span>experiment 07 &middot; a construction kit, and four briefs</span>
   </div>
 
   <div class="group">
@@ -36,6 +36,12 @@
   </div>
 </header>
 
+<div id="brief">
+  <b>brief</b>
+  <select id="briefpick" title="what this machine is for"></select>
+  <span class="goal" id="goal"></span>
+</div>
+
 <div id="score">
   <div class="verdict" id="verdict">&mdash;</div>
   <dl class="tiles" id="tiles"></dl>
@@ -53,6 +59,7 @@
 <main>
   <aside id="build">
     <h2>components</h2>
+    <div class="field"><label>show</label><select id="familypick"></select></div>
     <div class="palette" id="palette"></div>
     <p class="hint" id="hint">pick a component, then click the plot</p>
 

@@ -161,6 +161,8 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
                         .set("ok", true)
                         .set("parts", Design::catalogue())
                         .set("portKinds", super::design::port_kinds())
+                        .set("substances", super::design::substances())
+                        .set("briefs", eval::briefs())
                         .set("constants", eval::constants())
                         .to_string(),
                 )
@@ -283,13 +285,7 @@ fn state(body: &str, t: Tick) -> Json {
 }
 
 fn totals_json(t: &super::sim::Totals) -> Json {
-    Json::obj()
-        .set("ticks", Json::big(t.ticks))
-        .set("power", Json::big(t.power))
-        .set("fuel", Json::big(t.fuel))
-        .set("water", Json::big(t.water))
-        .set("heatWasted", Json::big(t.heat_wasted))
-        .set("steamVented", Json::big(t.steam_vented))
+    eval::totals_json(t)
 }
 
 /// The compiled macro-machine, and the picture of its orbit.
@@ -303,7 +299,9 @@ fn compiled(body: &str) -> Json {
         Err(e) => return err(&e),
     };
     let r = eval::report(&d, &c);
-    let (wave, stride) = c.waveform(560);
+    // The strip chart draws whatever the brief is counting, so a gear plant
+    // shows gears rather than a flat line of zero megawatts.
+    let (wave, stride) = c.waveform(560, eval::headline_subst(d.brief));
     Json::obj()
         .set("ok", true)
         .set("macro", eval::macro_machine(&d, &c, &r))
@@ -313,6 +311,7 @@ fn compiled(body: &str) -> Json {
         .set("searched", c.searched as i64)
         .set("settled", c.settled())
         .set("stride", stride as i64)
+        .set("unit", r.headline_unit())
         .set("wave", Json::arr(wave.iter().map(|&v| v as i64).collect::<Vec<_>>()))
 }
 

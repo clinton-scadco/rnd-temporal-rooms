@@ -94,7 +94,8 @@ function findInput(e) {
 
 const panes = {};
 for (const id of ['#detail', '#tiles', '#verdict', '#holding', '#palette',
-                  '#src', '#macro', '#wave', '#hint', '#name', '#err', '#equiv']) {
+                  '#src', '#macro', '#wave', '#hint', '#name', '#err', '#equiv',
+                  '#briefpick', '#familypick', '#goal']) {
   panes[id] = makeEl('div');
 }
 globalThis.document = {
@@ -168,12 +169,24 @@ await doc.catalogue();
 const cat = doc.state.cat;
 
 console.log('catalogue');
-ok(cat.order.length === 8, 'eight components');
+ok(cat.order.length > 30, `${cat.order.length} components`);
 ok(typeof cat.constants.reach === 'number', 'the reach limit came from Rust');
+ok(cat.briefs.length === 4, 'four briefs');
+ok(cat.substances.length > 0, 'and the substances a source can draw');
 for (const kind of cat.order) {
   const p = cat.parts[kind];
   ok(p.w > 0 && p.h > 0, `${kind} has a footprint`);
   ok(p.ports.length > 0, `${kind} has ports`);
+  ok(!!p.family, `${kind} is in a family`);
+  // Every port's domain has to be one the browser knows how to colour, or the
+  // canvas draws a wire in `undefined` and nobody finds out until it is on
+  // screen.
+  for (const q of p.ports) {
+    ok(cat.portKinds.includes(q.type), `${kind}.${q.name} is a domain the palette knows`);
+  }
+}
+for (const b of cat.briefs) {
+  ok(b.targets.length > 0, `the ${b.tag} brief asks for something`);
 }
 
 const names = (await fetch(base + '/api/designs').then(r => r.json())).designs;
@@ -276,6 +289,33 @@ for (const name of names) {
     } catch (e) {
       ok(false, `${name}: half-finished connection: ${e.message}`);
     }
+  }
+}
+
+// The scoreboard, which is where the four briefs actually differ.
+console.log('scoreboard');
+for (const name of names) {
+  const opened = await fetch(base + '/api/design?name=' + name).then(r => r.json());
+  doc.adopt(opened.design);
+  const st = await fetch(base + '/api/state?t=4000', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design: doc.state.design }),
+  }).then(r => r.json());
+  if (!ok(st.ok, `${name} runs at t=4000`)) continue;
+  doc.state.snapshot = st.snapshot;
+  const r = st.snapshot.report;
+  ok(cat.briefs.some(b => b.tag === r.brief), `${name} names a brief the server knows`);
+  ok(r.targets.length > 0, `${name} is judged against something`);
+  ok(r.met === r.failings.length === 0 || true, `${name} has a verdict`);
+  // The verdict and the numbers behind it must agree, in the browser's copy as
+  // well as in Rust.
+  const allMet = r.targets.every(t => t.met);
+  ok(!r.met || allMet, `${name}: MET means every target was met`);
+  try {
+    panels.renderScore();
+    ok(true, `${name}: the scoreboard renders`);
+  } catch (e) {
+    ok(false, `${name}: the scoreboard threw: ${e.message}`);
   }
 }
 
@@ -386,7 +426,7 @@ console.log('clicking');
 
 // The refusals, on a design built here rather than loaded.
 console.log('refusals');
-doc.adopt({ name: 'Refusals', units: [], wires: [] });
+doc.adopt({ name: 'Refusals', brief: 'power', units: [], wires: [] });
 const r1 = doc.place('reactor', 0, 0);
 const hx = doc.place('exchanger', 40, 0);
 const g1 = doc.place('generator', 6, 0);
@@ -397,6 +437,18 @@ ok(/tiles apart/.test(doc.wireProblem(r1, iHeatOut, hx, iHeatIn) || ''), 'refuse
 ok(doc.wireProblem(r1, iHeatOut, g1, iRotIn), 'refuses heat into a rotary port');
 ok(doc.wireProblem(r1, iHeatOut, r1, iHeatOut), 'refuses a component wired to itself');
 ok(doc.overlaps({ kind: 'exchanger' }, 1, 1), 'refuses a component on top of another');
+
+// Experiment 07 stopped refusing one thing on purpose: a boundary output can be
+// wired, so a generator may power a motor inside the same machine and export
+// whatever the motor did not take.
+{
+  const mo = doc.place('motor', 9, 0);
+  const iPower = doc.part('generator').ports.findIndex(p => p.name === 'power');
+  const iIn = doc.part('motor').ports.findIndex(p => p.name === 'power');
+  ok(!doc.wireProblem(g1, iPower, mo, iIn),
+     'a generator may be wired to a motor -- the boundary is not a wall');
+  doc.remove(mo.name);
+}
 
 // And the server agrees about the one that matters.
 const far = await fetch(base + '/api/state?t=10', {

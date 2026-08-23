@@ -3,12 +3,13 @@
 
 import {
   state, onChange, changed, catalogue, listDesigns, openDesign, save,
-  seek, compile, verify, rename, num,
+  seek, compile, verify, rename, setBrief, num,
 } from './doc.js';
 import { initCanvas, ui, invalidate, focusAll, setTool, select } from './canvas.js';
 import {
   renderPalette, markTool, renderScore, renderInspector, renderHolding,
-  renderMacro, renderWave, renderSource,
+  renderMacro, renderWave, renderSource, renderFamilies, renderBriefPicker,
+  renderBrief,
 } from './panels.js';
 
 const $ = s => document.querySelector(s);
@@ -33,7 +34,10 @@ async function main() {
     onTool: markTool,
     onSay: hint,
   });
-  renderPalette(kind => setTool(ui.place === kind ? null : kind));
+  const palette = () => renderPalette(kind => setTool(ui.place === kind ? null : kind));
+  palette();
+  renderFamilies(family => { state.family = family; palette(); });
+  renderBriefPicker(tag => setBrief(tag));
   onChange(() => {
     if (state.dirty) seek(Math.floor(state.renderTime), true);
     refresh();
@@ -119,6 +123,7 @@ function loop(now) {
 // ----------------------------------------------------------------- panels
 
 function refresh() {
+  renderBrief();
   renderScore();
   renderInspector();
   renderHolding();

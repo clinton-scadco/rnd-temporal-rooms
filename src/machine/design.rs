@@ -19,49 +19,128 @@
 //!
 //! ```text
 //!   machine "Compact Reactor v3"
+//!   brief power
 //!
 //!   reactor   R1  at 0,0  throttle 42
 //!   heatpipe  HP1 at 5,1
 //!   exchanger HX1 at 9,0
 //!   tank      T1  at 9,6  pulse 1200 0
+//!   inlet     F1  at 0,9  draws ore
+//!   gearbox   GB1 at 4,9  ratio 4
 //!
 //!   wire R1.heat -> HP1.in
 //!   wire HP1.out -> HX1.heat
 //! ```
 //!
-//! Positions are tiles, not pixels, because footprint is one of the things the
+//! Positions are tiles, not pixels, because footprint is one of the things a
 //! brief asks the player to minimise -- so where a component sits is part of
 //! the design rather than part of the drawing.
+//!
+//! `brief` is new in experiment 07 and is the only line that says what the
+//! machine is *for*. There are four of them and they ask for different things,
+//! which is the point: a component set that only ever answers one question has
+//! not been shown to be a component set at all.
 
-use super::parts::{self, Dir, Kind, PortKind};
+use super::eval::Brief;
+use super::parts::{self, Dir, Kind};
+use super::stuff::Subst;
 use crate::json::Json;
 
-/// The settings a component exposes to the player. One struct for all eight
-/// kinds: a `Tune` field that a kind does not use is simply never read, which
-/// is cheaper than eight variants of a thing that holds at most three numbers.
+/// The settings a component exposes to the player. One struct for all
+/// thirty-eight kinds: a `Tune` field that a kind does not use is simply never
+/// read, which is cheaper than thirty-eight variants of a thing that holds at
+/// most four numbers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Tune {
     /// Reactor, percent. Clamped to `MIN_THROTTLE..=100`.
     pub throttle: u32,
-    /// Tank: hold until `high`, then empty down to `low`.
+    /// Store: hold until `high`, then empty down to `low`.
     pub pulse: bool,
     pub high: u64,
     pub low: u64,
+    /// Pump and inlet: what it draws from the world.
+    pub subst: Subst,
+    /// Gearbox: positive gears down, negative gears up.
+    pub ratio: i32,
+    /// Valve: units per tick. Clutch: the threshold it engages at.
+    pub limit: u64,
+    /// Column: how many times it separates.
+    pub stages: u32,
 }
 
 impl Default for Tune {
     fn default() -> Self {
-        Tune { throttle: 100, pulse: false, high: 1200, low: 0 }
+        Tune {
+            throttle: 100,
+            pulse: false,
+            high: 1200,
+            low: 0,
+            subst: Subst::Water,
+            ratio: 4,
+            limit: 100,
+            stages: 2,
+        }
     }
 }
 
 impl Tune {
+    /// What this kind's tune would be if the player had not touched it. An
+    /// inlet's default substance is not a pump's, so the answer depends on the
+    /// kind rather than on `Default` alone.
+    pub fn default_for(kind: Kind) -> Tune {
+        let mut t = Tune::default();
+        if kind == Kind::Inlet {
+            t.subst = Subst::Ore;
+        }
+        t
+    }
+
     fn is_default_for(&self, kind: Kind) -> bool {
+        let d = Tune::default_for(kind);
         match kind {
-            Kind::Reactor => self.throttle == 100,
-            Kind::Tank => !self.pulse,
+            Kind::Reactor => self.throttle == d.throttle,
+            Kind::Tank | Kind::Drum | Kind::Flywheel | Kind::Hopper => !self.pulse,
+            Kind::Pump | Kind::Inlet => self.subst == d.subst,
+            Kind::Gearbox => self.ratio == d.ratio,
+            Kind::Valve | Kind::Clutch => self.limit == d.limit,
+            Kind::Column => self.stages == d.stages,
             _ => true,
         }
+    }
+
+    /// Whether this kind has anything to tune at all, for a palette that would
+    /// rather not offer an empty box.
+    pub fn tunable(kind: Kind) -> bool {
+        !matches!(
+            kind,
+            Kind::Burner
+                | Kind::Heater
+                | Kind::Mains
+                | Kind::Outlet
+                | Kind::Skip
+                | Kind::Radiator
+                | Kind::HeatPipe
+                | Kind::SteamPipe
+                | Kind::FluidPipe
+                | Kind::Chute
+                | Kind::Screw
+                | Kind::Shaft
+                | Kind::Cable
+                | Kind::Exchanger
+                | Kind::Preheater
+                | Kind::Condenser
+                | Kind::Furnace
+                | Kind::Turbine
+                | Kind::Generator
+                | Kind::Motor
+                | Kind::Crank
+                | Kind::Crusher
+                | Kind::Mill
+                | Kind::Separator
+                | Kind::RollMill
+                | Kind::Press
+                | Kind::Lathe
+        )
     }
 }
 
@@ -109,6 +188,9 @@ pub struct Wire {
 #[derive(Clone, Debug, Default)]
 pub struct Design {
     pub name: String,
+    /// What the machine is supposed to be for. Four of them, and the whole
+    /// reason experiment 07 has more than one component set.
+    pub brief: Brief,
     pub units: Vec<Unit>,
     pub wires: Vec<Wire>,
 }
@@ -136,7 +218,12 @@ fn fault(what: impl Into<String>, unit: Option<&str>) -> Fault {
 
 impl Design {
     pub fn empty() -> Design {
-        Design { name: "Machine".into(), units: Vec::new(), wires: Vec::new() }
+        Design {
+            name: "Machine".into(),
+            brief: Brief::Power,
+            units: Vec::new(),
+            wires: Vec::new(),
+        }
     }
 
     pub fn index_of(&self, name: &str) -> Option<usize> {
@@ -192,11 +279,41 @@ impl Design {
                     ));
                 }
             }
-            if u.kind == Kind::Tank && u.tune.pulse {
-                let cap = parts::part(Kind::Tank).ports[0].cap;
+            if u.tune.pulse {
+                let cap = parts::part(u.kind).ports[0].cap;
                 if u.tune.high > cap || u.tune.low >= u.tune.high {
                     out.push(fault(
                         format!("{} pulse {}..{} is not a range inside 0..{cap}", u.name, u.tune.low, u.tune.high),
+                        Some(&u.name),
+                    ));
+                }
+            }
+            if u.kind == Kind::Gearbox && !(-8..=8).contains(&u.tune.ratio) {
+                out.push(fault(
+                    format!("{} ratio {} is outside -8..8", u.name, u.tune.ratio),
+                    Some(&u.name),
+                ));
+            }
+            if u.kind == Kind::Column {
+                let (lo, hi) = (parts::COLUMN_MIN_STAGES, parts::COLUMN_MAX_STAGES);
+                if !(lo..=hi).contains(&u.tune.stages) {
+                    out.push(fault(
+                        format!("{} has {} stages, and a column has {lo}..{hi}", u.name, u.tune.stages),
+                        Some(&u.name),
+                    ));
+                }
+            }
+            if matches!(u.kind, Kind::Pump | Kind::Inlet) {
+                let want = parts::part(u.kind).ports[0].dom;
+                if u.tune.subst.home() != want {
+                    out.push(fault(
+                        format!(
+                            "{} is a {} inlet and {} is a {}",
+                            u.name,
+                            want,
+                            u.tune.subst,
+                            u.tune.subst.home()
+                        ),
                         Some(&u.name),
                     ));
                 }
@@ -260,30 +377,21 @@ impl Design {
                 w.from, w.from_port, w.to, w.to_port
             ));
         }
-        // The boundary before the type, because a generator's power port fails
-        // both and only one of the two answers is useful.
-        if a.external {
-            return Err(format!(
-                "{}.{} is the machine's boundary, not a socket -- electricity leaves here",
-                w.from, w.from_port
-            ));
-        }
-        if b.external {
-            return Err(format!(
-                "{}.{} is the machine's boundary, not a socket",
-                w.to, w.to_port
-            ));
-        }
-        if a.kind != b.kind {
+        // Experiment 06 refused to wire anything to or from a boundary port.
+        // Experiment 07 does not: a generator that runs a conveyor motor and
+        // exports the difference is a design, and forbidding it was an accident
+        // of having only ever had one boundary port to think about.
+        if a.dom != b.dom {
             return Err(format!(
                 "{}.{} carries {} and {}.{} takes {}",
-                w.from, w.from_port, a.kind, w.to, w.to_port, b.kind
+                w.from, w.from_port, a.dom, w.to, w.to_port, b.dom
             ));
         }
         let gap = self.units[from].gap_to(&self.units[to]);
         if gap > parts::REACH {
             return Err(format!(
-                "{} and {} are {gap} tiles apart and a connection reaches {} --                  move them together, or put a pipe between them",
+                "{} and {} are {gap} tiles apart and a connection reaches {} -- \
+                 move them together, or put a pipe between them",
                 w.from, w.to, parts::REACH
             ));
         }
@@ -329,6 +437,12 @@ impl Design {
                 d.name = rest.trim_matches('"').to_string();
                 continue;
             }
+            if head == "brief" {
+                let rest = line["brief".len()..].trim();
+                d.brief = Brief::by_tag(rest)
+                    .ok_or_else(|| at(format!("`{rest}` is not one of the four briefs")))?;
+                continue;
+            }
             if head == "wire" {
                 let rest: Vec<&str> = w.collect();
                 let joined = rest.join(" ");
@@ -346,9 +460,29 @@ impl Design {
                 .next()
                 .ok_or_else(|| at("a component needs a name".into()))?
                 .to_string();
-            let mut u = Unit { name, kind, x: 0, y: 0, tune: Tune::default() };
+            let mut u = Unit { name, kind, x: 0, y: 0, tune: Tune::default_for(kind) };
             while let Some(word) = w.next() {
                 match word {
+                    "draws" => {
+                        let v = w.next().ok_or_else(|| at("`draws` needs a substance".into()))?;
+                        u.tune.subst = Subst::by_tag(v)
+                            .ok_or_else(|| at(format!("`{v}` is not a substance")))?;
+                    }
+                    "ratio" => {
+                        let v = w.next().ok_or_else(|| at("`ratio` needs a number".into()))?;
+                        u.tune.ratio =
+                            v.parse().map_err(|_| at(format!("`{v}` is not a ratio")))?;
+                    }
+                    "limit" => {
+                        let v = w.next().ok_or_else(|| at("`limit` needs a number".into()))?;
+                        u.tune.limit =
+                            v.parse().map_err(|_| at(format!("`{v}` is not a limit")))?;
+                    }
+                    "stages" => {
+                        let v = w.next().ok_or_else(|| at("`stages` needs a number".into()))?;
+                        u.tune.stages =
+                            v.parse().map_err(|_| at(format!("`{v}` is not a stage count")))?;
+                    }
                     "at" => {
                         let pos = w.next().ok_or_else(|| at("`at` needs x,y".into()))?;
                         let (xs, ys) = pos
@@ -380,7 +514,8 @@ impl Design {
     }
 
     pub fn emit(&self) -> String {
-        let mut s = format!("machine \"{}\"\n\n", self.name);
+        let mut s = format!("machine \"{}\"\n", self.name);
+        s.push_str(&format!("brief {}\n\n", self.brief.tag()));
         let wide = self.units.iter().map(|u| u.name.len()).max().unwrap_or(4).max(4);
         for u in &self.units {
             s.push_str(&format!(
@@ -394,9 +529,21 @@ impl Design {
             if !u.tune.is_default_for(u.kind) {
                 match u.kind {
                     Kind::Reactor => s.push_str(&format!("  throttle {}", u.tune.throttle)),
-                    Kind::Tank => s.push_str(&format!("  pulse {} {}", u.tune.high, u.tune.low)),
+                    Kind::Pump | Kind::Inlet => {
+                        s.push_str(&format!("  draws {}", u.tune.subst.tag()))
+                    }
+                    Kind::Gearbox => s.push_str(&format!("  ratio {}", u.tune.ratio)),
+                    Kind::Valve | Kind::Clutch => {
+                        s.push_str(&format!("  limit {}", u.tune.limit))
+                    }
+                    Kind::Column => s.push_str(&format!("  stages {}", u.tune.stages)),
                     _ => {}
                 }
+            }
+            // Pulse is not exclusive with the tune above: only the four stores
+            // have it, and none of them have anything else.
+            if u.tune.pulse {
+                s.push_str(&format!("  pulse {} {}", u.tune.high, u.tune.low));
             }
             s.push('\n');
         }
@@ -417,6 +564,7 @@ impl Design {
     pub fn to_json(&self) -> Json {
         Json::obj()
             .set("name", self.name.clone())
+            .set("brief", self.brief.tag())
             .set(
                 "units",
                 Json::Arr(
@@ -432,6 +580,10 @@ impl Design {
                                 .set("pulse", u.tune.pulse)
                                 .set("high", u.tune.high as i64)
                                 .set("low", u.tune.low as i64)
+                                .set("draws", u.tune.subst.tag())
+                                .set("ratio", u.tune.ratio as i64)
+                                .set("limit", u.tune.limit as i64)
+                                .set("stages", u.tune.stages as i64)
                         })
                         .collect(),
                 ),
@@ -458,10 +610,13 @@ impl Design {
         if let Some(n) = j.at("name").as_str() {
             d.name = n.to_string();
         }
+        if let Some(b) = j.at("brief").as_str() {
+            d.brief = Brief::by_tag(b).ok_or_else(|| format!("`{b}` is not a brief"))?;
+        }
         for u in j.at("units").as_arr() {
             let tag = u.at("kind").as_str().unwrap_or("");
             let kind = parts::by_tag(tag).ok_or_else(|| format!("`{tag}` is not a component"))?;
-            let mut tune = Tune::default();
+            let mut tune = Tune::default_for(kind);
             if let Some(v) = u.at("throttle").as_u64() {
                 tune.throttle = v as u32;
             }
@@ -471,6 +626,19 @@ impl Design {
             }
             if let Some(v) = u.at("low").as_u64() {
                 tune.low = v;
+            }
+            if let Some(v) = u.at("draws").as_str() {
+                tune.subst =
+                    Subst::by_tag(v).ok_or_else(|| format!("`{v}` is not a substance"))?;
+            }
+            if let Some(v) = u.at("ratio").as_i128() {
+                tune.ratio = v as i32;
+            }
+            if let Some(v) = u.at("limit").as_u64() {
+                tune.limit = v;
+            }
+            if let Some(v) = u.at("stages").as_u64() {
+                tune.stages = v as u32;
             }
             d.units.push(Unit {
                 name: u.at("name").as_str().unwrap_or("").to_string(),
@@ -503,8 +671,11 @@ impl Design {
                         .set("kind", p.tag)
                         .set("title", p.title)
                         .set("blurb", p.blurb)
+                        .set("family", p.family.tag())
                         .set("w", p.w as i64)
                         .set("h", p.h as i64)
+                        .set("tunable", Tune::tunable(k))
+                        .set("recipe", recipe_json(k))
                         .set(
                             "ports",
                             Json::Arr(
@@ -513,7 +684,7 @@ impl Design {
                                     .map(|q| {
                                         Json::obj()
                                             .set("name", q.name)
-                                            .set("type", q.kind.tag())
+                                            .set("type", q.dom.tag())
                                             .set("dir", if q.dir == Dir::In { "in" } else { "out" })
                                             .set("rate", q.rate as i64)
                                             .set("cap", q.cap as i64)
@@ -528,24 +699,69 @@ impl Design {
     }
 }
 
+/// A component's transformation, in words, for a palette that would rather
+/// explain a press than make the player place one to find out.
+fn recipe_json(kind: Kind) -> Json {
+    let part = parts::part(kind);
+    let Some(r) = part.recipe else {
+        return Json::Null;
+    };
+    let draws: Vec<Json> = r
+        .draws
+        .iter()
+        .map(|d| {
+            Json::obj()
+                .set("port", part.ports[d.port].name)
+                .set("qty", (d.qty * r.rate) as i64)
+                .set(
+                    "needs",
+                    Json::arr(d.need.iter().map(|n| n.wants()).collect::<Vec<_>>()),
+                )
+        })
+        .collect();
+    let makes: Vec<Json> = r
+        .makes
+        .iter()
+        .map(|m| {
+            Json::obj()
+                .set("port", part.ports[m.port].name)
+                .set("qty", (m.qty * r.rate) as i64)
+                .set(
+                    "does",
+                    Json::arr(m.eff.iter().map(|e| e.said()).collect::<Vec<_>>()),
+                )
+        })
+        .collect();
+    Json::obj()
+        .set("draws", Json::Arr(draws))
+        .set("makes", Json::Arr(makes))
+        .set("rate", r.rate as i64)
+}
+
 fn split_port(s: &str) -> Result<(String, String), String> {
     s.split_once('.')
         .map(|(a, b)| (a.trim().to_string(), b.trim().to_string()))
         .ok_or_else(|| format!("`{s}` is not `component.port`"))
 }
 
-/// Which port types exist, for a client that wants to colour them.
+/// Which domains exist, for a client that wants to colour them.
 pub fn port_kinds() -> Json {
-    Json::arr(
-        [
-            PortKind::Heat,
-            PortKind::Fluid,
-            PortKind::Steam,
-            PortKind::Rotary,
-            PortKind::Electrical,
-        ]
-        .iter()
-        .map(|k| k.tag())
-        .collect::<Vec<_>>(),
+    Json::arr(super::stuff::DOMAINS.iter().map(|k| k.tag()).collect::<Vec<_>>())
+}
+
+/// The substances a source can be set to draw, and what they are called.
+pub fn substances() -> Json {
+    Json::Arr(
+        super::stuff::SOURCES
+            .iter()
+            .map(|s| {
+                Json::obj()
+                    .set("tag", s.tag())
+                    .set("title", s.title())
+                    .set("domain", s.home().tag())
+                    .set("hardness", s.hardness() as i64)
+            })
+            .collect(),
     )
 }
+

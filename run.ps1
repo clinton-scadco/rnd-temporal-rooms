@@ -11,11 +11,15 @@ param(
     [switch]$Test,
     [switch]$BuildOnly,
     [switch]$Serve,
-    # Experiment 06's machine designer, which is a separate binary with a
-    # separate front end. Everything after the switch is passed straight to it:
-    #   -Machine                       every design in ./designs, judged
+    # Experiments 06 and 07: the machine designer, which is a separate binary
+    # with a separate front end. Everything after the switch is passed straight
+    # to it:
+    #   -Machine                       every design in ./designs, judged by brief
     #   -Machine serve                 the designer, in a browser
     #   -Machine run designs/x.machine
+    #   -Machine why designs/x.machine what every component is doing, and why
+    #   -Machine parts [family]        the vocabulary, with its constraints
+    #   -Machine reuse                 which primitives earned their place
     #   -Machine check                 the front end, against a live server
     [switch]$Machine,
     [string]$Play,

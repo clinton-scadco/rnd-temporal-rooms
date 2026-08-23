@@ -1,0 +1,45 @@
+# The fourth brief: iron in, gears out, and the recipe is still `Iron -> Gear`.
+#
+# Everything interesting is in the machine rather than the recipe. A rolling
+# mill will not touch cold metal, so there is a furnace; a furnace wants a grade
+# of heat a burner can just about reach, so there is a burner and a coal inlet;
+# a press eats strokes rather than rotation, so there is a crank. None of that
+# is written down anywhere as "the gear recipe". It is four constraints, each
+# on the component that has it.
+#
+# Compare with 09-machining, which makes the same gears from the same billet
+# with no furnace, no burner and no press at all.
+
+machine "Stamping Line"
+brief gears
+
+inlet     I1  at 0,0   draws iron
+inlet     I2  at 0,4   draws coal
+furnace   F1  at 4,0
+burner    B1  at 4,5
+rollmill  R1  at 10,0
+press     P1  at 15,0
+outlet    O1  at 20,0
+
+crank     CR1 at 15,5
+shaft     SH1 at 10,4
+motor     MO1 at 10,7
+motor     MO2 at 13,7
+cable     CB1 at 7,10
+mains     M1  at 4,10
+
+wire I1.out -> F1.in
+wire I2.out -> B1.fuel
+wire B1.heat -> F1.heat
+wire F1.out -> R1.in
+wire R1.out -> P1.in
+wire P1.out -> O1.solid
+
+wire M1.power -> CB1.in
+wire CB1.out -> MO1.power
+wire CB1.out -> MO2.power
+wire MO1.rotary -> SH1.in
+wire MO2.rotary -> SH1.in
+wire SH1.out -> R1.drive
+wire SH1.out -> CR1.drive
+wire CR1.stroke -> P1.drive

@@ -14,11 +14,15 @@
   --signal:  #E0A05C;
   --bad:     #E06C6C;
 
-  /* one per port type -- these are the only colours the canvas uses for flow */
+  /* one per domain -- these are the only colours the canvas uses for flow.
+     `steam` became `gas` in experiment 07, because steam is water in the gas
+     domain at a temperature rather than a kind of connection. */
   --heat:       #E0703C;
   --fluid:      #56A8E8;
-  --steam:      #BFD6DE;
+  --gas:        #BFD6DE;
+  --material:   #8FB07A;
   --rotary:     #C98BD6;
+  --mech:       #D68B8B;
   --electrical: #E8C860;
 
   --mono: "Cascadia Mono", "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
@@ -37,7 +41,7 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-body { display: grid; grid-template-rows: auto auto auto 1fr auto; }
+body { display: grid; grid-template-rows: auto auto auto auto 1fr auto; }
 
 button, select, input:not([type=checkbox]):not([type=range]) {
   font: inherit;
@@ -75,6 +79,47 @@ button:disabled { opacity: .4; cursor: default; }
   color: var(--signal);
   min-width: 11ch; text-align: right;
 }
+
+/* The palette is grouped by family now that there are thirty-eight of them:
+   a flat list of thirty-eight buttons is a list nobody reads. */
+.family {
+  font: 10px/1 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: .55rem 0 .2rem;
+}
+.family:first-child { margin-top: 0; }
+
+/* What a wire is carrying, wherever it is named in words. */
+.stuff {
+  font: 10px var(--mono);
+  color: var(--muted);
+  display: block;
+}
+.chip {
+  display: inline-block;
+  font: 10px var(--mono);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0 .3em;
+  margin: 0 .2em .2em 0;
+  color: var(--muted);
+}
+.chip.on { color: var(--accent); border-color: var(--accent-2); }
+
+#brief {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .25rem .6rem;
+  border-bottom: 1px solid var(--rule);
+  background: var(--sunk);
+  font-size: 12px;
+}
+#brief b { font-size: 12px; }
+#brief .goal { color: var(--muted); flex: 1; }
+#brief select { font: 12px var(--ui); }
 
 /* ------------------------------------------------------------ scoreboard */
 

@@ -1,0 +1,43 @@
+# The stamping line with one motor instead of two, which is not half a stamping
+# line.
+#
+# One motor makes 54 rotary and the shaft splits it fairly: 27 to the rolling
+# mill, 27 to the crank. The mill is happy to run slowly and does. The crank is
+# happy to run slowly and does, at 23 strokes a tick. The press is not -- a
+# press fed half the strokes it needs does not make half a gear, it fails to
+# close -- and a stroke that arrives unused does not queue for later. It has
+# happened.
+#
+# So the press waits for the crank's own ram to gather past thirty, fires, and
+# waits again: 18 gears a tick against 08-stamping's 49, on half the motors,
+# with 15 heat a tick of strokes falling on nothing. Half the drive bought a
+# third of the gears and missed the brief.
+
+machine "One Motor"
+brief gears
+
+inlet     I1  at 0,0   draws iron
+inlet     I2  at 0,4   draws coal
+furnace   F1  at 4,0
+burner    B1  at 4,5
+rollmill  R1  at 10,0
+press     P1  at 15,0
+outlet    O1  at 20,0
+
+crank     CR1 at 15,5
+shaft     SH1 at 10,4
+motor     MO1 at 10,7
+mains     M1  at 10,10
+
+wire I1.out -> F1.in
+wire I2.out -> B1.fuel
+wire B1.heat -> F1.heat
+wire F1.out -> R1.in
+wire R1.out -> P1.in
+wire P1.out -> O1.solid
+
+wire M1.power -> MO1.power
+wire MO1.rotary -> SH1.in
+wire SH1.out -> R1.drive
+wire SH1.out -> CR1.drive
+wire CR1.stroke -> P1.drive
