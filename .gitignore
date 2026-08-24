@@ -2,3 +2,9 @@
 **/*.rs.bk
 *.pdb
 out.txt
+
+# Experiment 08 writes its renders and bakes wherever you ask it to, and the
+# quick start asks for the repository root.
+*.png
+*.obj
+*.mtl

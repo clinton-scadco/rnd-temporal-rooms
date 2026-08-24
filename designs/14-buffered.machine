@@ -1,0 +1,45 @@
+# Two gas buffers that earn nothing, filling quietly and emptying hard.
+#
+# This is `03-compact` with a tank in each steam line, and it makes exactly the
+# same 108 MW on the same water for two more vessels and eight more tiles. The
+# buffers are genuinely working -- the inspector will show them cycling between
+# 200 and 1600 -- and it changes nothing, because a turbine's intake port is
+# already a buffer and the tank is only ever filling in what the port would
+# have held anyway.
+#
+# It is here because experiment 07 ended by saying exactly that about the whole
+# store family, and because experiment 08 gives the sentence a picture: two
+# tall vessels in the middle of a plant, doing nothing, in a silhouette you can
+# recognise from the far end of the yard.
+
+machine "Buffered"
+brief power
+
+reactor   R1  at 0,0   throttle 40
+
+exchanger HX1 at 5,0
+exchanger HX2 at 5,4
+
+tank      TK1 at 9,0   pulse 1600 200
+tank      TK2 at 9,4   pulse 1600 200
+
+turbine   T1  at 13,0
+turbine   T2  at 13,4
+
+generator G1  at 17,0
+generator G2  at 17,4
+
+pump      W1  at 0,5
+
+wire R1.heat -> HX1.heat
+wire R1.heat -> HX2.heat
+wire W1.water -> HX1.water
+wire W1.water -> HX2.water
+
+wire HX1.steam -> TK1.in
+wire HX2.steam -> TK2.in
+wire TK1.out -> T1.steam
+wire TK2.out -> T2.steam
+
+wire T1.rotary -> G1.rotary
+wire T2.rotary -> G2.rotary

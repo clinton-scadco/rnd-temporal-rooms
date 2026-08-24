@@ -1,0 +1,36 @@
+# The plant that pays six percent to put its generator thirty metres from its
+# reactor.
+#
+# Three heat pipes in series, two percent lost at each, and the throttle turned
+# down to 30% so that what arrives is what one exchanger can actually boil.
+# Every design in experiment 06 asked what a plant should contain; this one
+# asks where it should be, which is a question the drawing could not previously
+# tell you the answer to.
+#
+# In experiment 08 it is the design that shows what routing looks like when
+# there is somewhere to route to: a lagged main on supports, the length of the
+# plot, four metres up.
+
+machine "Long Reach"
+brief power
+
+reactor   R1  at 0,0   throttle 30
+
+heatpipe  HP1 at 5,1
+heatpipe  HP2 at 11,1
+heatpipe  HP3 at 17,1
+
+exchanger HX1 at 23,0
+turbine   T1  at 27,0
+generator G1  at 31,0
+
+pump      W1  at 23,4
+
+wire R1.heat -> HP1.in
+wire HP1.out -> HP2.in
+wire HP2.out -> HP3.in
+wire HP3.out -> HX1.heat
+
+wire W1.water -> HX1.water
+wire HX1.steam -> T1.steam
+wire T1.rotary -> G1.rotary

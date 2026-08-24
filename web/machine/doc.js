@@ -250,6 +250,13 @@ export async function verify(tick) {
   return post(`/api/verify?t=${Math.max(1, Math.round(tick))}`);
 }
 
+/// Experiment 08. The same document, to a pass that has never heard of a tick:
+/// nothing about the answer depends on `state.tick`, and nothing about
+/// `state.snapshot` depends on this.
+export async function form(style, seed) {
+  return post(`/api/form?style=${encodeURIComponent(style)}&seed=${seed | 0}`);
+}
+
 function post(url) {
   return fetch(url, {
     method: 'POST',

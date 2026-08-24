@@ -1,4 +1,5 @@
-//! # Experiments 06 and 07: the machine designer, and the construction kit
+//! # Experiments 06, 07 and 08: the machine designer, the construction kit,
+//! # and the plant it builds
 //!
 //! An isolated prototype, deliberately not wired into anything else. The
 //! question it exists to answer is not about scale -- that battle has already
@@ -29,7 +30,21 @@
 //!   eval     what it is worth, against whichever of four briefs it claims
 //!   snap     state(t) in the shape a renderer needs, and why things are stopped
 //!   web      all of the above, over a socket, to a canvas
+//!   form     experiment 08: the same document, built as a plant
 //! ```
+//!
+//! `form` is downstream of every other module here and upstream of none of
+//! them, which is not a convention but the module graph:
+//!
+//! ```text
+//!   RenderGeometry = Generate(MachineDesign, VisualSeed)
+//! ```
+//!
+//! Nothing in `sim`, `orbit`, `eval` or `snap` mentions it, so no amount of
+//! changing what a plant looks like can change what it does. That is the whole
+//! architectural claim of experiment 08, and `tests/form.rs` checks it from the
+//! other end by rebuilding every design three ways at four seeds and asserting
+//! the verdict never moves.
 //!
 //! ## What is deliberately absent
 //!
@@ -66,6 +81,7 @@
 
 pub mod design;
 pub mod eval;
+pub mod form;
 pub mod orbit;
 pub mod parts;
 pub mod sim;

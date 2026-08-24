@@ -12,6 +12,9 @@
 //!   machine verify FILE [T...]     the compiled answer against a straight run
 //!   machine parts [FAMILY]         the vocabulary: ports, recipes, constraints
 //!   machine reuse                  which primitives earned their place
+//!   machine form FILE [--obj P]    experiment 08: the design, built as a plant
+//!   machine forms                  every design built, counted, and hashed
+//!   machine kit [--png P]          the asset library: one of everything
 //!   machine serve [--port N]       the designer
 //! ```
 //!
@@ -23,6 +26,7 @@
 //! countable claim, so it is counted.
 
 use temporal_rooms::machine::design::Design;
+use temporal_rooms::machine::form::{self, Style};
 use temporal_rooms::machine::parts::{self, Family};
 use temporal_rooms::machine::sim::Tick;
 use temporal_rooms::machine::{eval, orbit, snap, web};
@@ -48,13 +52,16 @@ fn main() {
         "compile" => compile(rest),
         "verify" => verify(rest),
         "parts" => catalogue(rest),
+        "form" => form_one(rest),
+        "forms" => form_all(rest),
+        "kit" => kit_sheet(rest),
         "reuse" => reuse(),
         "all" => all(),
         other if other.ends_with(".machine") => run(&args),
         other => {
             eprintln!(
                 "`{other}` is not a command. Try `run`, `why`, `compile`, `verify`, \
-                 `parts`, `reuse` or `serve`."
+                 `parts`, `reuse`, `form`, `forms` or `serve`."
             );
             2
         }
@@ -472,6 +479,217 @@ fn reuse() -> i32 {
         println!("  capacities, not more components.");
     }
     0
+}
+
+// ------------------------------------------------- experiment 08: the form
+
+/// One design, built.
+///
+/// The interesting column is not the triangle count. It is `draw calls`: what
+/// the whole plant costs to put on a screen, which stays in the tens however
+/// many thousand pieces are in it, because a plant is twenty-five meshes
+/// repeated rather than a thousand objects modelled.
+fn form_one(args: &[String]) -> i32 {
+    let (path, d) = match load(args) {
+        Ok(v) => v,
+        Err(e) => return bail(e),
+    };
+    let ask = form::Ask {
+        style: flag(args, "--style").and_then(Style::by_tag).unwrap_or_default(),
+        world: flag(args, "--seed").and_then(|s| s.parse().ok()).unwrap_or(0),
+    };
+    let scene = match form::build(&d, ask) {
+        Ok(s) => s,
+        Err(e) => return bail(format!("{path}: {e}")),
+    };
+    let s = scene.stats();
+    println!("{path}\n");
+    println!("  {:<16}{}", "machine", scene.name);
+    println!("  {:<16}{} on {}x{}m", "style", scene.style, s.size.x / 1000, s.size.z / 1000);
+    println!("  {:<16}{}", "enclosure", scene.shell.tag());
+    println!("  {:<16}{:016x}", "visual seed", scene.seed.whole);
+    println!("  {:<16}{:016x}", "scene hash", scene.hash());
+    println!();
+    println!("  {:<16}{:>8}", "components", s.units);
+    println!(
+        "  {:<16}{:>8}   {} m of run, {} bends, {} supports",
+        "connections", s.runs, s.run_mm / 1000, s.bends, s.supports
+    );
+    println!();
+    println!("  {:<16}{:>8}", "pieces", s.pieces);
+    println!("  {:<16}{:>8}   of {}", "meshes used", s.meshes, form::kit::MESHES.len());
+    println!("  {:<16}{:>8}   one per mesh and material", "draw calls", s.batches);
+    println!("  {:<16}{:>8}", "triangles", s.tris);
+    println!();
+    println!(
+        "  {:<16}{:>8} close  {:>6} medium  {:>6} far  {:>6} very far",
+        "by distance", s.close, s.medium, s.far, 1
+    );
+
+    // What the domains ended up looking like, which is the primary
+    // experiment's actual question: can a stranger tell them apart?
+    println!("\n  {:<12}{:>6}{:>8}{:>7}  {}", "domain", "runs", "metres", "bends", "treatment");
+    println!("  {}", "-".repeat(60));
+    let mut doms: Vec<&form::route::Run> = scene.routes.iter().collect();
+    doms.sort_by_key(|r| r.dom.tag());
+    let mut i = 0;
+    while i < doms.len() {
+        let dom = doms[i].dom;
+        let mine: Vec<&&form::route::Run> = doms.iter().filter(|r| r.dom == dom).collect();
+        println!(
+            "  {:<12}{:>6}{:>8}{:>7}  {}",
+            dom.tag(),
+            mine.len(),
+            mine.iter().map(|r| r.length as i64).sum::<i64>() / 1000,
+            mine.iter().map(|r| r.bends).sum::<usize>(),
+            treatment(dom)
+        );
+        i += mine.len();
+    }
+
+    if let Some(out) = flag(args, "--png") {
+        let eye = form::shot::Eye {
+            yaw: flag(args, "--yaw").and_then(|s| s.parse().ok()).unwrap_or(0.72),
+            pitch: flag(args, "--pitch").and_then(|s| s.parse().ok()).unwrap_or(0.34),
+            zoom: flag(args, "--zoom").and_then(|s| s.parse().ok()).unwrap_or(1.0),
+        };
+        let lod: u8 = flag(args, "--lod").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let (w, h) = (1100usize, 700usize);
+        let img = form::shot::render(&scene, w, h, eye, lod);
+        if let Err(e) = std::fs::write(out, img.png()) {
+            return bail(format!("cannot write {out}: {e}"));
+        }
+        println!("\n  wrote {out}  ({w}x{h})");
+    }
+
+    if let Some(out) = flag(args, "--obj") {
+        let (obj, mtl) = form::obj::write(&scene);
+        let mtlpath = std::path::Path::new(out).with_file_name("machine.mtl");
+        if let Err(e) = std::fs::write(out, obj) {
+            return bail(format!("cannot write {out}: {e}"));
+        }
+        let _ = std::fs::write(&mtlpath, mtl);
+        println!("\n  wrote {out} and {}", mtlpath.display());
+    }
+    0
+}
+
+/// The asset library, listed -- and, with `--png`, one of everything on a
+/// grid, which is how a mesh with a bad seam gets found before it is
+/// multiplied by four hundred.
+fn kit_sheet(args: &[String]) -> i32 {
+    println!("{:<10} {:>7} {:>7}", "mesh", "verts", "tris");
+    println!("{}", "-".repeat(28));
+    let (mut v, mut t) = (0, 0);
+    for m in form::kit::MESHES {
+        let g = form::kit::geom(m);
+        v += g.verts();
+        t += g.tris();
+        println!("{:<10} {:>7} {:>7}", m.tag(), g.verts(), g.tris());
+    }
+    println!("{}", "-".repeat(28));
+    println!("{:<10} {:>7} {:>7}", form::kit::MESHES.len(), v, t);
+    println!("\nmaterials  {}", form::kit::MATS.iter().map(|m| m.tag()).collect::<Vec<_>>().join("  "));
+
+    if let Some(out) = flag(args, "--png") {
+        let s = form::sheet();
+        let eye = form::shot::Eye {
+            yaw: flag(args, "--yaw").and_then(|x| x.parse().ok()).unwrap_or(0.5),
+            pitch: flag(args, "--pitch").and_then(|x| x.parse().ok()).unwrap_or(0.5),
+            zoom: flag(args, "--zoom").and_then(|x| x.parse().ok()).unwrap_or(0.8),
+        };
+        let img = form::shot::render(&s, 1100, 700, eye, 0);
+        if let Err(e) = std::fs::write(out, img.png()) {
+            return bail(format!("cannot write {out}: {e}"));
+        }
+        println!("\n  wrote {out}");
+    }
+    0
+}
+
+fn treatment(d: temporal_rooms::machine::stuff::Domain) -> &'static str {
+    use temporal_rooms::machine::stuff::Domain::*;
+    match d {
+        Fluid => "painted pipe, flanged",
+        Gas => "steel pipe, banded, on the rack",
+        Heat => "lagged pipe, banded, on the rack",
+        Rotary => "bright shaft, coupled, straight",
+        Mech => "bright rod, no bends at all",
+        Electrical => "galvanised conduit, clipped",
+        Material => "square chute, wide",
+    }
+}
+
+/// Every design, built twice.
+///
+/// Twice, because section 7's promise is that the second build *is* the first
+/// one. The `same` column is that promise, checked against every design in the
+/// repository every time anybody runs this.
+fn form_all(args: &[String]) -> i32 {
+    let style = flag(args, "--style").and_then(Style::by_tag).unwrap_or_default();
+    let world: u64 = flag(args, "--seed").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let paths = design_paths();
+    if paths.is_empty() {
+        eprintln!("no designs in ./designs");
+        return 1;
+    }
+    println!(
+        "{:<26} {:>5} {:>5} {:>7} {:>6} {:>7} {:>9} {:>9}  {:<9} {}",
+        "design", "parts", "runs", "pieces", "calls", "tris", "plot", "hash", "shell", "same"
+    );
+    println!("{}", "-".repeat(104));
+    let mut worst = 0;
+    let mut pieces = 0usize;
+    let mut calls = 0usize;
+    for path in &paths {
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let d = match Design::parse(&src) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("{:<26} {e}", short(path));
+                worst = 1;
+                continue;
+            }
+        };
+        let ask = form::Ask { style, world };
+        let a = match form::build(&d, ask) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("{:<26} {e}", short(path));
+                worst = 1;
+                continue;
+            }
+        };
+        let b = form::build(&d, ask).expect("it built once already");
+        let s = a.stats();
+        pieces += s.pieces;
+        calls += s.batches;
+        println!(
+            "{:<26} {:>5} {:>5} {:>7} {:>6} {:>7} {:>9} {:>9}  {:<9} {}",
+            short(path),
+            s.units,
+            s.runs,
+            s.pieces,
+            s.batches,
+            s.tris,
+            format!("{}x{}m", s.size.x / 1000, s.size.z / 1000),
+            format!("{:08x}", a.hash() as u32),
+            a.shell.tag(),
+            if a.hash() == b.hash() { "yes" } else { "NO" }
+        );
+        if a.hash() != b.hash() {
+            worst = 1;
+        }
+    }
+    println!(
+        "\n  {} pieces across {} designs, drawn in {} calls: {} meshes and {} materials, arranged.",
+        commas(pieces as u128),
+        paths.len(),
+        commas(calls as u128),
+        form::kit::MESHES.len(),
+        form::kit::MATS.len()
+    );
+    worst
 }
 
 fn design_paths() -> Vec<String> {

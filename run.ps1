@@ -21,6 +21,10 @@ param(
     #   -Machine parts [family]        the vocabulary, with its constraints
     #   -Machine reuse                 which primitives earned their place
     #   -Machine check                 the front end, against a live server
+    # Experiment 08 turns the same document into a plant:
+    #   -Machine form designs/x.machine [--png shot.png] [--obj plant.obj]
+    #   -Machine forms                 every design built, counted and hashed
+    #   -Machine kit [--png sheet.png] the asset library, one of everything
     [switch]$Machine,
     [string]$Play,
     # PowerShell binds anything starting with `-` to a parameter, so the

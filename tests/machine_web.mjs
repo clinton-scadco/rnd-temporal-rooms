@@ -155,6 +155,7 @@ for (const [url, file] of [
   ['/canvas.js', 'canvas.js'],
   ['/render.js', 'render.js'],
   ['/panels.js', 'panels.js'],
+  ['/form.js', 'form.js'],
 ]) {
   const served = await fetch(base + url).then(r => r.text());
   const onDisk = readFileSync(join(web, file), 'utf8');
@@ -466,6 +467,107 @@ const far = await fetch(base + '/api/state?t=10', {
   }),
 }).then(r => r.json());
 ok(!far.ok && /tiles apart/.test(far.error), 'the server refuses it too');
+
+// Hiding, which sounds too small to test and was not.
+//
+// `[hidden]` is `display: none` in the user agent's stylesheet, so any author
+// rule that sets `display` on the same element beats it and the element never
+// goes away. That put experiment 08's canvas invisibly on top of experiment
+// 06's, where it ate every drag and every wheel event aimed at the plan --
+// which is a bug with no error message, no console output and no visible
+// symptom except that the tool stops working.
+console.log('hiding');
+{
+  const css = readFileSync(join(web, 'machine.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map(m => ({ sel: m[1].trim(), body: m[2] }));
+  // Everything the front end ever hides by setting `.hidden`.
+  const hides = [...readFileSync(join(web, 'app.js'), 'utf8').matchAll(/#([a-z]+)['"]\)\.hidden/g)]
+    .map(m => m[1]);
+  ok(hides.length >= 4, `${hides.length} elements are hidden by the app`);
+  for (const id of new Set(hides)) {
+    const sets = rules.filter(
+      r => r.sel.split(',').some(s => s.trim() === `#${id}`) && /(^|[;{\s])display\s*:/.test(r.body),
+    );
+    if (!sets.length) { ok(true, `#${id} does not fight the hidden attribute`); continue; }
+    const beaten = rules.some(
+      r => r.sel.split(',').some(s => s.trim() === `#${id}[hidden]`) && /display\s*:\s*none/.test(r.body),
+    );
+    ok(beaten, `#${id} sets display, so it needs a #${id}[hidden] rule to stay hideable`);
+  }
+}
+
+// Experiment 08. The plant is drawn by WebGL, which node has none of, so what
+// can be checked from here is the part that would actually break it: the shape
+// of the two answers the renderer reads, and the arithmetic it does to them.
+console.log('the form');
+{
+  const kit = await fetch(base + '/api/kit').then(r => r.json());
+  ok(kit.ok && kit.meshes.length >= 20 && kit.meshes.length <= 30,
+     `${kit.meshes.length} canonical meshes`);
+  ok(kit.mats.length === 8, 'eight materials for a whole plant');
+  for (const m of kit.meshes) {
+    ok(m.pos.length % 3 === 0 && m.nrm.length === m.pos.length,
+       `${m.tag}: a normal per vertex`);
+    ok(m.idx.length === m.tris * 3 && m.idx.every(i => i * 3 < m.pos.length),
+       `${m.tag}: ${m.tris} triangles, all of them indexing a vertex`);
+  }
+
+  const src = readFileSync(join(here, '..', 'designs', '03-compact.machine'), 'utf8');
+  const opened = await fetch(base + '/api/open', { method: 'POST', body: src }).then(r => r.json());
+  ok(opened.ok, 'opened a design to build');
+
+  const built = await fetch(base + '/api/form?style=works&seed=3', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design: opened.design }),
+  }).then(r => r.json());
+  ok(built.ok, `built it (${built.error || ''})`);
+  ok(/^[0-9a-f]{16}$/.test(built.hash), 'and said what it built, in one number');
+
+  // Twice, because the whole point is that it is a function.
+  const again = await fetch(base + '/api/form?style=works&seed=3', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design: opened.design }),
+  }).then(r => r.json());
+  ok(again.hash === built.hash, 'the same request builds the same plant');
+
+  const known = new Set(kit.meshes.map(m => m.tag));
+  let instances = 0;
+  for (const b of built.batches) {
+    ok(known.has(b.mesh), `batch of ${b.mesh} is in the library`);
+    ok(b.inst.length === b.n * 12, `${b.mesh}: twelve floats an instance`);
+    ok(b.keep[0] === b.n && b.keep[1] <= b.keep[0] && b.keep[2] <= b.keep[1],
+       `${b.mesh}: detail is a prefix`);
+    ok(b.inst.every(Number.isFinite), `${b.mesh}: no instance is a NaN`);
+    instances += b.n;
+  }
+  ok(instances === built.stats.pieces, 'every piece arrived');
+  ok(built.batches.length < instances / 8, 'and they arrived as instances, not objects');
+  ok(built.owners.length > 0 && built.owners.every(o => o.name && o.class),
+     'every piece knows what it belongs to');
+
+  // The renderer's own arithmetic: the frame it places pieces in has to be the
+  // one Rust routed them with, or elbows point into space. This is `basis()`
+  // out of the vertex shader, in JavaScript, checked against the same six
+  // directions the router uses.
+  const basis = (d) => {
+    const l = Math.hypot(...d) || 1;
+    const up = d.map(v => v / l);
+    const rf = Math.abs(up[1]) > 0.99 ? [0, 0, 1] : [0, 1, 0];
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const norm = v => { const n = Math.hypot(...v) || 1; return v.map(x => x / n); };
+    const right = norm(cross(up, rf));
+    return { right, up, fwd: cross(right, up) };
+  };
+  const b = basis([0, 1, 0]);
+  ok(b.right.join() === '1,0,0' && b.fwd.join() === '0,0,1',
+     'a piece pointing up is not turned at all');
+  for (const d of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
+    ok(basis(d).fwd.join() === '0,1,0', `a rail along ${d} stands up`);
+  }
+}
 
 // Every module at least parses in a real module loader.
 console.log('modules');

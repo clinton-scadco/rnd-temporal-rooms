@@ -1,0 +1,36 @@
+# Two turbines onto one line shaft, and one generator that cannot eat them.
+#
+# The shaft carries 400 rotary and loses one percent; the generator takes 70 a
+# tick and not one more, so half of what the second turbine makes turns the
+# shaft and goes nowhere. The fix is a second generator, and the reason to
+# build this first is that the shaft makes the mistake *visible*: one straight
+# bright line down the middle of the plant with a coupling in it, feeding a
+# machine plainly too small for it.
+
+machine "One Shaft"
+brief power
+
+reactor   R1  at 0,0   throttle 50
+
+exchanger HX1 at 5,0
+exchanger HX2 at 5,4
+
+turbine   T1  at 9,0
+turbine   T2  at 9,4
+
+shaft     SH1 at 13,2
+generator G1  at 18,2
+
+pump      W1  at 0,5
+
+wire R1.heat -> HX1.heat
+wire R1.heat -> HX2.heat
+wire W1.water -> HX1.water
+wire W1.water -> HX2.water
+
+wire HX1.steam -> T1.steam
+wire HX2.steam -> T2.steam
+
+wire T1.rotary -> SH1.in
+wire T2.rotary -> SH1.in
+wire SH1.out -> G1.rotary

@@ -57,11 +57,22 @@ and then tries to answer four different briefs with the one vocabulary. The
 recipe stays `Iron → Gear`; the machine that performs it is where the
 complexity lives.
 
+**Experiment 08** asks what all of that *looks like*. A design is components on
+a grid with typed ports; a plant is vessels, pipework, steel and a building. So
+the visual compiler takes the one and derives the other, in five passes, from
+nothing but the document and a seed:
+
+> **Can the player's engineering design itself become the art direction?**
+
+Yes — and the load-bearing half of the answer is the direction the arrow points.
+`RenderGeometry = Generate(MachineDesign, VisualSeed)`, never the reverse: the
+generated mesh never defines the machine.
+
 ## Quick start
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 106 cross-validation tests
+.\run.ps1 -Test    # 130 cross-validation tests
 .\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
 
@@ -76,6 +87,12 @@ complexity lives.
 .\run.ps1 -Machine why designs/04-stalled.machine
 .\run.ps1 -Machine compile designs/05-pulsed.machine
 .\run.ps1 -Machine check                       # its front end, without a browser
+
+# Experiment 08: the same document, built as a plant
+.\run.ps1 -Machine forms                       # all sixteen, counted and hashed
+.\run.ps1 -Machine form designs/15-turbinehall.machine --png hall.png
+.\run.ps1 -Machine form designs/10-refinery.machine --obj refinery.obj
+.\run.ps1 -Machine kit --png sheet.png         # the asset library, all of it
 ```
 
 `run.ps1` exists because rustup installs the MSVC toolchain without setting the
@@ -1227,14 +1244,15 @@ paragraph:
 ```
 
 ```text
-reactor      source             8        8  power distil crush
-pump         source             8       13  power distil crush
-exchanger    heat               7       17  power crush
-turbine      mechanical         7       21  power crush
-outlet       sink               5        5  crush gears distil
-inlet        source             4        5  crush gears
-shaft        transport          3        5  crush gears
-motor        mechanical         3        8  crush gears
+reactor      source            12       12  power distil crush
+pump         source            12       17  power distil crush
+exchanger    heat              11       24  power crush
+turbine      mechanical        11       30  power crush
+generator    mechanical        10       25  power
+outlet       sink               6        6  crush gears distil
+shaft        transport          5        7  crush gears power
+inlet        source             5        7  crush gears
+motor        mechanical         4        9  crush gears
 ...
   28 of 38 components are used at all, and 11 of those appear in more than one
   brief.
@@ -1276,6 +1294,344 @@ one-line change to the table and a different experiment.
 | Is `mech` a domain or an affectation? | Honestly, an affectation — one producer, one consumer. It pays for itself only because it is the domain that cannot be stored, which is what makes the press interesting. |
 | Is the chemistry family in? | No. Mixers, reactor vessels, electrolysers and scrubbers were cut. The four briefs did not need them, and adding components no brief needs is exactly the parts-catalogue failure the note warned about. |
 | Does it scale? | Still not asked. Still not the point. |
+
+## Experiment 08: procedural machine form
+
+Experiments 06 and 07 produced a document: components on a tile grid, typed
+ports, wires, tunings, and a verdict. What they did not produce was a *thing*.
+The follow-up asks whether the document is enough to build one:
+
+```text
+Machine Design
+  ↓
+semantic 3D layout
+  ↓
+connection routing
+  ↓
+structural inference
+  ↓
+procedural dressing
+  ↓
+renderable machine
+```
+
+and the question underneath it is the one worth the effort:
+
+> **Can the player's engineering design itself become the art direction?**
+
+If yes, machine variety stops being a content-production problem and becomes an
+emergent consequence of how players build things.
+
+### The core rule is a direction, and it is the whole architecture
+
+> The generated mesh never defines the machine.
+
+```text
+RenderGeometry = Generate(MachineDesign, VisualSeed)
+```
+
+`form` reads `design` and writes `Scene`. Nothing in `sim`, `orbit`, `eval` or
+`snap` mentions `form`, so no amount of changing what a plant looks like can
+change what it does. That is not a convention anybody has to remember — it is
+the module graph — and `tests/form.rs` checks it from the far end anyway:
+
+```rust
+for style in [Works, Yard, Hall] {
+    for world in [0, 1, 7, 9_999] {
+        build(&d, Ask { style, world });
+        assert_eq!(before.headline(), eval::report(&d, &compile(&d)).headline());
+    }
+}
+```
+
+Every design in the repository, judged, built twelve different ways, judged
+again. If the day ever comes that somebody reads a component's *height* to
+decide a rate, the whole architecture has quietly inverted, and this is the test
+that notices.
+
+### Five passes, and nothing goes backwards
+
+```text
+layout   volumes, mounts, orientation, sockets, clearances
+route    A* per connection, on a half-metre grid, then elbows and flanges
+frame    plinths, legs, columns, bracing, pipe supports, platforms, stairs
+body     thirteen archetypes, assembled out of twenty-five meshes
+shell    slab, walls, roof -- with holes where the plant needs them
+```
+
+Each pass only ever reads what the passes before it wrote. A plant is not
+relaxed into shape or settled into existence; it is derived, in five passes, and
+then it stops.
+
+Every position, size and direction in a scene is an `i32` in millimetres, and
+floats appear exactly twice: inside the mesh library, and at the boundary where
+a scene is written for a renderer. A scene that is going to be described over a
+network as `design + seed` has to rebuild identically on the other end, and
+that is a far easier promise to keep in integers than in accumulated
+floating-point transforms.
+
+### The third dimension is inferred, not authored
+
+The note asks for free 3D placement with semantic snapping. What is here
+instead is **free 2D placement with inferred elevation**, and the reason is the
+core rule: height that the player places by hand is CAD, and height that *falls
+out of the machine* is the thing actually being tested.
+
+```text
+rotary   1250   every shaft in the plant at one height, so a line shaft is a
+                straight line and a coupling is believable
+fluid     750   pumps push along the floor
+gas      high   steam leaves the top of a shell, onto the rack
+heat     high   and so does heat
+material top in, bottom out -- an ore line visibly falls downhill
+```
+
+Those five lines are most of why a stranger can read the flow of a plant they
+have never seen. Not because anything is labelled — because everything in a
+domain agrees about where it lives. A cyclone discharges downwards, so it stands
+on legs; something has to fit underneath it, so there is a frame; the frame is
+three metres tall, so there is a platform and a stair. Nobody placed any of
+that, and none of it is visible in the simulator.
+
+### Sockets snap by looking
+
+Nothing snaps *to* anything. A port simply chooses which of its component's four
+faces to leave by, based on where the thing it is wired to ended up:
+
+```text
+HX1.steam ──► T1        the outlet is on HX1's east face
+T1 moved west           the outlet is now on HX1's west face
+```
+
+Two components wired together put their sockets on the faces nearest each other,
+so a plant whose plan reads left to right builds pipework that reads left to
+right — and moving a component to the far side of its neighbour turns both
+sockets round with nobody editing anything.
+
+A socket's *bore* comes from its port's rate, which is the one place in the
+visual pipeline where a simulation number decides a dimension. It runs the safe
+way round: the machine tells the picture how big to be, never the reverse. A
+400/tick heat main is visibly a main; a 20/tick drive is visibly a drive.
+
+### Routing: A* with a heading
+
+The note's cost function, almost literally:
+
+```text
+distance + bend penalty + collision penalty + clearance penalty
+```
+
+with one thing it does not mention and which matters more than the rest: the
+search state is `(cell, heading)`, not `cell`. A bend penalty is a property of
+an *edge*, and a router that cannot charge one produces staircases instead of
+pipe runs. A shaft is charged 260 for a corner against 10 for a metre of
+travel, which is why every drive train in the sixteen designs comes out dead
+straight, and why a heat main is allowed to turn.
+
+The seven domains then get seven treatments — and this table is the answer to
+the experiment's actual question:
+
+```text
+fluid       painted pipe, flanged, the occasional valve
+gas         steel pipe, lightly banded, up on the rack
+heat        fat lagged pipe, banded every three-quarters of a metre
+rotary      thin bright shaft, couplings, straight
+mech        thin bright rod, and it will not bend at all
+electrical  galvanised conduit, clipped
+material    square chute, wide
+```
+
+With the labels hidden, a viewer can tell a steam main from a drive shaft from a
+cable tray, because those three things are not the same shape, the same size,
+the same colour or at the same height. None of that was drawn. It came out of
+the port's domain and the port's rate.
+
+### Structure is a consequence, not a decoration
+
+```text
+heavy floor equipment          -> a concrete plinth
+equipment on legs or a frame   -> columns, head beams and bracing
+a long horizontal run          -> a pipe support every few metres
+anything to reach above 4.5 m  -> a platform, a handrail and a stair
+```
+
+The steam crusher, 25 components, produces **64 pipe supports** across 304
+metres of run. The player placed none of them and cannot see them in the
+document. Move the machine and they move; delete it and they go.
+
+The first version of the support rule measured each straight section on its own
+and left a thirteen-metre span in the refinery hanging in the air, because that
+span was made of eight short sections with bends between them. Measuring along
+the whole run fixed it, and the test that caught it is still there.
+
+### The machinery produces its own building
+
+The enclosure pass is deliberately the least clever thing in the tree — bounds,
+clearance, floor, walls, roof — and it has exactly one idea in it: a wall panel
+is left out wherever a run crosses the wall plane, and a roof panel is left out
+wherever something is too tall to fit under it. So a nine-metre reactor stands
+through its own roof and a heat main leaves through its own hole, and neither
+opening was placed by anybody.
+
+What the plant turns out to be is derived too:
+
+```text
+skid      small, and with no vessel, tower or press in it
+building   under 800 m2 of plot
+housed     over it -- walls on the weather sides, open to the sky
+```
+
+Of the sixteen designs, one is a skid, six are buildings and nine are housed,
+and nobody chose any of it.
+
+### A small kit, arranged
+
+Twenty-five canonical meshes, eight materials, 2,428 triangles in the entire
+library:
+
+```text
+box cyl dome cone elbow tee flange nozzle valve band
+beam grate step rail support anchor coupling bearing gauge panel
+fins louvre stack ladder rotor
+```
+
+There is no `turbine.mesh`. A turbine is a `Cyl` with a `Cone` for its exhaust,
+a `Rotor` in the middle, a `Bearing` for its shaft end, four `Anchor` feet and a
+`Nozzle` per port — and a mill is those same meshes at different proportions in
+a different material. Thirty-eight components collapse into thirteen archetypes,
+and the archetype table is the whole of this experiment's opinion about what
+machinery looks like.
+
+The material library is the same argument from the other side: eight materials
+for a whole plant, because the moment there is one material per component,
+"procedural assembly" has become "hand-authored models with extra steps". Heat
+equipment is lagged, process equipment is painted, structure is galvanised, and
+after four seconds of looking at a plant a stranger can tell them apart.
+
+### Sixteen plants, and what they cost to draw
+
+```powershell
+.\run.ps1 -Machine forms
+```
+
+```text
+design                     parts  runs  pieces  calls    tris      plot      hash  shell     same
+01-first-try                   5     4     504     32   16768    36x17m  d0f7a180  building  yes
+02-more-of-everything         17    18     777     33   41744    35x42m  3945fc00  housed    yes
+03-compact                     8     8     541     31   21104    30x17m  331db5cf  building  yes
+06-radial                     15    16     637     34   34416    33x30m  cbe503b8  housed    yes
+07-crushline                  15    19     697     28   32476    47x32m  8d2a79c0  housed    yes
+09-machining                   9    13     365     21   15788    26x22m  eaa0757e  skid      yes
+10-refinery                   10    12     979     31   47536    57x24m  4d9c72e5  housed    yes
+11-steamcrusher               25    30    1290     38   67100    69x36m  664d20c7  housed    yes
+13-longreach                   8     7     507     31   19504    75x16m  7ccc2e2d  housed    yes
+15-turbinehall                12    12     564     33   29860    39x26m  d09dac8f  housed    yes
+
+  10,984 pieces across 16 designs, drawn in 510 calls: 25 meshes and 8
+  materials, arranged.
+```
+
+The interesting column is not `tris`. It is `calls`: the number of draw calls a
+whole plant costs. Twenty-five components produce 1,290 pieces and **38 draw
+calls**, because a scene is not a tree of objects — it is a sorted list that
+groups into one instance buffer per mesh-and-material pair. The count grows with
+the *variety* of a plant and not with its size, which is what section 10 asked
+for.
+
+The `same` column is section 7, checked on every design every time anybody runs
+the command: built twice, hashed twice, identical.
+
+### Two seeds, not one
+
+The note proposes
+
+```text
+VisualSeed = hash(designId, component layout, styleId, worldSeed)
+```
+
+and that is computed — but it is deliberately *not* what a gauge on a turbine is
+drawn from. Fold the layout into every cosmetic stream and moving one generator
+reshuffles the dressing on all forty components, which is a catastrophic result
+for the property the primary experiment is actually testing:
+
+> The important property is **reactivity**, not photorealism.
+
+So the layout digest decides what genuinely belongs to the whole installation —
+its paint, its enclosure — and each component draws from a stream named after
+*itself*:
+
+```text
+whole installation   hash(designId, layout, styleId, worldSeed)
+one component        hash(designId, styleId, worldSeed, name, purpose)
+```
+
+Move a generator and its shaft reroutes, its plinth follows it, and the reactor
+thirty metres away is untouched down to the last handwheel — which is a test
+rather than a hope:
+
+```rust
+assert_ne!(before.pieces_of("G2"), after.pieces_of("G2"));   // it moved
+assert_eq!(before.pieces_of("R1"), after.pieces_of("R1"));   // and nothing else did
+```
+
+### Level of detail is a prefix
+
+Every batch's instances arrive sorted so that the ones surviving furthest come
+first, with three counts beside them. Drawing the medium view is drawing a
+prefix of exactly the same buffer: nothing is re-uploaded, nothing is re-sorted.
+
+```text
+close      1290 pieces      equipment, pipes, valves, flanges, rails, gauges
+medium      984             equipment, primary pipes, structure
+far         427             simplified equipment forms and the mains
+very far      1             one box
+```
+
+The simulation representation is of course identical at all four, because the
+simulator has never heard of any of them.
+
+### It renders without a browser
+
+The plant is drawn in the designer by about four hundred lines of WebGL 2 — one
+instance buffer per batch, a frame built in the vertex shader from the same
+integer direction the router used. But a claim about what a generated plant
+*looks like* is worthless if the only way to check it is to open a canvas and
+squint, so there is also a software rasteriser and a PNG writer in `std`:
+
+```powershell
+.\run.ps1 -Machine form designs/15-turbinehall.machine --png hall.png
+.\run.ps1 -Machine kit --png sheet.png
+```
+
+`kit --png` earned its keep in the first hour. A plant is thousands of pieces,
+and a mesh that is subtly wrong is invisible in the pile and obvious on a sheet
+of twenty-five. It is how the two real bugs in this experiment were found: a
+placement frame that was a *reflection* rather than a rotation, which mirrored
+every upright piece in the plant, and a triangle winding that turned every
+cylinder inside out. Both were invisible in a table of numbers and unmissable in
+a 60 kB picture.
+
+### What it answered, and what it did not
+
+| the question | the answer |
+|---|---|
+| Do functional layouts produce plausible industrial forms? | Yes. Sixteen designs, no bespoke geometry, and a refinery does not look like a crushing plant. |
+| Do connections communicate what is connected? | Yes, and this is the strongest result. Domain decides treatment, rate decides bore, and the domain's height decides where it lives — so a drive train, a steam main and a cable tray are three visibly different things. |
+| Does changing a component regenerate coherently? | Yes, and locally: geometry near the change moves and the rest is identical piece for piece. |
+| Is generation deterministic? | Yes. One 64-bit hash per scene, checked on all sixteen designs on every run of `forms`, and again through a file round trip. |
+| Does it work from a small authored set? | Yes. 25 meshes, 8 materials, 2,428 triangles of library for 10,984 pieces of plant. |
+| Does complexity come from arrangement? | Yes: 1,290 pieces from 22 distinct meshes in the largest design. |
+| Is the renderer downstream of the simulation? | Yes, by module graph, and tested by rebuilding every design twelve ways and re-judging it. |
+| Did the machine designer become 3D? | **No**, and deliberately. Placement stayed 2D and elevation became *derived*, because the core rule forbids the picture from feeding back into the machine. Free 3D placement would be a different experiment with a different risk. |
+| Is the routing good? | It is adequate and it is honest. A* with a heading gives clean orthogonal runs and refuses to pass through equipment, but two lines that could share a rack do not know about each other, and a plant with adjacent machines produces more bends than a person would draw. |
+| Is the enclosure any good? | No, and it was not meant to be. It is bounds, clearance, floor, walls and roof with holes cut by the plant. The test was whether machinery can produce its own surrounding structure, which is a much lower bar and a much more interesting one. |
+| Does it scale? | Not asked, again. A hundred plants at once is the next question, and instance buffers are the reason to think it is answerable. |
+
+The thing being tested was whether engineering can be art direction. What the
+sixteen designs say is that it can, and that the mechanism is smaller than
+expected: **five height conventions, seven pipe treatments, a bore taken from a
+rate, and a rule that anything above head height needs a stair.** Almost none of
+the plausibility comes from the meshes.
 
 ## The tiers
 
@@ -1449,11 +1805,29 @@ These are real, and worth stating plainly.
     deterministic and it is not reversible, so a design that mixes 82% and 12%
     ore has genuinely thrown the separation away — correct, but it means purity
     can be destroyed by a careless wire and the tool does not warn first.
-18. **The machine designer is still not the game.** Experiments 06 and 07 share
-    a binary, a server and a directory with the workbench and touch none of its
-    code. Nothing decides yet whether a compiled macro-machine is placed into a
-    `Blueprint` as one node or as its own sub-plant, and that is the actual
-    integration question.
+18. **The machine designer is still not the game.** Experiments 06, 07 and 08
+    share a binary, a server and a directory with the workbench and touch none
+    of its code. Nothing decides yet whether a compiled macro-machine is placed
+    into a `Blueprint` as one node or as its own sub-plant, and that is the
+    actual integration question.
+19. **Routes do not know about each other.** Experiment 08's router refuses to
+    cross a run already laid, which is enough to keep pipework legible and not
+    nearly enough to make it look designed. Two lines going the same way should
+    share a rack and gain a bracket; instead they take neighbouring lanes and
+    each grows its own posts. It is the most obvious next thing and it is not a
+    change to the architecture, only to the cost function.
+20. **Elevation is derived, so there is no upper storey.** A machine's height
+    comes from what it *is*, which means a player cannot put a pump under a
+    platform on purpose. Free 3D placement would fix that and would immediately
+    raise the question the core rule exists to prevent: whether the picture is
+    allowed to change the machine.
+21. **One plant at a time, and no world.** Every scene is built from scratch,
+    at full detail, for one installation. Instance buffers are the reason to
+    believe a hundred at once is answerable; nothing has tried.
+22. **The enclosure is four rules and a wall.** Openings come from the machine,
+    which is the good part; everything else is a rectangle. No bays, no
+    mezzanines, no relationship between the building and what it contains
+    beyond "is it taller than nine metres".
 
 ## Layout
 
@@ -1474,7 +1848,7 @@ src/why.rs        Prototype 1: why a thing is not running, and what binds
 src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
 src/main.rs       experiment harness, `serve`, `export` and `play`
 web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            106 cross-validation tests
+tests/            130 cross-validation tests
 configs/          the fifteen configurations, plus the first scenario plant
 scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
@@ -1487,10 +1861,22 @@ src/machine/orbit.rs   Ex 06: run it until it repeats; keep transient + period
 src/machine/eval.rs    Ex 07: four briefs, competing costs, and no score
 src/machine/snap.rs    Ex 06: state(t) for a renderer, and why things are stopped
 src/machine/web.rs     Ex 06: its own small server, so it can be thrown away
-src/bin/machine.rs     Ex 07: run, why, compile, verify, parts, reuse, serve
-web/machine/           Ex 06: the designer
-designs/               Ex 07: twelve answers to four briefs
+src/bin/machine.rs     Ex 08: run, why, compile, verify, parts, reuse, form, kit
+web/machine/           Ex 06: the designer, and Ex 08: the plant, in WebGL
+designs/               Ex 08: sixteen answers to four briefs
 tests/machine_web.mjs  Ex 06: the front end, checked without a browser
+
+src/machine/form/mod.rs     Ex 08: millimetres, pieces, batches, and the pipeline
+src/machine/form/kit.rs     Ex 08: twenty-five canonical meshes and eight materials
+src/machine/form/seed.rs    Ex 08: where every cosmetic choice comes from
+src/machine/form/layout.rs  Ex 08: volumes, mounts, orientation, sockets, clearance
+src/machine/form/route.rs   Ex 08: A* with a heading, and seven pipe treatments
+src/machine/form/frame.rs   Ex 08: plinths, columns, supports, platforms, stairs
+src/machine/form/body.rs    Ex 08: thirteen archetypes, assembled from the kit
+src/machine/form/shell.rs   Ex 08: slab, walls, roof, and the holes the plant cuts
+src/machine/form/obj.rs     Ex 08: the scene, baked, for anything that opens .obj
+src/machine/form/shot.rs    Ex 08: a rasteriser and a PNG writer, so it can be seen
+tests/form.rs               Ex 08: the five claims, checked rather than asserted
 ```
 
 Zero dependencies outside `std`. The workbench added a JSON codec and an HTTP
@@ -1504,6 +1890,7 @@ server rather than a dependency tree larger than the crate they serve.
 > reason to want to.
 > **Experiment 06:** stop scaling buildings and start designing one.
 > **Experiment 07:** and then design something that is not a power plant.
+> **Experiment 08:** and then go and look at it.
 
 Next is **P2**: a server holding the command log and the canonical snapshots,
 one client playing normally, and a second client joining at tick 80,000,

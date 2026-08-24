@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>machine designer &middot; experiment 07</title>
+<title>machine designer &middot; experiments 07 and 08</title>
 <link rel="stylesheet" href="/machine.css">
 <link rel="icon" href="data:,">
 </head>
@@ -11,12 +11,17 @@
 
 <header id="bar">
   <div class="brand">
-    <b>machine&nbsp;designer</b><span>experiment 07 &middot; a construction kit, and four briefs</span>
+    <b>machine&nbsp;designer</b><span>experiments 07 and 08 &middot; a construction kit, and the plant it builds</span>
   </div>
 
   <div class="group">
     <select id="open" title="open a design"><option value="">open&hellip;</option></select>
     <button id="save" title="write this design to designs/">save</button>
+  </div>
+
+  <div class="group view">
+    <button id="viewplan" class="on" title="the document">plan</button>
+    <button id="viewform" title="experiment 08: the plant this design builds">form</button>
   </div>
 
   <div class="group transport">
@@ -74,8 +79,29 @@
 
   <section id="world">
     <canvas id="c"></canvas>
+    <canvas id="gl" hidden></canvas>
     <div id="err" hidden></div>
     <pre id="src" hidden></pre>
+
+    <div id="formbar" hidden>
+      <label>style</label>
+      <select id="formstyle">
+        <option value="works">works</option>
+        <option value="yard">yard</option>
+        <option value="hall">hall</option>
+      </select>
+      <label>seed</label>
+      <input id="formseed" type="number" value="0" min="0" max="9999" step="1">
+      <label>detail</label>
+      <select id="formlod">
+        <option value="0">close</option>
+        <option value="1">medium</option>
+        <option value="2">far</option>
+        <option value="3">very far</option>
+      </select>
+      <span class="rule"></span>
+      <output id="formstats">&mdash;</output>
+    </div>
   </section>
 
   <aside id="inspect">

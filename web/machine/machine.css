@@ -205,6 +205,30 @@ h2 button + button { margin-left: .3rem; }
 #c { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #c.placing { cursor: crosshair; }
 
+/* Experiment 08. The same section of the page, the same document, a different
+   pass over it: drag to orbit, shift-drag to pan, wheel to close in.
+
+   `display` has to be said again for the hidden case, and it is not a style
+   choice. `[hidden]` is `display: none` in the user agent's sheet, so *any*
+   author rule that sets `display` beats it -- which left the plant's canvas
+   lying invisibly on top of the plan's, swallowing every drag and every wheel
+   event aimed at the thing underneath it. */
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; }
+#gl:active { cursor: grabbing; }
+#formbar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; gap: .5rem;
+  padding: .45rem .8rem;
+  background: rgba(10, 15, 13, .82); border-top: 1px solid var(--rule);
+  font: 11px var(--mono); color: var(--muted);
+}
+#formbar label { text-transform: uppercase; letter-spacing: .04em; opacity: .7; }
+#formbar select, #formbar input { font: 11px var(--mono); }
+#formbar input { width: 4.5rem; }
+#formbar output { margin-left: auto; color: var(--ink); }
+#c[hidden], #gl[hidden], #formbar[hidden] { display: none; }
+.group.view button.on { background: var(--accent); color: #06110C; }
+
 #err {
   position: absolute; left: 1rem; right: 1rem; bottom: 1rem;
   background: #2A1414; border: 1px solid var(--bad); border-left-width: 3px;

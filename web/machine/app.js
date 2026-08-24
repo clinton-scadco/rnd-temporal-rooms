@@ -3,8 +3,9 @@
 
 import {
   state, onChange, changed, catalogue, listDesigns, openDesign, save,
-  seek, compile, verify, rename, setBrief, num,
+  seek, compile, verify, rename, setBrief, num, form,
 } from './doc.js';
+import * as plant from './form.js';
 import { initCanvas, ui, invalidate, focusAll, setTool, select } from './canvas.js';
 import {
   renderPalette, markTool, renderScore, renderInspector, renderHolding,
@@ -42,11 +43,16 @@ async function main() {
     if (state.dirty) seek(Math.floor(state.renderTime), true);
     refresh();
     invalidate();
+    // Experiment 08 rebuilds on every edit rather than on a button, because
+    // the property being demonstrated is reactivity: move a component and the
+    // steel under it moves, in the same gesture.
+    if (showing === 'form') refreshForm();
   });
 
   transport();
   fields();
   buttons();
+  views();
   await designs();
 
   requestAnimationFrame(loop);
@@ -186,6 +192,82 @@ function buttons() {
   });
 }
 
+// ------------------------------------------- experiment 08: the two views
+
+// Which of the two things the middle of the screen is: the document, or the
+// plant the document builds. They are the same design and they are never out
+// of step, because the second one is a pure function of the first.
+let showing = 'plan';
+let building = false;
+let stale = false;
+
+function views() {
+  const to = async where => {
+    showing = where;
+    $('#viewplan').classList.toggle('on', where === 'plan');
+    $('#viewform').classList.toggle('on', where === 'form');
+    $('#c').hidden = where !== 'plan';
+    $('#gl').hidden = where !== 'form';
+    $('#formbar').hidden = where !== 'form';
+    if (where !== 'form') return;
+    if (!plant.ready() && !(await plant.initForm($('#gl')))) {
+      hint('this browser has no WebGL 2, so there is nothing to draw the plant with', true);
+      return;
+    }
+    await rebuild(true);
+  };
+  $('#viewplan').addEventListener('click', () => to('plan'));
+  $('#viewform').addEventListener('click', () => to('form'));
+
+  $('#formstyle').addEventListener('change', e => { plant.view.style = e.target.value; rebuild(true); });
+  $('#formseed').addEventListener('change', e => { plant.view.seed = Number(e.target.value) || 0; rebuild(true); });
+  $('#formlod').addEventListener('change', e => {
+    plant.view.lod = Number(e.target.value) || 0;
+    plant.invalidate();
+    stats();
+  });
+}
+
+/// Clicking a component is not an edit, so it does not rebuild a plant. It
+/// only lights one up.
+let lastDoc = '';
+function refreshForm() {
+  const doc = JSON.stringify(state.design);
+  if (doc === lastDoc) {
+    plant.pick(state.selected && state.selected.what === 'unit' ? state.selected.name : null);
+    return;
+  }
+  lastDoc = doc;
+  rebuild(false);
+}
+
+async function rebuild(refit) {
+  if (showing !== 'form' || !plant.ready()) return;
+  if (building) { stale = true; return; }
+  building = true;
+  lastDoc = JSON.stringify(state.design);
+  const res = await form(plant.view.style, plant.view.seed);
+  building = false;
+  if (res.ok) {
+    plant.show(res, refit);
+    plant.pick(state.selected && state.selected.what === 'unit' ? state.selected.name : null);
+    stats();
+  } else {
+    hint(res.error, true);
+  }
+  if (stale) { stale = false; rebuild(false); }
+}
+
+function stats() {
+  const s = plant.view.stats;
+  if (!s) return;
+  const d = plant.drawn();
+  $('#formstats').textContent =
+    `${num(s.units)} components · ${num(s.runs)} runs, ${num(s.runMetres)} m · ` +
+    `${num(s.pieces)} pieces from ${s.meshes} meshes · ` +
+    `drawing ${num(d.instances)} in ${d.calls} calls · ${plant.view.shell} · ${plant.view.hash}`;
+}
+
 // ------------------------------------------------------------------ files
 
 async function designs() {
@@ -203,6 +285,8 @@ async function designs() {
     goto(4000);
     setTimeout(focusAll, 0);
     await compile();
+    // A different machine deserves a different camera.
+    if (showing === 'form') await rebuild(true);
   };
   sel.addEventListener('change', async () => {
     if (!sel.value) return;

@@ -14,6 +14,8 @@
 //!   POST /api/open            source in, document out
 //!   POST /api/state?t=N       a document, run to N, rendered
 //!   POST /api/compile         the macro-machine: transient, orbit, waveform
+//!   GET  /api/kit             experiment 08: twenty-five meshes, eight materials
+//!   POST /api/form            experiment 08: the document, built as a plant
 //!   POST /api/verify?t=N      the compiled answer against a straight run
 //!   POST /api/save?name=X     write it to designs/
 //! ```
@@ -46,6 +48,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("/canvas.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/canvas.js")),
     ("/render.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/render.js")),
     ("/panels.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/panels.js")),
+    ("/form.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/form.js")),
 ];
 
 /// Where designs are read from and written to. The only directory this server
@@ -168,6 +171,9 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
                 )
             }
             "/api/designs" => return ("200 OK", mime, designs().to_string()),
+            // Experiment 08's asset library: twenty-five meshes and eight
+            // materials, asked for once and never again.
+            "/api/kit" => return ("200 OK", mime, super::form::kit_json().to_string()),
             "/api/design" => {
                 let name = req.query.get("name").cloned().unwrap_or_default();
                 return match read_design(&name) {
@@ -184,6 +190,11 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
             "/api/open" => return ("200 OK", mime, opened(&req.body).to_string()),
             "/api/state" => return ("200 OK", mime, state(&req.body, t()).to_string()),
             "/api/compile" => return ("200 OK", mime, compiled(&req.body).to_string()),
+            "/api/form" => {
+                let style = req.query.get("style").map(String::as_str).unwrap_or("works");
+                let world = req.query.get("seed").and_then(|s| s.parse().ok()).unwrap_or(0);
+                return ("200 OK", mime, formed(&req.body, style, world).to_string());
+            }
             "/api/verify" => return ("200 OK", mime, verified(&req.body, t()).to_string()),
             "/api/save" => {
                 let name = req.query.get("name").cloned().unwrap_or_default();
@@ -286,6 +297,26 @@ fn state(body: &str, t: Tick) -> Json {
 
 fn totals_json(t: &super::sim::Totals) -> Json {
     eval::totals_json(t)
+}
+
+/// The document, built as a plant.
+///
+/// The same document that `/api/state` simulates, sent to a different pass of
+/// a different module tree, which is the whole architectural claim of
+/// experiment 08 expressed as two routes that share nothing but their input.
+fn formed(body: &str, style: &str, world: u64) -> Json {
+    let d = match incoming(body) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let ask = super::form::Ask {
+        style: super::form::Style::by_tag(style).unwrap_or_default(),
+        world,
+    };
+    match super::form::build(&d, ask) {
+        Ok(s) => s.to_json().set("ok", true),
+        Err(e) => err(&e),
+    }
 }
 
 /// The compiled macro-machine, and the picture of its orbit.
