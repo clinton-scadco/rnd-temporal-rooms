@@ -221,6 +221,11 @@ function views() {
 
   $('#formstyle').addEventListener('change', e => { plant.view.style = e.target.value; rebuild(true); });
   $('#formseed').addEventListener('change', e => { plant.view.seed = Number(e.target.value) || 0; rebuild(true); });
+  // Experiment 09. Rebuilding at a different grade is the same design through
+  // the same pipeline, so the camera stays exactly where it was: the point of
+  // the control is to see one plant change its clothes, not to be shown four
+  // plants.
+  $('#formgrade').addEventListener('change', e => { plant.view.grade = e.target.value; rebuild(false); });
   $('#formlod').addEventListener('change', e => {
     plant.view.lod = Number(e.target.value) || 0;
     plant.invalidate();
@@ -246,7 +251,7 @@ async function rebuild(refit) {
   if (building) { stale = true; return; }
   building = true;
   lastDoc = JSON.stringify(state.design);
-  const res = await form(plant.view.style, plant.view.seed);
+  const res = await form(plant.view.style, plant.view.seed, plant.view.grade);
   building = false;
   if (res.ok) {
     plant.show(res, refit);
@@ -264,7 +269,7 @@ function stats() {
   const d = plant.drawn();
   $('#formstats').textContent =
     `${num(s.units)} components · ${num(s.runs)} runs, ${num(s.runMetres)} m · ` +
-    `${num(s.pieces)} pieces from ${s.meshes} meshes · ` +
+    `${num(s.pieces)} pieces from ${s.meshes} meshes in ${s.mats} materials · ` +
     `drawing ${num(d.instances)} in ${d.calls} calls · ${plant.view.shell} · ${plant.view.hash}`;
 }
 

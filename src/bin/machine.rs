@@ -15,6 +15,8 @@
 //!   machine form FILE [--obj P]    experiment 08: the design, built as a plant
 //!   machine forms                  every design built, counted, and hashed
 //!   machine kit [--png P]          the asset library: one of everything
+//!   machine read FILE [--png P]    experiment 09: one plant at all four grades
+//!   machine reads                  every design, at all four grades
 //!   machine serve [--port N]       the designer
 //! ```
 //!
@@ -26,7 +28,7 @@
 //! countable claim, so it is counted.
 
 use temporal_rooms::machine::design::Design;
-use temporal_rooms::machine::form::{self, Style};
+use temporal_rooms::machine::form::{self, Grade, Style};
 use temporal_rooms::machine::parts::{self, Family};
 use temporal_rooms::machine::sim::Tick;
 use temporal_rooms::machine::{eval, orbit, snap, web};
@@ -55,13 +57,15 @@ fn main() {
         "form" => form_one(rest),
         "forms" => form_all(rest),
         "kit" => kit_sheet(rest),
+        "read" => read_one(rest),
+        "reads" => read_all(rest),
         "reuse" => reuse(),
         "all" => all(),
         other if other.ends_with(".machine") => run(&args),
         other => {
             eprintln!(
                 "`{other}` is not a command. Try `run`, `why`, `compile`, `verify`, \
-                 `parts`, `reuse`, `form`, `forms` or `serve`."
+                 `parts`, `reuse`, `form`, `forms`, `read`, `reads` or `serve`."
             );
             2
         }
@@ -494,10 +498,7 @@ fn form_one(args: &[String]) -> i32 {
         Ok(v) => v,
         Err(e) => return bail(e),
     };
-    let ask = form::Ask {
-        style: flag(args, "--style").and_then(Style::by_tag).unwrap_or_default(),
-        world: flag(args, "--seed").and_then(|s| s.parse().ok()).unwrap_or(0),
-    };
+    let ask = ask_of(args);
     let scene = match form::build(&d, ask) {
         Ok(s) => s,
         Err(e) => return bail(format!("{path}: {e}")),
@@ -506,6 +507,7 @@ fn form_one(args: &[String]) -> i32 {
     println!("{path}\n");
     println!("  {:<16}{}", "machine", scene.name);
     println!("  {:<16}{} on {}x{}m", "style", scene.style, s.size.x / 1000, s.size.z / 1000);
+    println!("  {:<16}{}  ({})", "grade", scene.grade, scene.grade.what());
     println!("  {:<16}{}", "enclosure", scene.shell.tag());
     println!("  {:<16}{:016x}", "visual seed", scene.seed.whole);
     println!("  {:<16}{:016x}", "scene hash", scene.hash());
@@ -518,6 +520,7 @@ fn form_one(args: &[String]) -> i32 {
     println!();
     println!("  {:<16}{:>8}", "pieces", s.pieces);
     println!("  {:<16}{:>8}   of {}", "meshes used", s.meshes, form::kit::MESHES.len());
+    println!("  {:<16}{:>8}   of {}", "materials", s.mats, form::kit::MATS.len());
     println!("  {:<16}{:>8}   one per mesh and material", "draw calls", s.batches);
     println!("  {:<16}{:>8}", "triangles", s.tris);
     println!();
@@ -548,11 +551,7 @@ fn form_one(args: &[String]) -> i32 {
     }
 
     if let Some(out) = flag(args, "--png") {
-        let eye = form::shot::Eye {
-            yaw: flag(args, "--yaw").and_then(|s| s.parse().ok()).unwrap_or(0.72),
-            pitch: flag(args, "--pitch").and_then(|s| s.parse().ok()).unwrap_or(0.34),
-            zoom: flag(args, "--zoom").and_then(|s| s.parse().ok()).unwrap_or(1.0),
-        };
+        let eye = eye_of(args);
         let lod: u8 = flag(args, "--lod").and_then(|s| s.parse().ok()).unwrap_or(0);
         let (w, h) = (1100usize, 700usize);
         let img = form::shot::render(&scene, w, h, eye, lod);
@@ -628,6 +627,7 @@ fn treatment(d: temporal_rooms::machine::stuff::Domain) -> &'static str {
 fn form_all(args: &[String]) -> i32 {
     let style = flag(args, "--style").and_then(Style::by_tag).unwrap_or_default();
     let world: u64 = flag(args, "--seed").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let grade = flag(args, "--grade").and_then(Grade::by_tag).unwrap_or_default();
     let paths = design_paths();
     if paths.is_empty() {
         eprintln!("no designs in ./designs");
@@ -651,7 +651,7 @@ fn form_all(args: &[String]) -> i32 {
                 continue;
             }
         };
-        let ask = form::Ask { style, world };
+        let ask = form::Ask { style, world, grade };
         let a = match form::build(&d, ask) {
             Ok(s) => s,
             Err(e) => {
@@ -690,6 +690,219 @@ fn form_all(args: &[String]) -> i32 {
         form::kit::MATS.len()
     );
     worst
+}
+
+// ------------------------------------------- experiment 09: the readability
+
+/// Everything the visual compiler was asked for, in one place, so that the two
+/// commands that build a plant cannot disagree about what a flag means.
+fn ask_of(args: &[String]) -> form::Ask {
+    form::Ask {
+        style: flag(args, "--style").and_then(Style::by_tag).unwrap_or_default(),
+        world: flag(args, "--seed").and_then(|s| s.parse().ok()).unwrap_or(0),
+        grade: flag(args, "--grade").and_then(Grade::by_tag).unwrap_or_default(),
+    }
+}
+
+/// One design, built four ways, side by side.
+///
+/// This is experiment 09's whole apparatus. The note asked for four variants of
+/// one plant and a comparison, and the comparison is the point: the geometry is
+/// the same machine in the same place in all four, so every difference in the
+/// table below is a difference in *look* and nothing else.
+///
+/// The two columns worth staring at are `tones` and `chroma`, because they are
+/// measured off the rendered pixels rather than off the intent. A grey box says
+/// so in the numbers.
+fn read_one(args: &[String]) -> i32 {
+    let (path, d) = match load(args) {
+        Ok(v) => v,
+        Err(e) => return bail(e),
+    };
+    // A readability pass is about an *outdoor* plant unless somebody says
+    // otherwise: comparing four pictures of the same shed proves nothing about
+    // what is inside it.
+    let base = form::Ask {
+        style: flag(args, "--style").and_then(Style::by_tag).unwrap_or(Style::Yard),
+        ..ask_of(args)
+    };
+    let eye = eye_of(args);
+    let (w, h) = (760usize, 480usize);
+
+    let mut scenes = Vec::new();
+    for g in form::GRADES {
+        match form::build(&d, base.at(g)) {
+            Ok(s) => scenes.push(s),
+            Err(e) => return bail(format!("{path}: {e}")),
+        }
+    }
+    // One frame for all four, so that a piece being added cannot make the
+    // plant look further away.
+    let frame = scenes.iter().fold(scenes[0].bounds, |a, s| a.join(s.bounds));
+
+    println!("{path}\n");
+    println!("  the same machine, four ways. Nothing below moves a millimetre.\n");
+    println!(
+        "  {:<2} {:<8} {:>7} {:>6} {:>5} {:>6} {:>7} {:>8}  {}",
+        "", "grade", "pieces", "calls", "mats", "tones", "chroma", "legible", "what changed"
+    );
+    println!("  {}", "-".repeat(104));
+
+    let mut shots = Vec::new();
+    for (g, scene) in form::GRADES.iter().zip(scenes.iter()) {
+        let st = scene.stats();
+        let mut shot = form::shot::render_in(scene, frame, w, h, eye, 0);
+        let pal = shot.palette();
+        let (uniq, kinds) = scene.legible();
+        println!(
+            "  {:<2} {:<8} {:>7} {:>6} {:>5} {:>6} {:>6}% {:>8}  {}",
+            g.letter(),
+            g.tag(),
+            st.pieces,
+            st.batches,
+            st.mats,
+            pal.tones,
+            pal.chroma,
+            format!("{uniq}/{kinds}"),
+            g.what()
+        );
+        shot.caption(&format!("{}  {}", g.letter(), g.what().to_uppercase()), 2);
+        shots.push(shot);
+    }
+
+    // The claim that makes the comparison honest, checked here rather than
+    // asserted in a paragraph: A and B are the same plant, piece for piece.
+    let same = scenes[0]
+        .pieces
+        .iter()
+        .zip(scenes[1].pieces.iter())
+        .all(|(a, b)| a.mesh == b.mesh && a.at == b.at && a.size == b.size && a.dir == b.dir);
+    let repainted = scenes[0]
+        .pieces
+        .iter()
+        .zip(scenes[1].pieces.iter())
+        .filter(|(a, b)| a.mat != b.mat)
+        .count();
+    println!(
+        "\n  A to B: {} pieces, {} of them repainted, {} moved.",
+        scenes[0].pieces.len(),
+        commas(repainted as u128),
+        if same { "none" } else { "SOME" }
+    );
+    println!(
+        "  A to D: {} pieces added, and the routes are identical -- {} runs, {} m, {} bends.",
+        commas((scenes[3].pieces.len() - scenes[0].pieces.len()) as u128),
+        scenes[3].routes.len(),
+        scenes[3].routes.iter().map(|r| r.length as i64).sum::<i64>() / 1000,
+        scenes[3].routes.iter().map(|r| r.bends).sum::<usize>()
+    );
+
+    // What each material is actually being used for, which is the material
+    // language, read back off the plant rather than off this file.
+    println!("\n  {:<10} {:>7}  {}", "material", "pieces", "mostly");
+    println!("  {}", "-".repeat(64));
+    let full = &scenes[3];
+    for m in form::kit::MATS {
+        let mine: Vec<&form::Piece> = full.pieces.iter().filter(|p| p.mat == m).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let mut what: std::collections::BTreeMap<&str, usize> = Default::default();
+        for p in &mine {
+            *what.entry(full.owner(p.of).what.as_str()).or_default() += 1;
+        }
+        let mut top: Vec<(&str, usize)> = what.into_iter().collect();
+        top.sort_by_key(|(k, n)| (std::cmp::Reverse(*n), *k));
+        println!(
+            "  {:<10} {:>7}  {}",
+            m.tag(),
+            mine.len(),
+            top.iter().take(4).map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ")
+        );
+    }
+
+    if let Some(out) = flag(args, "--png") {
+        let (cw, ch, rgb) = form::shot::contact(&shots, 2);
+        if let Err(e) = std::fs::write(out, form::shot::png(cw, ch, &rgb)) {
+            return bail(format!("cannot write {out}: {e}"));
+        }
+        println!("\n  wrote {out}  ({cw}x{ch}, four panels)");
+    }
+    0
+}
+
+/// Every design, at every grade. One row per design, and the last two columns
+/// are the answer to the note's question.
+fn read_all(args: &[String]) -> i32 {
+    let base = form::Ask {
+        style: flag(args, "--style").and_then(Style::by_tag).unwrap_or(Style::Yard),
+        ..ask_of(args)
+    };
+    let paths = design_paths();
+    if paths.is_empty() {
+        eprintln!("no designs in ./designs");
+        return 1;
+    }
+    println!(
+        "{:<24} {:>16} {:>16} {:>16} {:>16}",
+        "design", "A grey", "B paint", "C detail", "D full"
+    );
+    println!("{:<24} {:>16} {:>16} {:>16} {:>16}", "", "pieces mats tone", "pieces mats tone", "pieces mats tone", "pieces mats tone");
+    println!("{}", "-".repeat(94));
+    let (mut tones_a, mut tones_d, mut n) = (0usize, 0usize, 0usize);
+    let mut worst = 0;
+    for path in &paths {
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let d = match Design::parse(&src) {
+            Ok(d) => d,
+            Err(e) => {
+                println!("{:<24} {e}", short(path));
+                worst = 1;
+                continue;
+            }
+        };
+        let mut cells = Vec::new();
+        let Ok(full) = form::build(&d, base.at(form::Grade::Full)) else {
+            worst = 1;
+            continue;
+        };
+        for g in form::GRADES {
+            let Ok(scene) = form::build(&d, base.at(g)) else {
+                worst = 1;
+                continue;
+            };
+            let st = scene.stats();
+            // Small, because this is a measurement rather than a picture, and
+            // sixteen designs at four grades is sixty-four renders.
+            let pal = form::shot::render_in(&scene, full.bounds, 240, 160, form::shot::Eye::default(), 0)
+                .palette();
+            if g == form::Grade::Grey {
+                tones_a += pal.tones;
+            }
+            if g == form::Grade::Full {
+                tones_d += pal.tones;
+            }
+            cells.push(format!("{:>7} {:>4} {:>4}", st.pieces, st.mats, pal.tones));
+        }
+        n += 1;
+        println!("{:<24} {}", short(path), cells.join(" "));
+    }
+    if n > 0 {
+        println!(
+            "\n  Across {n} designs the plant gains {} tones on average between A and D,",
+            (tones_d as i64 - tones_a as i64) / n as i64
+        );
+        println!("  and not one of them changed shape to get there.");
+    }
+    worst
+}
+
+fn eye_of(args: &[String]) -> form::shot::Eye {
+    form::shot::Eye {
+        yaw: flag(args, "--yaw").and_then(|s| s.parse().ok()).unwrap_or(0.72),
+        pitch: flag(args, "--pitch").and_then(|s| s.parse().ok()).unwrap_or(0.34),
+        zoom: flag(args, "--zoom").and_then(|s| s.parse().ok()).unwrap_or(1.0),
+    }
 }
 
 fn design_paths() -> Vec<String> {

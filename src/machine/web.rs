@@ -16,6 +16,7 @@
 //!   POST /api/compile         the macro-machine: transient, orbit, waveform
 //!   GET  /api/kit             experiment 08: twenty-five meshes, eight materials
 //!   POST /api/form            experiment 08: the document, built as a plant
+//!                             ?grade=  experiment 09: how much of the look
 //!   POST /api/verify?t=N      the compiled answer against a straight run
 //!   POST /api/save?name=X     write it to designs/
 //! ```
@@ -193,7 +194,8 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
             "/api/form" => {
                 let style = req.query.get("style").map(String::as_str).unwrap_or("works");
                 let world = req.query.get("seed").and_then(|s| s.parse().ok()).unwrap_or(0);
-                return ("200 OK", mime, formed(&req.body, style, world).to_string());
+                let grade = req.query.get("grade").map(String::as_str).unwrap_or("full");
+                return ("200 OK", mime, formed(&req.body, style, world, grade).to_string());
             }
             "/api/verify" => return ("200 OK", mime, verified(&req.body, t()).to_string()),
             "/api/save" => {
@@ -304,7 +306,7 @@ fn totals_json(t: &super::sim::Totals) -> Json {
 /// The same document that `/api/state` simulates, sent to a different pass of
 /// a different module tree, which is the whole architectural claim of
 /// experiment 08 expressed as two routes that share nothing but their input.
-fn formed(body: &str, style: &str, world: u64) -> Json {
+fn formed(body: &str, style: &str, world: u64, grade: &str) -> Json {
     let d = match incoming(body) {
         Ok(d) => d,
         Err(e) => return e,
@@ -312,6 +314,7 @@ fn formed(body: &str, style: &str, world: u64) -> Json {
     let ask = super::form::Ask {
         style: super::form::Style::by_tag(style).unwrap_or_default(),
         world,
+        grade: super::form::Grade::by_tag(grade).unwrap_or_default(),
     };
     match super::form::build(&d, ask) {
         Ok(s) => s.to_json().set("ok", true),

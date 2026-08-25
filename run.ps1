@@ -25,6 +25,11 @@ param(
     #   -Machine form designs/x.machine [--png shot.png] [--obj plant.obj]
     #   -Machine forms                 every design built, counted and hashed
     #   -Machine kit [--png sheet.png] the asset library, one of everything
+    # Experiment 09 builds it four ways and compares them:
+    #   -Machine read designs/x.machine [--png sheet.png]
+    #   -Machine reads                 every design, at all four grades
+    # Anything that builds a plant takes --grade a|b|c|d as well as --style and
+    # --seed.
     [switch]$Machine,
     [string]$Play,
     # PowerShell binds anything starting with `-` to a parameter, so the

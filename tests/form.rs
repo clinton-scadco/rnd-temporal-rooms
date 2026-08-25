@@ -20,7 +20,7 @@
 
 use temporal_rooms::machine::design::Design;
 use temporal_rooms::machine::form::layout::{Arch, Mount};
-use temporal_rooms::machine::form::{self, kit, Ask, Style, FAR, MEDIUM};
+use temporal_rooms::machine::form::{self, kit, Ask, Grade, Style, FAR, MEDIUM};
 use temporal_rooms::machine::{eval, orbit};
 
 fn design(path: &str) -> Design {
@@ -61,7 +61,7 @@ fn the_look_changes_no_number() {
         let mut seen = std::collections::BTreeSet::new();
         for style in [Style::Works, Style::Yard, Style::Hall] {
             for world in [0u64, 1, 7, 9_999] {
-                let s = form::build(&d, Ask { style, world }).unwrap();
+                let s = form::build(&d, Ask { style, world, ..Ask::default() }).unwrap();
                 seen.insert(s.hash());
                 let after = eval::report(&d, &orbit::compile(&d).unwrap());
                 assert_eq!(
@@ -108,8 +108,8 @@ fn a_round_trip_through_the_file_builds_the_same_plant() {
 #[test]
 fn a_different_world_seed_is_a_different_plant() {
     let d = design("designs/03-compact.machine");
-    let a = form::build(&d, Ask { style: Style::Works, world: 1 }).unwrap();
-    let b = form::build(&d, Ask { style: Style::Works, world: 2 }).unwrap();
+    let a = form::build(&d, Ask { style: Style::Works, world: 1, ..Ask::default() }).unwrap();
+    let b = form::build(&d, Ask { style: Style::Works, world: 2, ..Ask::default() }).unwrap();
     assert_ne!(a.hash(), b.hash());
     // But not a differently *shaped* plant: the seed dresses it, it does not
     // design it. Same components, same pipework, same steel.
@@ -323,7 +323,12 @@ fn each_domain_gets_its_own_treatment() {
 #[test]
 fn the_library_stays_small() {
     assert!(kit::MESHES.len() <= 30, "the note asked for twenty to thirty meshes");
-    assert!(kit::MATS.len() <= 10, "one material library, not one per asset");
+    // Experiment 08 held this at eight and experiment 09 raised it to twelve,
+    // which is a ceiling being moved on purpose rather than a limit failing:
+    // the material *language* needed four more distinctions than the material
+    // *library* had. It is still a library -- thirty-eight components, twelve
+    // materials -- and the day it is thirty-eight materials it is not.
+    assert!(kit::MATS.len() <= 14, "one material library, not one per asset");
     for m in kit::MESHES {
         let g = kit::geom(m);
         assert!(g.tris() > 0, "{m} is empty");
@@ -336,9 +341,12 @@ fn the_library_stays_small() {
         // because its length has to run along +Y like every other stretchable
         // thing, and something has to give.
         let deep = if m == kit::Mesh::Rail { 1.02 } else { wide };
-        // A little over the top is allowed: a pipe support's cradle holds the
-        // pipe *at* its nominal height, so its arms stand proud of it.
-        let tall = if m == kit::Mesh::Elbow { kit::Mesh::ELBOW_R + 0.6 } else { 1.3 };
+        // A little over the top is allowed for the fittings that wrap a run
+        // and have to close over it -- a flange, a clamp's bolts. Nothing that
+        // is *scaled by its own height* may use it, because a piece that
+        // stands proud by a fraction of a four-metre post stands proud by a
+        // metre: that was the pipe support, and it went through its pipe.
+        let tall = if m == kit::Mesh::Elbow { kit::Mesh::ELBOW_R + 0.6 } else { 1.1 };
         for i in 0..g.verts() {
             let (x, y, z) = (g.pos[i * 3], g.pos[i * 3 + 1], g.pos[i * 3 + 2]);
             assert!(x.abs() <= wide, "{m} is wider than canonical: {x}");
@@ -649,4 +657,131 @@ fn the_placement_frame_is_a_rotation() {
     for d in [EAST, WEST, NORTH, SOUTH] {
         assert_eq!(frame_of(d).1, UP.mul(1000), "a rail along {d} would lie down");
     }
+}
+
+// ------------------------------------------------- the corners of a pipe run
+
+/// A straight is shortened to leave room for the elbows on its ends, and an
+/// elbow is drawn at a corner. Those were two decisions, taken by two loops
+/// with two different tests, and where they disagreed the run came out with a
+/// hole in it: forty-one per cent of every corner in `designs/`.
+///
+/// They are one decision now, and this is the property that makes it one --
+/// no straight is ever asked to give up more length than it has.
+#[test]
+fn no_straight_is_trimmed_for_a_bend_that_never_arrives() {
+    use temporal_rooms::machine::form::route;
+    let mut checked = 0;
+    for (path, d) in all_designs() {
+        let scene = form::build(&d, Ask { style: Style::Yard, world: 0, grade: Grade::Full })
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        for r in &scene.routes {
+            let bent = route::elbows_of(r);
+            let bend = route::bend_of(r);
+            assert_eq!(bent.len(), r.path.len());
+            // An elbow only ever sits on a corner: never on an end, and never
+            // where the run does not actually turn.
+            assert!(!bent[0] && !bent[bent.len() - 1], "{}: an elbow on a socket", r.name);
+            for i in 1..r.path.len() {
+                let seg = r.path[i].sub(r.path[i - 1]);
+                let owed = bend * (bent[i - 1] as i32 + bent[i] as i32);
+                assert!(
+                    owed < seg.len(),
+                    "{}: segment {i} is {}mm and owes {}mm to its bends",
+                    r.name,
+                    seg.len(),
+                    owed
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 100, "only {checked} straights checked -- the designs got smaller");
+}
+
+/// A handrail is drawn with its height along canonical `+Z`, so a platform
+/// whose rails are spun any other way has its handrails lying flat on the
+/// decking. That is what the walkways were doing, and it is why their corners
+/// looked open: there was nothing standing up at them to close.
+#[test]
+fn handrails_stand_up() {
+    use temporal_rooms::machine::form::{kit::Mesh, right_of, UP};
+    let mut rails = 0;
+    for (path, d) in all_designs() {
+        let scene = form::build(&d, Ask { style: Style::Yard, world: 0, grade: Grade::Full })
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        for p in scene.pieces.iter().filter(|p| p.mesh == Mesh::Rail) {
+            // Canonical +Z after the spin, which is where the uprights point.
+            let up = right_of(p.dir, (p.spin + 1) & 3);
+            assert_eq!(up, UP.mul(1000), "{path}: a handrail along {} is lying down", p.dir);
+            rails += 1;
+        }
+    }
+    assert!(rails > 50, "only {rails} handrails in the whole repository");
+}
+
+/// Both stringers of a flight, and both of its handrails, are offset from its
+/// centreline -- in opposite directions, which is the only arrangement that
+/// makes them two things rather than one thing drawn twice.
+#[test]
+fn a_stair_has_two_sides() {
+    use temporal_rooms::machine::form::{kit::Mesh, Piece};
+    for (path, d) in all_designs() {
+        let scene = form::build(&d, Ask { style: Style::Yard, world: 0, grade: Grade::Full })
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
+        // A stair's stringers are the only sloping beams in the plant.
+        let sloping: Vec<&Piece> = scene
+            .pieces
+            .iter()
+            .filter(|p| p.mesh == Mesh::Beam && p.dir.y != 0 && (p.dir.x != 0 || p.dir.z != 0))
+            .collect();
+        for a in &sloping {
+            let twins = sloping.iter().filter(|b| b.at == a.at && b.dir == a.dir).count();
+            assert_eq!(twins, 1, "{path}: two stringers on the same line at {}", a.at);
+        }
+    }
+}
+
+/// A flight of stairs does not go through the plant.
+///
+/// Experiment 09 sent a stair down whichever side of its platform had the most
+/// room *on the plot*, which stopped flights landing in the yard and, because
+/// the roomiest side of a platform is the one facing the middle of the works,
+/// made them noticeably more likely to descend through a machine instead: 258
+/// treads inside equipment across the repository, against 163 for the coin
+/// toss it replaced. Landing on the concrete and missing the plant are two
+/// requirements, and a flight now has twelve landings to satisfy both from.
+#[test]
+fn a_stair_comes_down_where_there_is_room_for_it() {
+    use temporal_rooms::machine::form::{kit::Mesh, Owns};
+    let (mut treads, mut buried) = (0, 0);
+    for (path, d) in all_designs() {
+        for style in [Style::Yard, Style::Works] {
+            let s = form::build(&d, Ask { style, world: 0, grade: Grade::Full })
+                .unwrap_or_else(|e| panic!("{path}: {e}"));
+            let bodies: Vec<_> = s
+                .pieces
+                .iter()
+                .filter(|p| {
+                    s.owners[p.of as usize].class == Owns::Unit
+                        && matches!(p.mesh, Mesh::Cyl | Mesh::Box | Mesh::Fins | Mesh::Cone)
+                })
+                .map(|p| p.vol())
+                .collect();
+            for t in s.pieces.iter().filter(|p| p.mesh == Mesh::Step) {
+                treads += 1;
+                if bodies.iter().any(|b| b.hits(t.vol())) {
+                    buried += 1;
+                }
+            }
+        }
+    }
+    assert!(treads > 500, "only {treads} stair treads in the whole repository");
+    // Not none: a plant can be tight enough that every way down goes through
+    // something, and a stair that refused to exist would be worse than one
+    // that clips a lagging band. Ten times the old rate would not be.
+    assert!(
+        buried * 20 < treads,
+        "{buried} of {treads} stair treads are inside a machine"
+    );
 }

@@ -101,6 +101,10 @@ void main() {
 export const view = {
   lod: 0,
   style: 'works',
+  // Experiment 09: which of the four looks to ask for. The default is the one
+  // the designer ships; the other three exist so that the comparison can be
+  // made in the same window rather than in four screenshots.
+  grade: 'full',
   seed: 0,
   pick: -1,
   stats: null,

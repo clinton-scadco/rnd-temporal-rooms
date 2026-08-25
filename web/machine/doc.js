@@ -253,8 +253,11 @@ export async function verify(tick) {
 /// Experiment 08. The same document, to a pass that has never heard of a tick:
 /// nothing about the answer depends on `state.tick`, and nothing about
 /// `state.snapshot` depends on this.
-export async function form(style, seed) {
-  return post(`/api/form?style=${encodeURIComponent(style)}&seed=${seed | 0}`);
+export async function form(style, seed, grade) {
+  return post(
+    `/api/form?style=${encodeURIComponent(style)}&seed=${seed | 0}` +
+    `&grade=${encodeURIComponent(grade || 'full')}`
+  );
 }
 
 function post(url) {

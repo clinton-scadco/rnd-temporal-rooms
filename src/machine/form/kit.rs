@@ -1,4 +1,4 @@
-//! The library: twenty-five canonical meshes, eight materials, and nothing
+//! The library: twenty-nine canonical meshes, twelve materials, and nothing
 //! that knows what a turbine is.
 //!
 //! Experiment 08's second section asks for a *tiny authored asset library* and
@@ -10,7 +10,7 @@
 //! So there is no `turbine.mesh` here. A turbine is a `Cyl` with a `Dome` on
 //! each end, a `Rotor` in the middle, four `Anchor` feet and a `Nozzle` per
 //! port -- and a mill is those same meshes at different proportions in a
-//! different material. Thirty-eight components share twenty-five meshes, which
+//! different material. Thirty-eight components share twenty-nine meshes, which
 //! is the claim in section 2 of the note, made countable.
 //!
 //! # Canonical space
@@ -88,9 +88,21 @@ pub enum Mesh {
     Ladder,
     /// A bladed disc. The one piece that says *this thing turns*.
     Rotor,
+    /// Experiment 09. A concentric reducer, flanged both ends: the piece that
+    /// says a line changed size *on purpose*.
+    Reducer,
+    /// A pipe clamp: a band with two bolted ears. What actually holds a run
+    /// down onto a support.
+    Clamp,
+    /// A fan ring: shroud, hub and blades. The one cue that says *this box
+    /// moves air*.
+    Cowl,
+    /// A saddle: base plate, web plates and a cradle. What a horizontal vessel
+    /// sits in, as opposed to on.
+    Saddle,
 }
 
-pub const MESHES: [Mesh; 25] = [
+pub const MESHES: [Mesh; 29] = [
     Mesh::Box,
     Mesh::Cyl,
     Mesh::Dome,
@@ -116,6 +128,10 @@ pub const MESHES: [Mesh; 25] = [
     Mesh::Stack,
     Mesh::Ladder,
     Mesh::Rotor,
+    Mesh::Reducer,
+    Mesh::Clamp,
+    Mesh::Cowl,
+    Mesh::Saddle,
 ];
 
 impl Mesh {
@@ -146,6 +162,10 @@ impl Mesh {
             Mesh::Stack => "stack",
             Mesh::Ladder => "ladder",
             Mesh::Rotor => "rotor",
+            Mesh::Reducer => "reducer",
+            Mesh::Clamp => "clamp",
+            Mesh::Cowl => "cowl",
+            Mesh::Saddle => "saddle",
         }
     }
 
@@ -165,15 +185,28 @@ pub fn by_tag(tag: &str) -> Option<Mesh> {
     MESHES.iter().copied().find(|m| m.tag() == tag)
 }
 
+pub fn mat_by_tag(tag: &str) -> Option<Mat> {
+    MATS.iter().copied().find(|m| m.tag() == tag)
+}
+
 // --------------------------------------------------------------- materials
 
-/// Eight materials for the whole plant, because the note asked for a shared
+/// Twelve materials for the whole plant, because the note asked for a shared
 /// library rather than a texture per asset -- and because the moment there is
 /// one material per component, "procedural assembly" has quietly become
 /// "hand-authored models with extra steps".
+///
+/// Experiment 08 shipped eight, and experiment 09 found that eight was one
+/// short of a *language*. Four of them were structural and one was the plant's
+/// paint, which left three to say everything about what a thing is for -- so a
+/// tank, a pump casing and a wall panel all came out the same colour and the
+/// plant flattened. The four added here are the four distinctions a person
+/// standing in a works actually makes: what is under pressure, what is water,
+/// what is fuel, and what will hurt you.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord, Hash)]
 pub enum Mat {
-    /// The plant's colour, chosen once per installation from its seed.
+    /// The plant's colour, chosen once per installation from its seed. In the
+    /// material language of experiment 09 this is *machinery*: what turns.
     Paint,
     Steel,
     /// Structural steel: dark, and unloved.
@@ -184,9 +217,21 @@ pub enum Mat {
     /// Lagging: pale, matte, and the reason a heat line reads as a heat line.
     Lag,
     Rubber,
+    /// Off-white painted vessel steel: tanks, drums, columns, anything with a
+    /// pressure in it.
+    Cream,
+    /// Cold service: a desaturated blue-grey, and the only blue in the plant.
+    Water,
+    /// Fuel and process: a dark green that reads as *not water* from across a
+    /// yard.
+    Oil,
+    /// Hazard yellow. Handrails, guards, kerbs and the mouth of anything that
+    /// will take an arm off. Used sparingly on purpose -- an accent that is
+    /// everywhere is a colour.
+    Warn,
 }
 
-pub const MATS: [Mat; 8] = [
+pub const MATS: [Mat; 12] = [
     Mat::Paint,
     Mat::Steel,
     Mat::Dark,
@@ -195,6 +240,10 @@ pub const MATS: [Mat; 8] = [
     Mat::Copper,
     Mat::Lag,
     Mat::Rubber,
+    Mat::Cream,
+    Mat::Water,
+    Mat::Oil,
+    Mat::Warn,
 ];
 
 impl Mat {
@@ -208,6 +257,10 @@ impl Mat {
             Mat::Copper => "copper",
             Mat::Lag => "lagging",
             Mat::Rubber => "rubber",
+            Mat::Cream => "cream",
+            Mat::Water => "water",
+            Mat::Oil => "oil",
+            Mat::Warn => "warn",
         }
     }
 
@@ -222,8 +275,12 @@ impl Mat {
             Mat::Galv => ([148, 156, 160], 45, true),
             Mat::Concrete => ([150, 146, 138], 92, false),
             Mat::Copper => ([176, 116, 74], 40, true),
-            Mat::Lag => ([206, 202, 190], 96, false),
+            Mat::Lag => ([224, 221, 212], 96, false),
             Mat::Rubber => ([44, 44, 48], 88, false),
+            Mat::Cream => ([198, 191, 174], 46, false),
+            Mat::Water => ([94, 124, 146], 54, false),
+            Mat::Oil => ([68, 88, 72], 58, false),
+            Mat::Warn => ([206, 166, 46], 62, false),
         }
     }
 }
@@ -356,9 +413,15 @@ impl Geom {
                 }
             }
             for i in 0..seg {
+                // The same winding as `barrel`, and for the same reason: the
+                // ring is built lower-then-upper per step, so `a, a+1, b` is
+                // the order that comes out counter-clockwise from outside. It
+                // was `a, b, a+1` here, which is the mirror image -- and a
+                // dome whose outside is its inside is culled away by every
+                // renderer downstream, which is why tanks were see-through.
                 let (a, b) = (base + (i as u32) * 2, base + (i as u32) * 2 + 2);
-                self.tri(a, b, a + 1);
-                self.tri(b, b + 1, a + 1);
+                self.tri(a, a + 1, b);
+                self.tri(b, a + 1, b + 1);
             }
         }
     }
@@ -427,11 +490,14 @@ pub fn geom(m: Mesh) -> Geom {
         Mesh::Elbow => g.bend(Mesh::ELBOW_R, 0.5, SEG, 6),
         Mesh::Tee => {
             g.barrel(0.5, 0.5, 0.0, 1.0, SEG, true);
-            // The branch reaches half a diameter clear of the run, which is
-            // as far as anything in this library is allowed out of its own box.
+            // The branch reaches clear of the run and stops, which is as far
+            // out of its own box as anything in this library is allowed. It
+            // used to stop at 0.44 -- *inside* a run of radius 0.5 -- so the
+            // only part of a tee anybody ever saw was its collar, apparently
+            // glued to the side of an ordinary pipe.
             let mut b = Geom::default();
-            b.barrel(0.42, 0.42, 0.0, 0.44, SEG, true);
-            b.disc(0.52, 0.44, SEG, true);
+            b.barrel(0.42, 0.42, 0.0, 0.6, SEG, true);
+            b.disc(0.52, 0.6, SEG, true);
             across(&mut g, &b, [0.0, 0.5, 0.0]);
         }
         Mesh::Flange => {
@@ -475,11 +541,16 @@ pub fn geom(m: Mesh) -> Geom {
             g.cuboid([-0.5, 0.0, 0.52], [0.5, 1.0, 0.62]);
             g.cuboid([-0.5, 0.0, 0.94], [0.5, 1.0, 1.0]);
         }
+        // Post, cross-head and two cradle horns, and every one of them inside
+        // the unit box. The horns used to reach to 1.24, which is fine for a
+        // piece whose scale is local and ruinous for this one: a support is
+        // scaled by its *whole height*, so a quarter of a four-metre post is a
+        // metre of steel driven up through the pipe it is meant to be holding.
         Mesh::Support => {
-            g.cuboid([-0.12, 0.0, -0.12], [0.12, 0.88, 0.12]);
-            g.cuboid([-0.5, 0.88, -0.14], [0.5, 1.0, 0.14]);
-            g.cuboid([-0.5, 1.0, -0.14], [-0.34, 1.24, 0.14]);
-            g.cuboid([0.34, 1.0, -0.14], [0.5, 1.24, 0.14]);
+            g.cuboid([-0.12, 0.0, -0.12], [0.12, 0.86, 0.12]);
+            g.cuboid([-0.5, 0.86, -0.14], [0.5, 0.94, 0.14]);
+            g.cuboid([-0.5, 0.94, -0.14], [-0.34, 1.0, 0.14]);
+            g.cuboid([0.34, 0.94, -0.14], [0.5, 1.0, 0.14]);
         }
         Mesh::Anchor => {
             g.cuboid([-0.5, 0.0, -0.5], [0.5, 0.5, 0.5]);
@@ -547,8 +618,79 @@ pub fn geom(m: Mesh) -> Geom {
                 turned(&mut g, &f, a.cos(), a.sin());
             }
         }
+        // Wide in at the bottom, narrow out at the top, and a flange on each
+        // end so that it is obviously a fitting rather than a pipe that got
+        // thinner while nobody was looking.
+        Mesh::Reducer => {
+            g.barrel(0.5, 0.5, 0.0, 0.14, SEG, false);
+            g.barrel(0.5, 0.3, 0.14, 0.8, SEG, false);
+            g.barrel(0.3, 0.3, 0.8, 1.0, SEG, false);
+            g.barrel(0.6, 0.6, 0.0, 0.08, SEG, true);
+            g.barrel(0.4, 0.4, 0.92, 1.0, SEG, true);
+            g.disc(0.5, 0.0, SEG, false);
+            g.disc(0.3, 1.0, SEG, true);
+        }
+        // A strap, two ears and two bolts. Half a metre of this is the
+        // difference between a pipe resting on a support and a pipe fixed to
+        // one.
+        Mesh::Clamp => {
+            g.barrel(0.56, 0.56, 0.0, 1.0, SEG, false);
+            for sgn in [-1.0f32, 1.0] {
+                let (a, b) = (sgn * 0.44, sgn * 0.60);
+                g.cuboid([a.min(b), 0.0, -0.09], [a.max(b), 1.0, 0.09]);
+                let mut bolt = Geom::default();
+                bolt.barrel(0.055, 0.055, -0.06, 1.06, 8, true);
+                shifted(&mut g, &bolt, [sgn * 0.52, 0.0, 0.0]);
+            }
+        }
+        // A shroud, a hub and six blades: the piece that says a box moves air
+        // rather than holding it.
+        Mesh::Cowl => {
+            g.barrel(0.5, 0.5, 0.0, 1.0, SEG, false);
+            g.barrel(0.44, 0.44, 0.0, 1.0, SEG, false);
+            g.barrel(0.5, 0.44, 0.0, 0.1, SEG, false);
+            g.barrel(0.5, 0.44, 1.0, 0.9, SEG, false);
+            g.barrel(0.13, 0.13, 0.16, 0.84, 10, true);
+            for i in 0..6 {
+                let a = (i as f32 / 6.0) * std::f32::consts::TAU;
+                let mut f = Geom::default();
+                f.cuboid([-0.05, 0.36, 0.13], [0.05, 0.62, 0.44]);
+                turned(&mut g, &f, a.cos(), a.sin());
+            }
+        }
+        // A cradle for a horizontal vessel: base plate, solid web, and a strap
+        // that curves up round the shell. The vessel's axis runs along local
+        // `+Z`, which is why the callers spin it.
+        Mesh::Saddle => {
+            g.cuboid([-0.5, 0.0, -0.5], [0.5, 0.12, 0.5]);
+            let n = 8;
+            for i in 0..n {
+                let (x0, x1) = (-0.5 + i as f32 / n as f32, -0.5 + (i + 1) as f32 / n as f32);
+                // The mid-ordinate of the segment, on a parabola that sits the
+                // shell down into the saddle by a third of its radius.
+                let xm = (x0 + x1) / 2.0;
+                let h = 0.62 + 0.38 * (xm / 0.5) * (xm / 0.5);
+                g.cuboid([x0, 0.12, -0.34], [x1, (h - 0.14).max(0.12), 0.34]);
+                g.cuboid([x0, (h - 0.14).max(0.12), -0.44], [x1, h, 0.44]);
+            }
+        }
     }
     g
+}
+
+/// Copy `src` into `dst`, moved. Bolts and hubs, which are the same shape in
+/// several places on one mesh.
+fn shifted(dst: &mut Geom, src: &Geom, at: [f32; 3]) {
+    let base = (dst.pos.len() / 3) as u32;
+    for i in 0..src.pos.len() / 3 {
+        dst.vert(
+            [src.pos[i * 3] + at[0], src.pos[i * 3 + 1] + at[1], src.pos[i * 3 + 2] + at[2]],
+            [src.nrm[i * 3], src.nrm[i * 3 + 1], src.nrm[i * 3 + 2]],
+        );
+    }
+    for k in &src.idx {
+        dst.idx.push(base + k);
+    }
 }
 
 /// Copy `src` into `dst`, laid across the run -- a quarter turn about `Z` --

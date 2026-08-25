@@ -68,6 +68,13 @@ Yes — and the load-bearing half of the answer is the direction the arrow point
 `RenderGeometry = Generate(MachineDesign, VisualSeed)`, never the reverse: the
 generated mesh never defines the machine.
 
+**Experiment 09** takes the grey box that came out of it and asks how far a
+*look* gets without touching the generator. One axis, four builds of the same
+plant, compared side by side: the baseline, a pure repaint, the vocabulary of
+how things are joined and installed, and articulated archetypes. The repaint —
+which is a pass that may write one field of a piece and cannot move anything —
+turns out to do over half of the work.
+
 ## Quick start
 
 ```powershell
@@ -93,6 +100,11 @@ generated mesh never defines the machine.
 .\run.ps1 -Machine form designs/15-turbinehall.machine --png hall.png
 .\run.ps1 -Machine form designs/10-refinery.machine --obj refinery.obj
 .\run.ps1 -Machine kit --png sheet.png         # the asset library, all of it
+
+# Experiment 09: the same plant, built four ways, compared
+.\run.ps1 -Machine read designs/10-refinery.machine --png sheet.png
+.\run.ps1 -Machine reads                       # every design, at every grade
+.\run.ps1 -Machine form designs/03-compact.machine --grade a --png then.png
 ```
 
 `run.ps1` exists because rustup installs the MSVC toolchain without setting the
@@ -1508,6 +1520,11 @@ for a whole plant, because the moment there is one material per component,
 equipment is lagged, process equipment is painted, structure is galvanised, and
 after four seconds of looking at a plant a stranger can tell them apart.
 
+> Experiment 09 later found that eight was one short of a *language* and took it
+> to twelve, and added four meshes to the twenty-five. Every number in this
+> section is still what `-Machine forms --grade a` prints today, hash for hash;
+> see [Experiment 09](#experiment-09-the-readability-pass).
+
 ### Sixteen plants, and what they cost to draw
 
 ```powershell
@@ -1632,6 +1649,251 @@ sixteen designs say is that it can, and that the mechanism is smaller than
 expected: **five height conventions, seven pipe treatments, a bore taken from a
 rate, and a rule that anything above head height needs a stair.** Almost none of
 the plausibility comes from the meshes.
+
+## Experiment 09: the readability pass
+
+Experiment 08 answered its question and produced a grey box. The follow-up note
+was blunt about it:
+
+> base meshes placed correctly, simple pipes and supports, very limited material
+> variety, almost no secondary detail, weak distinction between "primary
+> equipment", "secondary support" and "cosmetic dressing".
+
+and equally blunt about the fix, which was explicitly *not* more geometry:
+
+> **No geometry changes. Just improve the material/paint assignment rules.**
+
+So experiment 09 adds no new pass, no new simulation feature and no new
+component. It adds one axis — how much of the visual language to apply — and
+then builds the same plant along it four times and compares the pictures.
+
+```text
+A  grey     experiment 08 exactly
+B  paint    the same geometry, piece for piece, in the material language
+C  detail   + how things are joined and installed
+D  full     + archetype articulation
+```
+
+### The comparison is only worth something if it is the same machine
+
+The whole apparatus rests on one property: nothing but the *look* may differ
+between the four. That is enforced where it cannot be forgotten — in a
+signature:
+
+```rust
+pub fn apply(
+    plan: &Plan, routes: &[Run], owners: &[Owner], grade: Grade,
+    pieces: &mut [Piece],
+)
+```
+
+`paint::apply` runs last, may read everything, and may write exactly one field
+of a piece. It could not move a machine if it wanted to. `tests/read.rs` checks
+it from the outside anyway, on every design in the repository:
+
+```text
+the material pass moved no geometry     mesh, position, size, direction, spin,
+                                        level and owner, piece for piece
+...and it did repaint it                163 of 741 pieces on the refinery
+every grade is the same machine         same components, same routes, same
+                                        bores, same bends
+grade A is experiment 08 exactly        eight scene hashes out of the README
+                                        table above, still exact
+```
+
+That last one is the one worth having. Four meshes, four materials, a repaint, a
+connection vocabulary and a set of articulated archetypes later, `--grade a`
+still produces `331db5cf` for `03-compact` — so the baseline in the comparison
+is the real baseline and not a reconstruction of one.
+
+### 1. The material language
+
+Eight materials was four structural ones, a seeded paint and three others, which
+left almost nothing to say what a thing is *for* — so a tank, a pump casing and a
+wall panel all came out the same colour and the plant flattened. Twelve says:
+
+```text
+pressure vessels, tanks, columns     off-white painted steel
+heat equipment, heat mains           lagging
+rotating and process machinery       the works colour, from the seed
+structural steel                     dark, unloved
+walkways, ladders, cladding          galvanised
+foundations                          concrete
+stair treads, guards, kerbs          hazard yellow
+cold service                         blue-grey
+fuel and process service             dark green
+steam                                bright steel, lagged at the joints
+drives                               bright steel
+electrical                           galvanised conduit, copper at the ends
+```
+
+The top eight rows are decided by what a component is *for* rather than by what
+it looks like, which is the same trick experiment 08 played with bores and
+heights: the palette is another consequence of the machine.
+
+The one that goes furthest is service. A fluid line is not just a fluid line, so
+`paint::service` walks upstream through the document — hop by hop, staying in one
+domain — until it finds the source and asks what that source was tuned to draw:
+
+```text
+pump P1 draws crude  ->  PH1  ->  PH2  ->  CO1     every one of those lines is oil
+pump P2 draws water  ->  CD1                        that one is water
+```
+
+Nobody wrote "the refinery is green". A distillation train comes out green and a
+boiler house comes out blue because of one `draws` keyword in a text file, read
+by a pass that has never simulated a tick.
+
+There is a specific thing to report about hazard yellow, because it is the one
+rule that had to be walked back. Handrails were yellow first, and on a compact
+plant it looked superb; on the refinery, which has five platforms and a column,
+the entire installation turned into yellow scaffolding. An accent that appears on
+every edge is not an accent, it is a colour scheme. The yellow now goes on stair
+treads instead — one flight per machine rather than one rail per edge — and on
+guards, kerbs and chute bands.
+
+### 2. The connection vocabulary
+
+Experiment 08's pipework was *connected*. Experiment 09's is *made*:
+
+```text
+a bolted joint at every equipment interface -- a pair of flanges, not one
+an isolation valve where a line leaves a machine
+a reducer where the two ends of a run are not the same size
+a clamp wherever a run crosses one of its own supports
+a lagging collar either side of every elbow on a hot line
+a tee where two lines leave one socket
+a pressure gauge on a third of the process lines
+```
+
+Every one of those is placed on the path the router already found, at a point
+that path already passes through. The clamp is the nicest of them, because it is
+where two passes agree without talking: `route` puts a clamp at each of a run's
+`props` and `frame` puts a support under the same list, so the pipe is fixed to
+the steel by construction rather than by luck.
+
+### 3. Installed, rather than placed
+
+The note's third section was about machines that look dropped rather than
+mounted, and it is right that this is a surprisingly big deal. A plinth gets a
+pad and four holding-down bolts, a column gets a base plate on top of its pad, a
+horizontal vessel gets a proper cradle instead of a block, a pipe support gets a
+pad and, if it is tall, a brace.
+
+Two of these were more interesting than expected.
+
+**A rack is a system, not a row of posts.** Wherever two different runs want
+holding up within the same two-metre bay, they get one trestle between them —
+two columns, a cross beam, and a second tier if anything is running well above
+the first. It falls out of clustering the `props` that already existed, and it
+turns a fence of individual posts into something that looks designed.
+
+**The paint found a bug that four months of grey-boxing hid.** A flight of stairs
+from a twelve-metre platform is six metres long, the apron round a plant is two
+and a bit, and experiment 08 picked which side the flight came down with a coin.
+About half of them landed in the yard. Nobody noticed for as long as a stair was
+drawn in the same grey as everything else, and it was impossible to miss the
+moment one was painted like a stair. From grade C the seed proposes and the plot
+disposes: the side with the most room wins, and the seed only breaks the tie.
+
+### 4. Archetypes, articulated
+
+The note suggested buying better archetype meshes from an asset generator. What
+went in instead is eight to twenty lines per archetype, because the thing missing
+from a pump was never a better pump mesh:
+
+```text
+Can       a bedplate and bolts, a shaft stub out of the driven end and a
+          cooling cowl out of the other -- which end is which comes from
+          where the rotary socket is
+Shell     a tube-sheet flange at each dished end, a manway on the crown, and
+          a saddle rather than a block under each end
+Turbine   lagging bands on the steam half, a casing joint flange, an exhaust
+          hood flaring down at whatever is condensing it, a governor pedestal
+Bank      headers down both long sides and a fan cowl per bay: a cooling unit
+          is a box that moves air, and until there is a fan in the top of it,
+          it is a box
+Vessel    holding-down bolts, a manway, skirt vents, a nozzle cluster on the
+          head, and a davit to lift the head off with
+Skid      an access panel, a guard over the drive end, a stool for whatever
+          drives it
+```
+
+Four new meshes carry most of it: `reducer`, `clamp`, `cowl` and `saddle`.
+Twenty-nine meshes and twelve materials, 3,248 triangles of library for the whole
+kit.
+
+### What the four grades cost, and what they buy
+
+```powershell
+.\run.ps1 -Machine read designs/10-refinery.machine --png sheet.png
+```
+
+```text
+   grade     pieces  calls  mats  tones  chroma  legible  what changed
+A  grey         741     31     6     35      7%      6/8  baseline: experiment 08 as it shipped
+B  paint        741     33    10     32      6%      6/8  material pass: the same geometry, repainted
+C  detail       905     38    10     31      5%      6/8  + connection and installation vocabulary
+D  full         941     39    10     32      5%      6/8  + archetype articulation
+
+A to B: 741 pieces, 163 of them repainted, none moved.
+A to D: 200 pieces added, and the routes are identical -- 12 runs, 149 m, 50 bends.
+```
+
+`--png` writes the four panels on one sheet, captioned, from one camera framed on
+one volume — because a camera that fits itself to each build in turn zooms out
+every time a piece is added, which reads as the plant getting smaller.
+
+`tones` and `chroma` are measured off the rendered pixels rather than off the
+intent, over the machine only: the sky and the concrete apron are identical in
+all four grades and between them are most of the frame. `legible` is the count of
+equipment kinds drawn from a mesh-and-material signature no other kind shares —
+the same test experiment 08 applied to the seven domains, turned on the equipment.
+
+### The honest result
+
+**The pixel metrics barely moved, and the plant looks enormously better.**
+
+Chroma goes 7% to 5%. Tones go 35 to 32. Across all sixteen designs the average
+gain in tones between A and D is *two*. If the question had been asked as "does
+the readability pass make the plant more colourful", the answer measured off the
+pixels would be no.
+
+That is worth reporting rather than tuning away, because it says something about
+what was actually wrong with the grey box. A works **is** grey — the honest
+palette for a plant is concrete, galvanised steel, lagging and dark structural
+steel, and turning up the saturation would have produced a toy. What the pass
+bought was not colour, it was **hierarchy**: the same greys, distributed by what
+a thing is for instead of by which archetype function happened to write it. The
+numbers that do move are the ones about distinction rather than intensity —
+materials in use go from six or seven to nine or ten on every design, and
+`legible` goes from 11/13 to 13/13 on the largest one.
+
+The other honest result is where the gain sits. The note's bet was that **D**
+would look dramatically better than **A**, and it does — but B, the pass that
+adds no geometry at all, does over half of the work, and C does most of the rest.
+D is the smallest step of the three and the most code. If this had to be done
+again with a fixed budget, it would be spent in exactly the order the note
+proposed.
+
+### What it answered, and what it did not
+
+| the question | the answer |
+|---|---|
+| Does better material assignment beat more geometry? | Yes, decisively, and it is not close. B is a pure repaint — 163 pieces of 741 changed material and nothing else — and it is the single largest visible improvement in the experiment. |
+| At which point does it stop looking like a grey-box prototype? | At **C**. B makes it legible; C is where it stops looking like a diagram, because that is where the connections start looking engineered rather than merely connected. |
+| Can the palette be derived rather than authored? | Yes. Every material comes from what a component is for, and the one colour that needed to know something else — water or oil — comes from walking the document upstream to a `draws` keyword. |
+| Did it need AI-generated assets? | No, and it is worth being clear about why. What a pump was missing was not fidelity, it was a bedplate, a shaft out of the right end and a cowl out of the other. That is twenty lines, it is deterministic, and it stays in the same twenty-nine-mesh kit. |
+| Did the readability pass stay downstream? | Yes. Four grades × sixteen designs, judged before and after, and the verdicts never move. |
+| Is the pixel metric any good? | Only as a floor. It catches a plant that has gone monochrome and it agrees that the coverage of the four panels is the same, but it cannot see hierarchy, which is the thing the experiment was actually about. `legible` is the better number and it is still crude. |
+| Is the material language finished? | No. There is no dirt, no edge wear, no heat staining, no insulation texture and no warning markings, because there are no textures at all — twelve flat materials with a roughness each. The note listed AI-assisted texturing as the second-best use of AI here, and that is the next thing this pipeline could actually use. |
+| Did anything get worse? | The draw call count went up by two to eight per plant, because more distinct mesh-and-material pairs is exactly what a material language *is*. Thirty-nine calls for a refinery is still thirty-nine calls. |
+
+The thing being tested was whether a grey-box procedural output can be turned
+into a deliberate visual style without touching the generator. It can, and the
+mechanism is smaller than expected again: **twelve materials assigned by
+function, six rules about how things are joined, four rules about how things are
+mounted, and one flight of stairs that goes where there is room for it.**
 
 ## The tiers
 
@@ -1828,6 +2090,26 @@ These are real, and worth stating plainly.
     which is the good part; everything else is a rectangle. No bays, no
     mezzanines, no relationship between the building and what it contains
     beyond "is it taller than nine metres".
+23. **Twelve flat materials, and not one texture.** Experiment 09 gave the plant
+    a material *language* and no material *surfaces*: no dirt, no edge wear, no
+    heat staining, no insulation texture, no warning markings, no lettering.
+    Every material is a colour, a roughness and a metalness. That is the single
+    biggest remaining gap between this and something shippable, and it is the
+    one place in the whole pipeline where a generative tool would obviously
+    earn its keep.
+24. **The readability metric cannot see hierarchy.** `tones` and `chroma` are
+    measured off the rendered pixels and they barely move between the grades,
+    while the plant improves enormously — because what improved was which grey
+    went where, and neither number can see that. `legible` counts how many
+    equipment kinds have a mesh-and-material signature nobody else shares,
+    which is closer and still crude. There is no measurement here of the thing
+    the experiment was actually about.
+25. **A grade is a global switch, not a distance.** The four looks are a
+    build-time argument, so a plant is articulated everywhere or nowhere. The
+    obvious use of the axis — full articulation on the installation you are
+    standing in, grade A on the twelve behind it — needs the grade to be per
+    piece and per distance, which is the same machinery as the LOD prefix and
+    has not been wired to it.
 
 ## Layout
 
@@ -1848,7 +2130,7 @@ src/why.rs        Prototype 1: why a thing is not running, and what binds
 src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
 src/main.rs       experiment harness, `serve`, `export` and `play`
 web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            130 cross-validation tests
+tests/            143 cross-validation tests
 configs/          the fifteen configurations, plus the first scenario plant
 scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
@@ -1861,22 +2143,25 @@ src/machine/orbit.rs   Ex 06: run it until it repeats; keep transient + period
 src/machine/eval.rs    Ex 07: four briefs, competing costs, and no score
 src/machine/snap.rs    Ex 06: state(t) for a renderer, and why things are stopped
 src/machine/web.rs     Ex 06: its own small server, so it can be thrown away
-src/bin/machine.rs     Ex 08: run, why, compile, verify, parts, reuse, form, kit
-web/machine/           Ex 06: the designer, and Ex 08: the plant, in WebGL
+src/bin/machine.rs     Ex 08/09: run, why, compile, verify, parts, reuse, form, kit, read
+web/machine/           Ex 06: the designer, Ex 08: the plant in WebGL, Ex 09: its four looks
 designs/               Ex 08: sixteen answers to four briefs
 tests/machine_web.mjs  Ex 06: the front end, checked without a browser
 
 src/machine/form/mod.rs     Ex 08: millimetres, pieces, batches, and the pipeline
-src/machine/form/kit.rs     Ex 08: twenty-five canonical meshes and eight materials
+src/machine/form/kit.rs     Ex 08/09: twenty-nine canonical meshes, twelve materials
 src/machine/form/seed.rs    Ex 08: where every cosmetic choice comes from
 src/machine/form/layout.rs  Ex 08: volumes, mounts, orientation, sockets, clearance
-src/machine/form/route.rs   Ex 08: A* with a heading, and seven pipe treatments
+src/machine/form/route.rs   Ex 08: A* with a heading; Ex 09: the connection vocabulary
 src/machine/form/frame.rs   Ex 08: plinths, columns, supports, platforms, stairs
-src/machine/form/body.rs    Ex 08: thirteen archetypes, assembled from the kit
+src/machine/form/paint.rs   Ex 09: the material language, as one pass over one field
+src/machine/form/body.rs    Ex 08: thirteen archetypes; Ex 09: articulated
 src/machine/form/shell.rs   Ex 08: slab, walls, roof, and the holes the plant cuts
 src/machine/form/obj.rs     Ex 08: the scene, baked, for anything that opens .obj
 src/machine/form/shot.rs    Ex 08: a rasteriser and a PNG writer, so it can be seen
+                            Ex 09: contact sheets, captions, and the palette metric
 tests/form.rs               Ex 08: the five claims, checked rather than asserted
+tests/read.rs               Ex 09: the five claims about what did *not* change
 ```
 
 Zero dependencies outside `std`. The workbench added a JSON codec and an HTTP

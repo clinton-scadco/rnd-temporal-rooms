@@ -23,6 +23,11 @@ pub struct Shot {
     pub h: usize,
     px: Vec<[f32; 3]>,
     z: Vec<f32>,
+    /// Which class of thing painted each pixel: 0 nothing, 1 a component,
+    /// 2 a connection, 3 structure, 4 the enclosure. Experiment 09 measures
+    /// the *machine* rather than the yard it stands in, and this is how it
+    /// tells them apart after the fact.
+    who: Vec<u8>,
 }
 
 /// Where the camera is, in the same terms the browser's orbit control uses.
@@ -43,8 +48,25 @@ impl Default for Eye {
 
 /// The scene, at whatever level of detail, from wherever.
 pub fn render(s: &Scene, w: usize, h: usize, eye: Eye, lod: u8) -> Shot {
-    let mut shot = Shot { w, h, px: vec![[0.80, 0.84, 0.88]; w * h], z: vec![f32::MAX; w * h] };
-    let b = s.bounds;
+    render_in(s, s.bounds, w, h, eye, lod)
+}
+
+/// The scene, framed on somebody else's volume.
+///
+/// Experiment 09 compares four builds of one plant, and a camera that fits
+/// itself to each build in turn would zoom out a little every time a piece was
+/// added -- which reads, in a contact sheet, as the plant getting smaller. So
+/// the four are framed on one volume, and the only thing that changes between
+/// the panels is what is in them.
+pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod: u8) -> Shot {
+    let mut shot = Shot {
+        w,
+        h,
+        px: vec![[0.80, 0.84, 0.88]; w * h],
+        z: vec![f32::MAX; w * h],
+        who: vec![0; w * h],
+    };
+    let b = frame;
     let at = [
         mid(b.lo.x, b.hi.x),
         mid(b.lo.y, b.hi.y) * 0.7,
@@ -106,7 +128,19 @@ pub fn render(s: &Scene, w: usize, h: usize, eye: Eye, lod: u8) -> Shot {
             ]));
         }
 
-        let look = Look { base, rough, metal, sun, cam };
+        let look = Look {
+            base,
+            rough,
+            metal,
+            sun,
+            cam,
+            who: match s.owner(p.of).class {
+                super::Owns::Unit => 1,
+                super::Owns::Run => 2,
+                super::Owns::Frame => 3,
+                super::Owns::Shell => 4,
+            },
+        };
         for t in g.idx.chunks(3) {
             let (a, b2, c) = (t[0] as usize, t[1] as usize, t[2] as usize);
             let (va, vb, vc) = (view[a], view[b2], view[c]);
@@ -163,6 +197,7 @@ struct Look {
     metal: bool,
     sun: [f32; 3],
     cam: [f32; 3],
+    who: u8,
 }
 
 impl Shot {
@@ -199,6 +234,7 @@ impl Shot {
                 let nn = unit([mix(n, 0), mix(n, 1), mix(n, 2)]);
                 let pos = [mix(w, 0), mix(w, 1), mix(w, 2)];
                 self.z[i] = z;
+                self.who[i] = look.who;
                 self.px[i] = shade(nn, pos, look);
             }
         }
@@ -285,6 +321,211 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 fn neg(v: [f32; 3]) -> [f32; 3] {
     [-v[0], -v[1], -v[2]]
 }
+
+// ------------------------------------------------- experiment 09: comparing
+
+/// What a picture of a plant is made of, counted.
+///
+/// The note that asked for experiment 09 posed its question as a judgement --
+/// "at which point does it stop looking like a grey-box prototype?" -- and a
+/// judgement is a poor thing to put in a test. So the same question is asked of
+/// the pixels:
+///
+/// ```text
+///   tones    distinct colours covering at least a two-hundredth of the plant
+///   chroma   how far the average pixel is from grey, 0..100
+///   spread   the range of brightness across the plant, 0..100
+/// ```
+///
+/// All three are measured over the *machine* -- its equipment, its pipework
+/// and its steel -- and not over the sky or the concrete it stands on, because
+/// those are identical in all four grades and are between them most of the
+/// frame:
+///
+/// ```text
+///   ink      how much of the frame the whole installation covers
+/// ```
+///
+/// A grey box scores low on all three by construction, and the interesting
+/// result is not that the numbers go up -- of course they go up -- but *where*
+/// they go up, which is what the table in `machine read` shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Palette {
+    pub tones: usize,
+    pub chroma: u32,
+    pub spread: u32,
+    /// How much of the frame the plant covers, in percent. Two grades of one
+    /// design should agree here to within a point or two -- if they do not,
+    /// something moved that was not supposed to.
+    pub ink: u32,
+}
+
+impl Shot {
+    /// The picture, measured.
+    pub fn palette(&self) -> Palette {
+        let rgb = self.rgb();
+        let mut bins: std::collections::BTreeMap<(u8, u8, u8), usize> = Default::default();
+        let (mut chroma, mut lo, mut hi, mut n) = (0u64, 255i32, 0i32, 0usize);
+        let mut ink = 0usize;
+        for (i, px) in rgb.chunks(3).enumerate() {
+            if self.who[i] != 0 {
+                ink += 1;
+            }
+            // Only the plant: the equipment, its pipework and its steel. The
+            // sky is identical in every grade and the concrete apron is the
+            // largest thing in the frame, and between them they would drown
+            // out everything the material language does.
+            if self.z[i] == f32::MAX || self.who[i] == 0 || self.who[i] == 4 {
+                continue;
+            }
+            let (r, g, b) = (px[0] as i32, px[1] as i32, px[2] as i32);
+            let (mx, mn) = (r.max(g).max(b), r.min(g).min(b));
+            chroma += (mx - mn) as u64;
+            let lum = (r * 30 + g * 59 + b * 11) / 100;
+            lo = lo.min(lum);
+            hi = hi.max(lum);
+            n += 1;
+            // Sixteen levels per channel: two shades of the same paint are one
+            // tone, and two different paints are two.
+            *bins.entry((px[0] >> 4, px[1] >> 4, px[2] >> 4)).or_default() += 1;
+        }
+        if n == 0 {
+            return Palette::default();
+        }
+        let floor = n / 200;
+        Palette {
+            tones: bins.values().filter(|&&c| c > floor).count(),
+            chroma: ((chroma * 100) / (n as u64 * 255)) as u32,
+            spread: (((hi - lo) * 100) / 255) as u32,
+            ink: ((ink * 100) / self.px.len()) as u32,
+        }
+    }
+
+    /// One panel of a contact sheet: this picture, with a caption on it.
+    pub fn caption(&mut self, text: &str, scale: usize) {
+        let ink = [0.02f32, 0.02, 0.03];
+        let pad = 6 * scale;
+        let w = text.chars().count() * 6 * scale;
+        let h = 7 * scale;
+        // A plate behind it, so that a label over a dark machine is still a
+        // label.
+        for y in 0..h + pad {
+            for x in 0..w + pad {
+                let (px, py) = (pad / 2 + x, pad / 2 + y);
+                if px < self.w && py < self.h {
+                    let i = py * self.w + px;
+                    for k in 0..3 {
+                        self.px[i][k] = self.px[i][k] * 0.25 + 0.62;
+                    }
+                }
+            }
+        }
+        for (i, ch) in text.chars().enumerate() {
+            let up = ch.to_ascii_uppercase();
+            let glyph = GLYPHS
+                .iter()
+                .find(|(c, _)| *c == up || *c == ch)
+                .map(|(_, g)| *g)
+                .unwrap_or([0; 7]);
+            for (row, bits) in glyph.iter().enumerate() {
+                for col in 0..5 {
+                    if bits & (1 << (4 - col)) == 0 {
+                        continue;
+                    }
+                    for dy in 0..scale {
+                        for dx in 0..scale {
+                            let px = pad + (i * 6 + col) * scale + dx;
+                            let py = pad + row * scale + dy;
+                            if px < self.w && py < self.h {
+                                self.px[py * self.w + px] = ink;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Several pictures, on one sheet, in a grid.
+///
+/// This is the deliverable the note actually asked for -- "then compare them
+/// side by side" -- and it exists as a function rather than as an instruction
+/// to open four files because a comparison you have to assemble by hand is a
+/// comparison nobody makes twice.
+pub fn contact(panels: &[Shot], cols: usize) -> (usize, usize, Vec<u8>) {
+    if panels.is_empty() {
+        return (0, 0, Vec::new());
+    }
+    let gap = 8usize;
+    let (pw, ph) = (panels[0].w, panels[0].h);
+    let rows = panels.len().div_ceil(cols);
+    let w = cols * pw + (cols + 1) * gap;
+    let h = rows * ph + (rows + 1) * gap;
+    let mut out = vec![40u8; w * h * 3];
+    for (i, s) in panels.iter().enumerate() {
+        let rgb = s.rgb();
+        let (cx, cy) = (i % cols, i / cols);
+        let (ox, oy) = (gap + cx * (pw + gap), gap + cy * (ph + gap));
+        for y in 0..s.h.min(ph) {
+            let dst = ((oy + y) * w + ox) * 3;
+            let src = y * s.w * 3;
+            out[dst..dst + s.w.min(pw) * 3].copy_from_slice(&rgb[src..src + s.w.min(pw) * 3]);
+        }
+    }
+    (w, h, out)
+}
+
+const GLYPHS: [(char, [u8; 7]); 48] = [
+    (' ', [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+    ('%', [0x19, 0x1a, 0x04, 0x08, 0x13, 0x05, 0x13]),
+    ('(', [0x06, 0x08, 0x10, 0x10, 0x10, 0x08, 0x06]),
+    (')', [0x0c, 0x02, 0x01, 0x01, 0x01, 0x02, 0x0c]),
+    ('+', [0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00]),
+    (',', [0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c, 0x08]),
+    ('-', [0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00]),
+    ('.', [0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x0c]),
+    ('/', [0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x10]),
+    ('0', [0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e]),
+    ('1', [0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e]),
+    ('2', [0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f]),
+    ('3', [0x1f, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0e]),
+    ('4', [0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02]),
+    ('5', [0x1f, 0x10, 0x1e, 0x01, 0x01, 0x11, 0x0e]),
+    ('6', [0x06, 0x08, 0x10, 0x1e, 0x11, 0x11, 0x0e]),
+    ('7', [0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08]),
+    ('8', [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e]),
+    ('9', [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c]),
+    (':', [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x0c, 0x00]),
+    ('=', [0x00, 0x00, 0x1f, 0x00, 0x1f, 0x00, 0x00]),
+    ('A', [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11]),
+    ('B', [0x1e, 0x11, 0x1e, 0x11, 0x11, 0x11, 0x1e]),
+    ('C', [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e]),
+    ('D', [0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e]),
+    ('E', [0x1f, 0x10, 0x1e, 0x10, 0x10, 0x10, 0x1f]),
+    ('F', [0x1f, 0x10, 0x1e, 0x10, 0x10, 0x10, 0x10]),
+    ('G', [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0e]),
+    ('H', [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11]),
+    ('I', [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e]),
+    ('J', [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0c]),
+    ('K', [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11]),
+    ('L', [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f]),
+    ('M', [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11]),
+    ('N', [0x11, 0x19, 0x15, 0x15, 0x13, 0x11, 0x11]),
+    ('O', [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e]),
+    ('P', [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10]),
+    ('Q', [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d]),
+    ('R', [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11]),
+    ('S', [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e]),
+    ('T', [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04]),
+    ('U', [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e]),
+    ('V', [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04]),
+    ('W', [0x11, 0x11, 0x11, 0x15, 0x15, 0x1b, 0x11]),
+    ('X', [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11]),
+    ('Y', [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04]),
+    ('Z', [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f]),
+    ('x', [0x00, 0x00, 0x11, 0x0a, 0x04, 0x0a, 0x11]),
+];
 
 // ------------------------------------------------------------------- a PNG
 

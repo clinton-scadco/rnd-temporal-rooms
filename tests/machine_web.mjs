@@ -505,7 +505,10 @@ console.log('the form');
   const kit = await fetch(base + '/api/kit').then(r => r.json());
   ok(kit.ok && kit.meshes.length >= 20 && kit.meshes.length <= 30,
      `${kit.meshes.length} canonical meshes`);
-  ok(kit.mats.length === 8, 'eight materials for a whole plant');
+  ok(kit.mats.length === 12, 'twelve materials for a whole plant');
+  ok(Array.isArray(kit.grades) && kit.grades.length === 4 &&
+     kit.grades.every(g => g.tag && g.letter && g.what),
+     'four readability grades, each of which says what it is');
   for (const m of kit.meshes) {
     ok(m.pos.length % 3 === 0 && m.nrm.length === m.pos.length,
        `${m.tag}: a normal per vertex`);
@@ -532,6 +535,27 @@ console.log('the form');
     body: JSON.stringify({ design: opened.design }),
   }).then(r => r.json());
   ok(again.hash === built.hash, 'the same request builds the same plant');
+
+  // Experiment 09: the four grades over the wire. The material pass may not
+  // move a piece, which from out here means the instance count cannot change
+  // between A and B -- and the two after it may only add.
+  const grades = {};
+  for (const g of kit.grades) {
+    grades[g.tag] = await fetch(base + `/api/form?style=works&seed=3&grade=${g.tag}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ design: opened.design }),
+    }).then(r => r.json());
+    ok(grades[g.tag].ok, `built it at grade ${g.letter}`);
+    ok(grades[g.tag].grade === g.tag, `and it says so: ${grades[g.tag].grade}`);
+  }
+  ok(grades.paint.stats.pieces === grades.grey.stats.pieces,
+     'the material pass moved no geometry');
+  ok(grades.paint.hash !== grades.grey.hash, 'but it did repaint it');
+  ok(grades.paint.stats.mats > grades.grey.stats.mats,
+     `and used more of the library: ${grades.grey.stats.mats} -> ${grades.paint.stats.mats}`);
+  ok(grades.detail.stats.pieces > grades.paint.stats.pieces, 'detail adds pieces');
+  ok(grades.full.stats.pieces > grades.detail.stats.pieces, 'articulation adds more');
 
   const known = new Set(kit.meshes.map(m => m.tag));
   let instances = 0;

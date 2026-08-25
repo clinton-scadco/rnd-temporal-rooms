@@ -1,4 +1,4 @@
-//! # Experiment 08: procedural machine form
+//! # Experiments 08 and 09: procedural machine form, and reading it
 //!
 //! A machine design is a document: components on a tile grid, typed ports,
 //! wires, tunings. Experiment 08 asks whether that document can be turned into
@@ -46,8 +46,8 @@
 //!
 //! ```text
 //!   Piece {
-//!       mesh   one of twenty-five
-//!       mat    one of eight
+//!       mesh   one of twenty-nine
+//!       mat    one of twelve
 //!       at     where the mesh's origin lands
 //!       dir    where the mesh's +Y points
 //!       spin   quarter turns about dir
@@ -60,12 +60,33 @@
 //! Forty-eight bytes, and a plant is a few thousand of them. That is the
 //! answer to section 10: a scene is not a tree of objects, it is a sorted list
 //! that groups into a handful of instanced draw calls.
+//!
+//! ## Experiment 09: the readability pass
+//!
+//! Experiment 08 proved the pipeline and produced a grey box. Experiment 09
+//! adds one axis and no new pass of its own kind: [`Grade`], which decides how
+//! much of the visual language is applied to a plant that is otherwise built
+//! exactly the same way.
+//!
+//! ```text
+//!   A  grey     experiment 08 exactly
+//!   B  paint    the same geometry, in the material language      -> `paint`
+//!   C  detail   + how things are joined and installed            -> `route`, `frame`
+//!   D  full     + archetype articulation                         -> `body`
+//! ```
+//!
+//! The ordering is load bearing. `B` may not move a millimetre of geometry --
+//! it is [`paint::apply`], which takes `&mut [Piece]` and writes one field --
+//! and `C` and `D` may only add to and refine what is already there. So the
+//! four builds are four pictures of one machine, which is the only way the
+//! comparison in `machine read` means anything at all.
 
 pub mod body;
 pub mod frame;
 pub mod kit;
 pub mod layout;
 pub mod obj;
+pub mod paint;
 pub mod route;
 pub mod seed;
 pub mod shell;
@@ -405,17 +426,113 @@ impl fmt::Display for Style {
     }
 }
 
-/// What the visual compiler was asked for. Three arguments and no state, which
+// -------------------------------------------------------------- readability
+
+/// Experiment 09: how much of the visual language to apply.
+///
+/// The note that asked for experiment 09 asked for exactly one thing -- the
+/// same plant, built four ways, compared side by side -- so the four ways are
+/// a parameter rather than four branches of a repository:
+///
+/// ```text
+///   A  grey     experiment 08 exactly: eight materials, no articulation
+///   B  paint    the same geometry, piece for piece, in the material language
+///   C  detail   + connection and installation vocabulary
+///   D  full     + archetype articulation
+/// ```
+///
+/// The ordering is a promise and not just an enum. `B` may not move a
+/// millimetre of geometry -- it is a pass over `Piece::mat` and nothing else,
+/// which is a claim `tests/read.rs` checks piece for piece -- and `C` and `D`
+/// may only add to and refine what `B` left, never relayout it. So the four
+/// pictures differ by *look* and by nothing else, which is the only way the
+/// comparison the note asks for means anything.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+pub enum Grade {
+    /// The output experiment 08 shipped, kept buildable so that the comparison
+    /// has a baseline rather than a memory.
+    Grey,
+    /// Materials only.
+    Paint,
+    /// Materials, plus the vocabulary of how things are joined and installed.
+    Detail,
+    /// Everything, which is what the designer shows.
+    #[default]
+    Full,
+}
+
+pub const GRADES: [Grade; 4] = [Grade::Grey, Grade::Paint, Grade::Detail, Grade::Full];
+
+impl Grade {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Grade::Grey => "grey",
+            Grade::Paint => "paint",
+            Grade::Detail => "detail",
+            Grade::Full => "full",
+        }
+    }
+    /// A, B, C, D -- the note's own names for the four variants.
+    pub fn letter(self) -> char {
+        match self {
+            Grade::Grey => 'A',
+            Grade::Paint => 'B',
+            Grade::Detail => 'C',
+            Grade::Full => 'D',
+        }
+    }
+    pub fn what(self) -> &'static str {
+        match self {
+            Grade::Grey => "baseline: experiment 08 as it shipped",
+            Grade::Paint => "material pass: the same geometry, repainted",
+            Grade::Detail => "+ connection and installation vocabulary",
+            Grade::Full => "+ archetype articulation",
+        }
+    }
+    pub fn by_tag(t: &str) -> Option<Grade> {
+        GRADES
+            .iter()
+            .copied()
+            .find(|g| g.tag() == t || (t.len() == 1 && g.letter().eq_ignore_ascii_case(&t.chars().next().unwrap())))
+    }
+    /// Whether the material language is applied at all.
+    pub fn painted(self) -> bool {
+        self >= Grade::Paint
+    }
+    /// Whether flanges, valves, clamps, pads and saddles are drawn.
+    pub fn detailed(self) -> bool {
+        self >= Grade::Detail
+    }
+    /// Whether the archetypes are articulated beyond their silhouette.
+    pub fn articulated(self) -> bool {
+        self >= Grade::Full
+    }
+}
+
+impl fmt::Display for Grade {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.tag())
+    }
+}
+
+/// What the visual compiler was asked for. Four arguments and no state, which
 /// is the same shape as everything else in this crate.
 #[derive(Clone, Copy, Debug)]
 pub struct Ask {
     pub style: Style,
     pub world: u64,
+    pub grade: Grade,
 }
 
 impl Default for Ask {
     fn default() -> Self {
-        Ask { style: Style::Works, world: 0 }
+        Ask { style: Style::Works, world: 0, grade: Grade::Full }
+    }
+}
+
+impl Ask {
+    pub fn at(self, grade: Grade) -> Ask {
+        Ask { grade, ..self }
     }
 }
 
@@ -458,6 +575,8 @@ pub struct Owner {
 pub struct Scene {
     pub name: String,
     pub style: Style,
+    /// Experiment 09: how much of the visual language this build was asked for.
+    pub grade: Grade,
     /// What the enclosure pass decided this installation is.
     pub shell: shell::Kind,
     pub seed: Seed,
@@ -549,6 +668,29 @@ impl Scene {
             .collect()
     }
 
+    /// Experiment 09, section 5: how many kinds of equipment in this plant are
+    /// drawn out of a mesh-and-material signature that no other kind shares.
+    ///
+    /// This is the same test that `tests/form.rs` applies to the seven domains,
+    /// turned on the equipment: if a pump and a generator are assembled from
+    /// an identical set of pieces in identical materials, then whatever else
+    /// the plant is, it is not legible -- a viewer has nothing to tell them
+    /// apart by. Returned as (distinguishable, kinds present), because the
+    /// interesting number is the ratio and the denominator moves per design.
+    pub fn legible(&self) -> (usize, usize) {
+        let mut sig: BTreeMap<&str, std::collections::BTreeSet<(Mesh, Mat)>> = BTreeMap::new();
+        for p in self.pieces.iter().filter(|p| p.lod >= MEDIUM) {
+            let o = self.owner(p.of);
+            if o.class != Owns::Unit {
+                continue;
+            }
+            sig.entry(o.what.as_str()).or_default().insert((p.mesh, p.mat));
+        }
+        let all: Vec<_> = sig.values().collect();
+        let uniq = all.iter().filter(|s| all.iter().filter(|o| o == s).count() == 1).count();
+        (uniq, sig.len())
+    }
+
     pub fn stats(&self) -> Stats {
         let batches = self.batches();
         Stats {
@@ -561,6 +703,7 @@ impl Scene {
             batches: batches.len(),
             tris: self.tris(),
             meshes: batches.iter().map(|b| b.mesh).collect::<std::collections::BTreeSet<_>>().len(),
+            mats: batches.iter().map(|b| b.mat).collect::<std::collections::BTreeSet<_>>().len(),
             bends: self.routes.iter().map(|r| r.bends).sum(),
             run_mm: self.routes.iter().map(|r| r.length as i64).sum(),
             supports: self.pieces.iter().filter(|p| p.mesh == Mesh::Support).count(),
@@ -592,6 +735,9 @@ pub struct Stats {
     pub batches: usize,
     pub tris: usize,
     pub meshes: usize,
+    /// Experiment 09: how many of the twelve materials this plant actually
+    /// uses. A grey box uses four.
+    pub mats: usize,
     pub bends: usize,
     pub run_mm: i64,
     pub supports: usize,
@@ -622,18 +768,25 @@ pub fn build(d: &Design, ask: Ask) -> Result<Scene, String> {
 
     let mut pieces = Vec::new();
     for (i, u) in plan.units.iter().enumerate() {
-        body::dress(u, &plan, &seed, i as u16, &mut pieces);
+        body::dress(u, &plan, &seed, ask.grade, i as u16, &mut pieces);
     }
 
     let routes = route::run(d, &plan, &seed);
     for r in &routes {
         let id = owners.len() as u16;
         owners.push(Owner { name: r.name.clone(), what: r.dom.tag().to_string(), class: Owns::Run });
-        route::dress(r, &seed, id, &mut pieces);
+        route::dress(r, &seed, ask.grade, id, &mut pieces);
     }
+    // What a socket with two lines on it looks like can only be decided once
+    // every line is laid, so it is decided here rather than in either of them.
+    route::junctions(&routes, &owners, ask.grade, &mut pieces);
 
-    frame::infer(&plan, &routes, &seed, &mut owners, &mut pieces);
+    frame::infer(&plan, &routes, &seed, ask.grade, &mut owners, &mut pieces);
     let (kind, bounds) = shell::enclose(&plan, &routes, &seed, ask.style, &mut owners, &mut pieces);
+
+    // Experiment 09's whole first section, and the last thing that happens:
+    // a pass that may read anything and may write exactly one field.
+    paint::apply(&plan, &routes, &owners, ask.grade, &mut pieces);
 
     let mut all = bounds;
     for p in &pieces {
@@ -657,6 +810,7 @@ pub fn build(d: &Design, ask: Ask) -> Result<Scene, String> {
     Ok(Scene {
         name: d.name.clone(),
         style: ask.style,
+        grade: ask.grade,
         shell: kind,
         seed,
         paint,
@@ -697,6 +851,7 @@ pub fn sheet() -> Scene {
     Scene {
         name: "the library".into(),
         style: Style::Yard,
+        grade: Grade::Full,
         shell: shell::Kind::Yard,
         seed: Seed::of("kit", 0, "yard", 0),
         paint: kit::PAINTS[0],
@@ -749,6 +904,7 @@ impl Scene {
         Json::obj()
             .set("name", self.name.clone())
             .set("style", self.style.tag())
+            .set("grade", self.grade.tag())
             .set("shell", self.shell.tag())
             .set("seed", format!("{:016x}", self.seed.whole))
             .set("paint", Json::arr(self.paint.iter().map(|&c| c as i64).collect::<Vec<_>>()))
@@ -787,6 +943,7 @@ impl Scene {
                     .set("far", s.far as i64)
                     .set("batches", s.batches as i64)
                     .set("meshes", s.meshes as i64)
+                    .set("mats", s.mats as i64)
                     .set("tris", s.tris as i64)
                     .set("bends", s.bends as i64)
                     .set("runMetres", (s.run_mm / 1000) as i64)
@@ -827,4 +984,18 @@ pub fn kit_json() -> Json {
         .set("meshes", Json::Arr(meshes))
         .set("mats", Json::Arr(mats))
         .set("styles", Json::arr(STYLES.iter().map(|s| s.tag()).collect::<Vec<_>>()))
+        .set(
+            "grades",
+            Json::Arr(
+                GRADES
+                    .iter()
+                    .map(|g| {
+                        Json::obj()
+                            .set("tag", g.tag())
+                            .set("letter", g.letter().to_string())
+                            .set("what", g.what())
+                    })
+                    .collect(),
+            ),
+        )
 }
