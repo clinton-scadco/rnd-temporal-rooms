@@ -418,17 +418,24 @@ fn the_library_is_still_small() {
 /// None of that is a grade: a plant in grey had every one of those faults too,
 /// which is why fixing them moves this test. The baseline is the plant built
 /// without the material language, not the plant built with the bugs.
+///
+/// Experiment 10 moved it again, and for a bigger reason than a list of bugs:
+/// every port in the plant is on a different face, because a port is now an
+/// interface rather than a coordinate, and every line between them is laid by
+/// a router that walks straight sections rather than cells. The plant these
+/// numbers pin is the same plant in the same materials; it is not the same
+/// pipework, and it was never going to be.
 #[test]
 fn grade_a_is_experiment_08_exactly() {
     for (name, want) in [
-        ("01-first-try", 0x87da_ffb7u32),
-        ("03-compact", 0x53d3_91c4),
-        ("07-crushline", 0xef7c_6b12),
-        ("09-machining", 0x1ed0_58cd),
-        ("10-refinery", 0x3a5d_3455),
-        ("11-steamcrusher", 0xf043_6d2a),
-        ("13-longreach", 0x5d37_0f65),
-        ("15-turbinehall", 0x80fb_efe7),
+        ("01-first-try", 0xa06a_6ad4u32),
+        ("03-compact", 0x5796_f30d),
+        ("07-crushline", 0x5d4d_4093),
+        ("09-machining", 0x2a0d_2586),
+        ("10-refinery", 0x4299_59f8),
+        ("11-steamcrusher", 0x44a1_290b),
+        ("13-longreach", 0xc5e3_1d20),
+        ("15-turbinehall", 0x536e_50ef),
     ] {
         let d = design(&format!("designs/{name}.machine"));
         let s = form::build(&d, Ask { style: Style::Works, world: 0, grade: Grade::Grey })

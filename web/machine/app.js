@@ -4,13 +4,14 @@
 import {
   state, onChange, changed, catalogue, listDesigns, openDesign, save,
   seek, compile, verify, rename, setBrief, num, form,
+  move, lift, turn, unitOf, overlaps, part,
 } from './doc.js';
 import * as plant from './form.js';
 import { initCanvas, ui, invalidate, focusAll, setTool, select } from './canvas.js';
 import {
   renderPalette, markTool, renderScore, renderInspector, renderHolding,
   renderMacro, renderWave, renderSource, renderFamilies, renderBriefPicker,
-  renderBrief,
+  renderBrief, renderSpace,
 } from './panels.js';
 
 const $ = s => document.querySelector(s);
@@ -53,6 +54,7 @@ async function main() {
   fields();
   buttons();
   views();
+  authoring();
   await designs();
 
   requestAnimationFrame(loop);
@@ -209,6 +211,11 @@ function views() {
     $('#c').hidden = where !== 'plan';
     $('#gl').hidden = where !== 'form';
     $('#formbar').hidden = where !== 'form';
+    $('#formhelp').hidden = where !== 'form';
+    // The spatial report is the plant's opinion of the plant, so it goes away
+    // with the plant rather than sitting stale under the plan.
+    if (where !== 'form') $('#space').replaceChildren();
+    if (where === 'form') $('#gl').focus();
     if (where !== 'form') return;
     if (!plant.ready() && !(await plant.initForm($('#gl')))) {
       hint('this browser has no WebGL 2, so there is nothing to draw the plant with', true);
@@ -230,6 +237,74 @@ function views() {
     plant.view.lod = Number(e.target.value) || 0;
     plant.invalidate();
     stats();
+  });
+  // Experiment 10: the clearance overlay. On by default, because the boxes are
+  // what turn "the plant looks wrong" into "that one is red".
+  const boxes = $('#formboxes');
+  if (boxes) {
+    boxes.checked = plant.view.boxes;
+    boxes.addEventListener('change', e => {
+      plant.view.boxes = e.target.checked;
+      plant.invalidate();
+    });
+  }
+}
+
+// ------------------------------------------------------ experiment 10: 3D
+//
+// The plant view is an editor. What it is allowed to do to the document is
+// exactly what the plan view is allowed to do, plus the two verbs the plan
+// view has no axis for -- and every one of them goes through `doc.js`, so the
+// 3D window still knows nothing about components.
+function authoring() {
+  plant.authoring({
+    onPick: name => {
+      select({ what: 'unit', name });
+      // The plan follows the player upstairs: whatever they last touched in
+      // the 3D view sets the storey a new component is placed on.
+      const u = unitOf(name);
+      if (u) ui.level = u.z || 0;
+      refresh();
+      invalidate();
+    },
+    // Metres to tiles. The pointer is over the middle of the machine, so the
+    // footprint is centred on it rather than hung off its corner -- dragging
+    // by a corner is a thing nobody has ever meant to do.
+    tile: at => {
+      const sel = state.selected;
+      if (!sel || sel.what !== 'unit') return null;
+      const u = unitOf(sel.name);
+      if (!u) return null;
+      const p = part(u.kind);
+      const t = (u.face & 1) === 1;
+      const w = t ? p.h : p.w, h = t ? p.w : p.h;
+      return {
+        x: Math.max(0, Math.round(at[0] / 2 - w / 2)),
+        y: Math.max(0, Math.round(at[2] / 2 - h / 2)),
+      };
+    },
+    onMove: (name, x, y) => {
+      const u = unitOf(name);
+      if (!u || (u.x === x && u.y === y)) return false;
+      // Refused rather than clamped: a component that slides through the one
+      // next to it and stops on the far side of it is a component the player
+      // has lost track of.
+      if (overlaps(u, x, y, u.z || 0, name)) return false;
+      move(name, x, y);
+      return true;
+    },
+    onLift: by => {
+      const sel = state.selected;
+      if (!sel || sel.what !== 'unit') return hint('pick a component to lift');
+      if (!lift(sel.name, by)) {
+        hint(by > 0 ? 'there is something in the way up there' : 'it is already on the slab');
+      }
+    },
+    onTurn: by => {
+      const sel = state.selected;
+      if (!sel || sel.what !== 'unit') return hint('pick a component to turn');
+      if (!turn(sel.name, by)) hint('it does not fit turned that way', true);
+    },
   });
 }
 
@@ -257,6 +332,7 @@ async function rebuild(refit) {
     plant.show(res, refit);
     plant.pick(state.selected && state.selected.what === 'unit' ? state.selected.name : null);
     stats();
+    renderSpace();
   } else {
     hint(res.error, true);
   }
@@ -267,8 +343,17 @@ function stats() {
   const s = plant.view.stats;
   if (!s) return;
   const d = plant.drawn();
+  // Experiment 10 puts the routing result first, because it is the one number
+  // on this line that can be *bad*: a plant with a connection in it that could
+  // not be made is a plant with a hole in it, and the player should not have
+  // to go looking.
+  const routed = s.lost
+    ? `${s.lost} of ${s.runs} runs have no valid route`
+    : s.tight
+      ? `${s.runs} runs, ${s.tight} of them tight`
+      : `${s.runs} runs, all clean`;
   $('#formstats').textContent =
-    `${num(s.units)} components · ${num(s.runs)} runs, ${num(s.runMetres)} m · ` +
+    `${num(s.units)} components on ${s.levels} storeys · ${routed}, ${num(s.runMetres)} m · ` +
     `${num(s.pieces)} pieces from ${s.meshes} meshes in ${s.mats} materials · ` +
     `drawing ${num(d.instances)} in ${d.calls} calls · ${plant.view.shell} · ${plant.view.hash}`;
 }

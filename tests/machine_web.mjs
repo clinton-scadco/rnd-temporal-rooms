@@ -259,12 +259,24 @@ for (const name of names) {
 
   // What was drawn must be findable: every component and every port, at the
   // coordinates the renderer put them.
+  //
+  // Experiment 10 made "findable" mean something slightly weaker and rather
+  // more honest. A design may now stack one component over another, and the
+  // plan offsets the upper storey rather than hiding it -- so the centre of a
+  // ground-floor exchanger can legitimately be underneath the mezzanine one.
+  // What has to hold is that the hit test agrees with the paint order: a click
+  // lands on the topmost box that contains it, which is the one the player can
+  // actually see.
   const boxes = render.layout();
   ok(boxes.size === doc.state.design.units.length, `${name}: every component laid out`);
   for (const u of doc.state.design.units) {
     const b = boxes.get(u.name);
     const hit = render.hitUnit(boxes, b.cx, b.cy);
-    ok(hit && hit.u.name === u.name, `${name}: ${u.name} is where it was drawn`);
+    const over = [...boxes.values()].filter(
+      o => b.cx >= o.x && b.cx <= o.x + o.w && b.cy >= o.y && b.cy <= o.y + o.h,
+    );
+    const top = over.reduce((a, o) => (a && a.level > o.level ? a : o), null);
+    ok(hit && top && hit.u.name === top.u.name, `${name}: ${u.name} is where it was drawn`);
     const ports = doc.part(u.kind).ports;
     for (let i = 0; i < ports.length; i++) {
       const p = render.portAt(boxes, u.name, i);
@@ -591,6 +603,105 @@ console.log('the form');
   for (const d of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
     ok(basis(d).fwd.join() === '0,1,0', `a rail along ${d} stands up`);
   }
+}
+
+// ------------------------------------------------ experiment 10: the third axis
+//
+// The browser is now an editor in three dimensions, and it has its own copy of
+// two rules it must not get wrong: whether a stack is legal, and whether a
+// connection still reaches. Both are checked here against the Rust that has
+// the final word, in exactly the spirit of the `canWire` check above.
+console.log('the third axis');
+{
+  const src = readFileSync(join(here, '..', 'designs', '17-stacked.machine'), 'utf8');
+  const opened = await fetch(base + '/api/open', { method: 'POST', body: src }).then(r => r.json());
+  ok(opened.ok, `opened the stacked design (${opened.error || ''})`);
+
+  const design = opened.design;
+  ok(design.units.some(u => u.z > 0), 'a design can say a component is upstairs');
+  ok(design.units.some(u => u.face !== null && u.face !== undefined),
+     'and which way one faces');
+
+  const built = await fetch(base + '/api/form?style=works&seed=0', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design }),
+  }).then(r => r.json());
+  ok(built.ok, `built it (${built.error || ''})`);
+
+  // Everything the placement overlay needs, and the shape it needs it in.
+  ok(built.units.length === design.units.length, 'a placement per component');
+  for (const u of built.units) {
+    ok(['clear', 'watch', 'bad'].includes(u.verdict), `${u.name}: a verdict`);
+    ok(['green', 'yellow', 'red'].includes(u.colour), `${u.name}: and a colour`);
+    for (const v of [u.solid, u.service]) {
+      ok(v && v.lo.length === 3 && v.hi.length === 3 &&
+         v.lo.every((c, i) => c <= v.hi[i]), `${u.name}: a well-formed box`);
+    }
+  }
+  ok(built.units.some(u => u.z > 0), 'the plant knows which storey things are on');
+  ok(built.stats.lost === 0 && built.stats.clean === built.stats.runs,
+     `every connection was laid under the full rules (${built.stats.lost} lost)`);
+  ok(built.runs.length === built.stats.runs, 'a report per connection');
+  ok(built.runs.every(r => ['clean', 'tight', 'lost'].includes(r.tier)),
+     'each of which says how hard it was');
+  ok(Array.isArray(built.issues), 'and a list of what is in the way');
+
+  // The document rule, both sides. Two components on the same tiles at two
+  // heights is a stack; at one height it is a collision -- and the browser has
+  // to agree with the compiler about which, because it refuses the second one
+  // while the pointer is still moving.
+  doc.state.design = JSON.parse(JSON.stringify(design));
+  const hx1 = doc.unitOf('HX1'), hx2 = doc.unitOf('HX2');
+  ok(!doc.overlaps(hx2, hx1.x, hx1.y, hx2.z, 'HX2'),
+     'a component above another one is not inside it');
+  ok(doc.overlaps(hx2, hx1.x, hx1.y, hx1.z, 'HX2'),
+     'and at the same height it is');
+
+  const stacked = { ...design, units: design.units.map(u =>
+    u.name === 'HX2' ? { ...u, z: hx1.z } : u) };
+  const clash = await fetch(base + '/api/state?t=100', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design: stacked }),
+  }).then(r => r.json());
+  ok(!clash.ok && /overlap/i.test(clash.error || ''),
+     `and the compiler says so too (${clash.error || 'it did not'})`);
+
+  // Reach is measured in three dimensions now, so the browser's copy of it has
+  // to be as well.
+  doc.state.design = JSON.parse(JSON.stringify(design));
+  const flat = doc.gap(doc.unitOf('HX1'), doc.unitOf('HX2'));
+  ok(flat > 0, `stacking costs distance: ${flat} tiles between the two exchangers`);
+
+  // Lifting and turning: both refuse rather than clamp, and a turn moves the
+  // footprint, which is why it can be refused at all.
+  doc.state.design = JSON.parse(JSON.stringify(design));
+  const was = doc.unitOf('G1').z || 0;
+  doc.lift('G1', -1);
+  ok((doc.unitOf('G1').z || 0) === was, 'nothing goes below the slab');
+  doc.lift('G1', 1);
+  ok((doc.unitOf('G1').z || 0) === was + 1, 'and up a storey is up a storey');
+
+  doc.state.design = JSON.parse(JSON.stringify(design));
+  doc.turn('T1', 1);
+  ok(doc.unitOf('T1').face === 1, 'a quarter turn clockwise from east is south');
+  const p = doc.part('turbine');
+  ok(doc.box(doc.unitOf('T1')).w === p.h, 'and the footprint turned with it');
+  doc.freeface('T1');
+  ok(doc.unitOf('T1').face === null, 'and it can be handed back to the flow');
+
+  // The file, in both dialects, with the two new words in it.
+  doc.state.design = JSON.parse(JSON.stringify(design));
+  const st = await fetch(base + '/api/state?t=1000', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design }),
+  }).then(r => r.json());
+  ok(st.ok, `the stacked design runs (${st.error || ''})`);
+  ok(/\bat \d+,\d+,\d+/.test(st.source), 'the file writes the third tile');
+  ok(/\bface (east|south|west|north)\b/.test(st.source), 'and which way things face');
+  ok(panels.emit() === st.source, 'and the browser writes the same file');
 }
 
 // Every module at least parses in a real module loader.

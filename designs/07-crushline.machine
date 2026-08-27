@@ -9,6 +9,23 @@
 # The mill is the bottleneck and says so: two motors on a shared shaft give it
 # 67 rotary of the 80 it wants, so the line runs at 80/tick rather than 100 and
 # everything upstream backs up behind it.
+#
+# Experiment 10 found something else wrong with it, which is the first time a
+# design in this repository has been contradicted by its own geometry.
+#
+# `MO2.rotary -> SH1.in` has no valid route. Both motors are bolted to the same
+# end of the same shaft, and only one of them can be: a coupling is a straight
+# line between two flanges, MO1 is already on that line, and MO2 is three and a
+# half metres to the south of it. Experiment 08 drew it anyway -- a shaft with
+# two right angles in it, arriving at a flange sideways -- and nobody noticed
+# for two experiments, which is exactly the class of defect the note said would
+# start undermining the mechanic.
+#
+# It is left here rather than fixed. `machine space designs/07-crushline.machine`
+# says so in one line, the plant has a visible hole where the drive should be,
+# and the fix is a thing the player does: give the second motor its own shaft,
+# or move it onto the line of the first. That is the whole argument for letting
+# the router refuse.
 
 machine "Crush Line"
 brief crush

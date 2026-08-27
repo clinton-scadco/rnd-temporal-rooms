@@ -226,7 +226,51 @@ h2 button + button { margin-left: .3rem; }
 #formbar select, #formbar input { font: 11px var(--mono); }
 #formbar input { width: 4.5rem; }
 #formbar output { margin-left: auto; color: var(--ink); }
-#c[hidden], #gl[hidden], #formbar[hidden] { display: none; }
+#formbar input[type="checkbox"] { width: auto; margin-right: .25rem; vertical-align: -1px; }
+#c[hidden], #gl[hidden], #formbar[hidden], #formhelp[hidden] { display: none; }
+
+/* Experiment 10: what the pointer can do to a plant, said once, quietly. */
+#formhelp {
+  position: absolute; left: .8rem; top: .8rem;
+  padding: .35rem .6rem; border-radius: 2px;
+  background: rgba(10, 15, 13, .72); border: 1px solid var(--rule);
+  font: 11px var(--mono); color: var(--muted); pointer-events: none;
+}
+#formhelp b {
+  color: var(--ink); background: rgba(255, 255, 255, .08);
+  border: 1px solid var(--rule); border-radius: 2px; padding: 0 .25rem;
+}
+
+/* The spatial report: the plant's own opinion of the plant. */
+/* Experiment 10: where a component is, and the controls for the two axes the
+   plan view does not have. */
+.place { margin: .5rem 0; }
+.where, .facing { display: flex; align-items: baseline; gap: .35rem; flex-wrap: wrap;
+  font: 11px var(--mono); margin-bottom: .35rem; }
+.where .k, .facing .k { color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.where b, .facing b { color: var(--ink); }
+.facing .hint { color: var(--muted); opacity: .8; }
+button.link {
+  background: none; border: 0; padding: 0; margin-left: .3rem;
+  color: var(--accent); font: 11px var(--mono); cursor: pointer; text-decoration: underline;
+}
+
+#space { margin-top: .8rem; }
+#space h3 {
+  font: 11px var(--mono); text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin: 0 0 .35rem;
+}
+#space .issue {
+  display: flex; gap: .5rem; align-items: baseline;
+  padding: .3rem .4rem; margin-bottom: .2rem; border-radius: 2px;
+  border-left: 3px solid var(--rule); background: rgba(255, 255, 255, .03);
+  font: 11px var(--mono); cursor: pointer;
+}
+#space .issue.bad { border-left-color: var(--bad); }
+#space .issue.warn { border-left-color: #E0B93A; }
+#space .issue b { color: var(--ink); white-space: nowrap; }
+#space .issue span { color: var(--muted); }
+#space .clean { font: 11px var(--mono); color: var(--muted); opacity: .75; }
 .group.view button.on { background: var(--accent); color: #06110C; }
 
 #err {

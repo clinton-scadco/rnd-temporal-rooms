@@ -165,6 +165,8 @@ fn adding_a_component_has_visible_consequences() {
         kind: t1.kind,
         x: t1.x,
         y: t1.y + 7,
+        z: 0,
+        face: None,
         tune: t1.tune,
     });
     more.wires.push(temporal_rooms::machine::design::Wire {
@@ -199,7 +201,13 @@ fn every_wire_becomes_a_route_between_its_own_two_sockets() {
         let plan = form::layout::plan(&d);
         for (w, r) in d.wires.iter().zip(s.routes.iter()) {
             assert!(r.name.starts_with(&format!("{}.{}", w.from, w.from_port)), "{path}: {}", r.name);
-            assert!(r.path.len() >= 2, "{path}: {} is not a route", r.name);
+            // Since experiment 10 a connection may have no route at all. It
+            // still exists, it is still counted, and it is still named after
+            // the wire that asked for it -- what it does not have is geometry,
+            // which is the whole point of being allowed to refuse.
+            if !r.laid() {
+                continue;
+            }
 
             let from = plan.find(&w.from).unwrap();
             let to = plan.find(&w.to).unwrap();
@@ -227,10 +235,10 @@ fn every_wire_becomes_a_route_between_its_own_two_sockets() {
 fn routes_are_orthogonal() {
     for (path, d) in all_designs() {
         for r in built(&d).routes {
-            if r.direct {
-                // The router admits when it could not find a way through; a
-                // straight line in defiance of the plant is allowed to be
-                // diagonal, because it is already an apology.
+            // A run the router refused to lay has no geometry to check.
+            // Experiment 10 replaced the apologetic straight line with an
+            // honest absence, which is a much easier thing to assert about.
+            if !r.laid() {
                 continue;
             }
             for i in 1..r.path.len() {
@@ -254,7 +262,7 @@ fn routes_go_round_equipment_rather_than_through_it() {
         let plan = form::layout::plan(&d);
         let s = built(&d);
         for r in &s.routes {
-            if r.direct {
+            if !r.laid() {
                 continue;
             }
             for (i, u) in plan.units.iter().enumerate() {
@@ -493,20 +501,62 @@ fn material_goes_in_high_and_comes_out_low() {
 /// Sockets face what they are wired to. Move a component to the other side of
 /// its partner and both sockets turn round, with nobody editing anything.
 #[test]
-fn sockets_face_their_partner() {
+fn a_port_is_an_interface_rather_than_a_coordinate() {
     let d = design("designs/03-compact.machine");
     let plan = form::layout::plan(&d);
-    let hx = plan.find("HX1").unwrap();
-    let east = hx.sockets.iter().find(|s| s.dom == temporal_rooms::machine::stuff::Domain::Gas).unwrap();
-    assert_eq!(east.out, form::EAST, "the steam outlet does not face the turbine");
+    use temporal_rooms::machine::stuff::Domain;
 
-    let mut flipped = d.clone();
-    let i = flipped.index_of("T1").unwrap();
-    flipped.units[i].x = -6;
-    let plan = form::layout::plan(&flipped);
-    let hx = plan.find("HX1").unwrap();
-    let west = hx.sockets.iter().find(|s| s.dom == temporal_rooms::machine::stuff::Domain::Gas).unwrap();
-    assert_eq!(west.out, form::WEST, "the steam outlet did not follow the turbine");
+    // A shaft leaves the end of the barrel. Not the side, not the top, and not
+    // whichever face the partner happens to be nearest -- the end, because
+    // that is where the shaft of a motor is. This is the rule experiment 10
+    // added and the reason `face` is worth having.
+    for u in &plan.units {
+        for s in u.sockets.iter().filter(|s| s.dom == Domain::Rotary) {
+            let along = form::layout::face(u.yaw);
+            assert!(
+                s.out == along || s.out == along.neg(),
+                "{}'s shaft leaves by {} and the machine faces {}",
+                u.name,
+                s.out,
+                along
+            );
+            assert_eq!(s.axis, Some(along), "{} has a shaft off its own axis", u.name);
+        }
+    }
+
+    // And a vessel vents upwards, whatever is standing next to it.
+    let r1 = plan.find("R1").unwrap();
+    let vent = r1.sockets.iter().find(|s| s.dom == Domain::Heat).unwrap();
+    assert_eq!(vent.out, form::UP, "the reactor's heat outlet is not on the top");
+}
+
+/// Turning a machine turns everything bolted to it. This is the whole of
+/// experiment 10's authoring claim in one assertion: rotation is not a
+/// decoration, it moves the interfaces.
+#[test]
+fn turning_a_machine_turns_its_nozzles() {
+    let d = design("designs/03-compact.machine");
+    let before = form::layout::plan(&d);
+    let was: Vec<form::P3> = before.find("G1").unwrap().sockets.iter().map(|s| s.out).collect();
+
+    let mut turned = d.clone();
+    let i = turned.index_of("G1").unwrap();
+    let base = before.find("G1").unwrap().yaw;
+    turned.units[i].face = Some((base + 1) & 3);
+    let after = form::layout::plan(&turned);
+    let now: Vec<form::P3> = after.find("G1").unwrap().sockets.iter().map(|s| s.out).collect();
+
+    assert_eq!(after.find("G1").unwrap().yaw, (base + 1) & 3, "the turn was not taken");
+    assert_ne!(was, now, "turning the generator moved none of its ports");
+    // A quarter turn about the vertical: nothing that pointed sideways still
+    // points the same way, and nothing that pointed up or down has moved.
+    for (a, b) in was.iter().zip(now.iter()) {
+        if a.y != 0 {
+            assert_eq!(a, b, "a vertical nozzle turned with a horizontal one");
+        } else {
+            assert_ne!(a, b, "a horizontal nozzle did not turn");
+        }
+    }
 }
 
 /// Nothing floats. Everything either stands on the ground, stands on something
@@ -533,7 +583,7 @@ fn everything_that_is_up_is_held_up() {
         for r in &s.routes {
             let long = r.length > 12_000;
             let high = r.path.iter().any(|p| p.y > 2500);
-            if long && high && !r.direct {
+            if long && high && r.laid() {
                 assert!(!r.props.is_empty(), "{path}: {} is a {}m span on nothing", r.name, r.length / 1000);
             }
         }
@@ -675,7 +725,7 @@ fn no_straight_is_trimmed_for_a_bend_that_never_arrives() {
     for (path, d) in all_designs() {
         let scene = form::build(&d, Ask { style: Style::Yard, world: 0, grade: Grade::Full })
             .unwrap_or_else(|e| panic!("{path}: {e}"));
-        for r in &scene.routes {
+        for r in scene.routes.iter().filter(|r| r.laid()) {
             let bent = route::elbows_of(r);
             let bend = route::bend_of(r);
             assert_eq!(bent.len(), r.path.len());

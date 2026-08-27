@@ -22,6 +22,11 @@ export const ui = {
   renderTime: 0,
   scale: 1,
   flowLabels: true,
+  // Experiment 10: which storey the plan is being drawn on. The plan view is
+  // still a plan -- it shows the whole machine at once -- but a new component
+  // is placed on this level, so a player who has climbed to the mezzanine in
+  // the 3D view goes on adding to it from here.
+  level: 0,
   font: '"Segoe UI", system-ui, sans-serif',
 };
 
@@ -48,11 +53,11 @@ export function initCanvas(el, h) {
 
     if (ui.place) {
       const at = tileFor(ui.place, w);
-      if (overlaps({ kind: ui.place }, at.x, at.y)) {
+      if (overlaps({ kind: ui.place, face: null }, at.x, at.y, ui.level)) {
         say('there is something there already', true);
         return;
       }
-      const u = place(ui.place, at.x, at.y);
+      const u = place(ui.place, at.x, at.y, ui.level);
       setTool(null);
       select({ what: 'unit', name: u.name });
       return;
@@ -90,7 +95,7 @@ export function initCanvas(el, h) {
     ui.pointer = w;
     if (ui.place) {
       ui.placeAt = tileFor(ui.place, w);
-      ui.placeOk = !overlaps({ kind: ui.place }, ui.placeAt.x, ui.placeAt.y);
+      ui.placeOk = !overlaps({ kind: ui.place, face: null }, ui.placeAt.x, ui.placeAt.y, ui.level);
       invalidate();
     }
     if (!drag) {
@@ -111,7 +116,7 @@ export function initCanvas(el, h) {
       const x = Math.max(0, Math.round(w.x / TILE - drag.dx));
       const y = Math.max(0, Math.round(w.y / TILE - drag.dy));
       const u = unitOf(drag.name);
-      if (u && (u.x !== x || u.y !== y) && !overlaps(u, x, y, u.name)) {
+      if (u && (u.x !== x || u.y !== y) && !overlaps(u, x, y, u.z || 0, u.name)) {
         move(drag.name, x, y);
       }
     }

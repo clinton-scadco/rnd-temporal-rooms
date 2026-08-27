@@ -21,12 +21,13 @@
 //!   machine "Compact Reactor v3"
 //!   brief power
 //!
-//!   reactor   R1  at 0,0  throttle 42
+//!   reactor   R1  at 0,0    throttle 42
 //!   heatpipe  HP1 at 5,1
 //!   exchanger HX1 at 9,0
-//!   tank      T1  at 9,6  pulse 1200 0
-//!   inlet     F1  at 0,9  draws ore
-//!   gearbox   GB1 at 4,9  ratio 4
+//!   tank      T1  at 9,6    pulse 1200 0
+//!   inlet     F1  at 0,9    draws ore
+//!   gearbox   GB1 at 4,9    ratio 4
+//!   condenser CD1 at 9,0,3  face north
 //!
 //!   wire R1.heat -> HP1.in
 //!   wire HP1.out -> HX1.heat
@@ -35,6 +36,30 @@
 //! Positions are tiles, not pixels, because footprint is one of the things a
 //! brief asks the player to minimise -- so where a component sits is part of
 //! the design rather than part of the drawing.
+//!
+//! # Experiment 10: the third tile
+//!
+//! `at x,y` became `at x,y,z`, and components grew a `face`. That is the whole
+//! of the change to the file, and it is a much larger change to the game than
+//! it is to the parser:
+//!
+//! ```text
+//!   Component { type, position: xyz, rotation }
+//!   Connection { fromPort, toPort }
+//! ```
+//!
+//! The condenser above is not beside the exchanger, it is six metres above it.
+//! Experiment 08 could not have been told that -- height was inferred from
+//! what a component *was*, and the inference was good, but it meant the player
+//! could not choose. Now they can, and the interesting consequences are all
+//! spatial: two things may share a footprint if they do not share a height,
+//! reach is measured in three dimensions, and anything above the slab needs a
+//! deck under it, which the structural pass builds without being asked.
+//!
+//! Rotation is the other half. It turns the footprint, it turns the machine,
+//! and -- because experiment 10 makes a port an *interface* rather than a
+//! coordinate -- it turns every nozzle on it. Turning a turbine round is how
+//! you point its shaft at the generator instead of at a wall.
 //!
 //! `brief` is new in experiment 07 and is the only line that says what the
 //! machine is *for*. There are four of them and they ask for different things,
@@ -148,31 +173,70 @@ impl Tune {
 pub struct Unit {
     pub name: String,
     pub kind: Kind,
-    /// Top-left tile.
+    /// Top-left tile of the footprint.
     pub x: i32,
     pub y: i32,
+    /// Experiment 10: how many tiles up the slab it stands on is. The grid is
+    /// cubic, so `at 4,2,3` is three tiles up in exactly the sense that it is
+    /// four tiles east, and a component at `up 3` needs a deck under it --
+    /// which the structural pass builds without being asked.
+    pub z: i32,
+    /// Experiment 10: which way it faces, in quarter turns clockwise from
+    /// east, when the player has said. `None` means "point it along its own
+    /// flow", which is what experiment 08 always did and still does.
+    ///
+    /// Authored rotation turns the *footprint* as well as the machine; an
+    /// inferred one does not. That is not an inconsistency, it is the
+    /// difference between the two: a footprint the player can see turning is a
+    /// placement decision, and a footprint that turned itself because somebody
+    /// drew a wire on the far side would be a document editing itself.
+    pub face: Option<u8>,
     pub tune: Tune,
 }
 
 impl Unit {
+    /// The footprint as placed: east-west first, and turned if the player
+    /// turned it.
     pub fn w(&self) -> i32 {
-        parts::part(self.kind).w as i32
+        let p = parts::part(self.kind);
+        if self.turned() { p.h as i32 } else { p.w as i32 }
     }
     pub fn h(&self) -> i32 {
-        parts::part(self.kind).h as i32
+        let p = parts::part(self.kind);
+        if self.turned() { p.w as i32 } else { p.h as i32 }
     }
-    /// Clear tiles between two footprints: zero if they touch.
+    /// How many tiles of the `up` axis it occupies.
+    pub fn tall(&self) -> i32 {
+        parts::storeys(self.kind)
+    }
+    /// Whether the player has turned it a quarter or three quarters, which is
+    /// the only rotation a rectangle notices.
+    pub fn turned(&self) -> bool {
+        matches!(self.face, Some(f) if f & 1 == 1)
+    }
+    /// Clear tiles between two footprints, in three dimensions: zero if they
+    /// touch. Distance is still a rule, and stacking a component on top of the
+    /// one it feeds is now a legitimate way to be close to it.
     pub fn gap_to(&self, other: &Unit) -> i32 {
         let dx = (other.x - (self.x + self.w())).max(self.x - (other.x + other.w())).max(0);
         let dy = (other.y - (self.y + self.h())).max(self.y - (other.y + other.h())).max(0);
-        dx + dy
+        let dz = (other.z - (self.z + self.tall())).max(self.z - (other.z + other.tall())).max(0);
+        dx + dy + dz
     }
 
+    /// Two components share a piece of the world.
+    ///
+    /// Experiment 08 asked this in two dimensions because the document had
+    /// only two. Now that it has three, sharing a footprint is not a fault --
+    /// it is a *stack*, and stacking is the thing experiment 10 exists to
+    /// allow. What is a fault is sharing a footprint at the same height.
     fn overlaps(&self, other: &Unit) -> bool {
         self.x < other.x + other.w()
             && other.x < self.x + self.w()
             && self.y < other.y + other.h()
             && other.y < self.y + self.h()
+            && self.z < other.z + other.tall()
+            && other.z < self.z + self.tall()
     }
 }
 
@@ -258,10 +322,30 @@ impl Design {
                     Some(&u.name),
                 ));
             }
+            if u.z < 0 {
+                out.push(fault(
+                    format!("{} is below the slab", u.name),
+                    Some(&u.name),
+                ));
+            }
+            if let Some(f) = u.face {
+                if f > 3 {
+                    out.push(fault(
+                        format!("{} faces {f}, and there are four ways to face", u.name),
+                        Some(&u.name),
+                    ));
+                }
+            }
             for o in &self.units[..i] {
                 if u.overlaps(o) {
                     out.push(fault(
-                        format!("{} overlaps {}", u.name, o.name),
+                        format!(
+                            "{} overlaps {} -- they share tiles between {} and {} up",
+                            u.name,
+                            o.name,
+                            u.z.max(o.z),
+                            (u.z + u.tall()).min(o.z + o.tall())
+                        ),
                         Some(&u.name),
                     ));
                 }
@@ -387,11 +471,13 @@ impl Design {
                 w.from, w.from_port, a.dom, w.to, w.to_port, b.dom
             ));
         }
+        // Three dimensions since experiment 10: stacking a component on top of
+        // the one it feeds is a legitimate way of being next to it.
         let gap = self.units[from].gap_to(&self.units[to]);
         if gap > parts::REACH {
             return Err(format!(
                 "{} and {} are {gap} tiles apart and a connection reaches {} -- \
-                 move them together, or put a pipe between them",
+                 move them together, stack them, or put a pipe between them",
                 w.from, w.to, parts::REACH
             ));
         }
@@ -408,6 +494,11 @@ impl Design {
     /// The plot the machine occupies: bounding box, and how much of it is
     /// actually machine. Both matter -- the brief says minimise footprint, and
     /// a sprawl of well-utilised components is still a sprawl.
+    ///
+    /// It is deliberately still measured on the ground. Experiment 10 lets the
+    /// player build upwards, and the whole point of the brief's footprint term
+    /// is that going up is how you *pay less of it* -- so a plot that counted
+    /// storeys would be scoring the solution as though it were the problem.
     pub fn footprint(&self) -> (u32, u32, u32) {
         if self.units.is_empty() {
             return (0, 0, 0);
@@ -418,6 +509,11 @@ impl Design {
         let y1 = self.units.iter().map(|u| u.y + u.h()).max().unwrap();
         let tiles: u32 = self.units.iter().map(|u| parts::part(u.kind).tiles()).sum();
         ((x1 - x0) as u32, (y1 - y0) as u32, tiles)
+    }
+
+    /// How many tiles the tallest thing in the machine reaches.
+    pub fn storeys(&self) -> i32 {
+        self.units.iter().map(|u| u.z + u.tall()).max().unwrap_or(0)
     }
 
     // ------------------------------------------------------------- the file
@@ -460,7 +556,8 @@ impl Design {
                 .next()
                 .ok_or_else(|| at("a component needs a name".into()))?
                 .to_string();
-            let mut u = Unit { name, kind, x: 0, y: 0, tune: Tune::default_for(kind) };
+            let mut u =
+                Unit { name, kind, x: 0, y: 0, z: 0, face: None, tune: Tune::default_for(kind) };
             while let Some(word) = w.next() {
                 match word {
                     "draws" => {
@@ -484,12 +581,34 @@ impl Design {
                             v.parse().map_err(|_| at(format!("`{v}` is not a stage count")))?;
                     }
                     "at" => {
-                        let pos = w.next().ok_or_else(|| at("`at` needs x,y".into()))?;
-                        let (xs, ys) = pos
-                            .split_once(',')
-                            .ok_or_else(|| at("`at` needs x,y".into()))?;
+                        // `at x,y` is where experiment 06 left it and still
+                        // means the slab; `at x,y,z` is experiment 10 asking
+                        // for the third tile.
+                        let pos = w.next().ok_or_else(|| at("`at` needs x,y or x,y,z".into()))?;
+                        let mut n = pos.split(',');
+                        let (xs, ys) = match (n.next(), n.next()) {
+                            (Some(a), Some(b)) => (a, b),
+                            _ => return Err(at("`at` needs x,y or x,y,z".into())),
+                        };
                         u.x = xs.trim().parse().map_err(|_| at(format!("`{xs}` is not a tile")))?;
                         u.y = ys.trim().parse().map_err(|_| at(format!("`{ys}` is not a tile")))?;
+                        if let Some(zs) = n.next() {
+                            u.z =
+                                zs.trim().parse().map_err(|_| at(format!("`{zs}` is not a tile")))?;
+                        }
+                        if n.next().is_some() {
+                            return Err(at("`at` takes at most three tiles".into()));
+                        }
+                    }
+                    "up" => {
+                        let v = w.next().ok_or_else(|| at("`up` needs a number of tiles".into()))?;
+                        u.z = v.parse().map_err(|_| at(format!("`{v}` is not a tile")))?;
+                    }
+                    "face" => {
+                        let v = w.next().ok_or_else(|| at("`face` needs a direction".into()))?;
+                        u.face = Some(
+                            facing(v).ok_or_else(|| at(format!("`{v}` is not a direction")))?,
+                        );
                     }
                     "throttle" => {
                         let v = w.next().ok_or_else(|| at("`throttle` needs a percent".into()))?;
@@ -518,14 +637,17 @@ impl Design {
         s.push_str(&format!("brief {}\n\n", self.brief.tag()));
         let wide = self.units.iter().map(|u| u.name.len()).max().unwrap_or(4).max(4);
         for u in &self.units {
-            s.push_str(&format!(
-                "{:<9} {:<w$} at {},{}",
-                u.kind.tag(),
-                u.name,
-                u.x,
-                u.y,
-                w = wide
-            ));
+            // The third tile is only written when there is one, so every file
+            // experiment 06 could read is still a file this emits.
+            let at = if u.z == 0 {
+                format!("{},{}", u.x, u.y)
+            } else {
+                format!("{},{},{}", u.x, u.y, u.z)
+            };
+            s.push_str(&format!("{:<9} {:<w$} at {at}", u.kind.tag(), u.name, w = wide));
+            if let Some(f) = u.face {
+                s.push_str(&format!("  face {}", compass(f)));
+            }
             if !u.tune.is_default_for(u.kind) {
                 match u.kind {
                     Kind::Reactor => s.push_str(&format!("  throttle {}", u.tune.throttle)),
@@ -576,6 +698,14 @@ impl Design {
                                 .set("kind", u.kind.tag())
                                 .set("x", u.x as i64)
                                 .set("y", u.y as i64)
+                                .set("z", u.z as i64)
+                                .set(
+                                    "face",
+                                    match u.face {
+                                        Some(f) => Json::Int(f as i128),
+                                        None => Json::Null,
+                                    },
+                                )
                                 .set("throttle", u.tune.throttle as i64)
                                 .set("pulse", u.tune.pulse)
                                 .set("high", u.tune.high as i64)
@@ -645,6 +775,8 @@ impl Design {
                 kind,
                 x: u.at("x").as_i128().unwrap_or(0) as i32,
                 y: u.at("y").as_i128().unwrap_or(0) as i32,
+                z: u.at("z").as_i128().unwrap_or(0) as i32,
+                face: u.at("face").as_i128().map(|f| (f as i32).clamp(0, 3) as u8),
                 tune,
             });
         }
@@ -674,6 +806,12 @@ impl Design {
                         .set("family", p.family.tag())
                         .set("w", p.w as i64)
                         .set("h", p.h as i64)
+                        // Experiment 10: the third dimension of a footprint.
+                        // The browser needs it to say whether stacking one
+                        // component on another is legal, which is a thing it
+                        // has to answer while the pointer is still moving.
+                        .set("storeys", parts::storeys(k) as i64)
+                        .set("height", parts::height(k) as i64)
                         .set("tunable", Tune::tunable(k))
                         .set("recipe", recipe_json(k))
                         .set(
@@ -736,6 +874,24 @@ fn recipe_json(kind: Kind) -> Json {
         .set("draws", Json::Arr(draws))
         .set("makes", Json::Arr(makes))
         .set("rate", r.rate as i64)
+}
+
+/// The four ways to face, as a player would say them. Quarter turns clockwise
+/// from east, which is the same convention the visual pipeline's `yaw` uses --
+/// there is one compass in this repository and this is it.
+pub const COMPASS: [&str; 4] = ["east", "south", "west", "north"];
+
+pub fn facing(s: &str) -> Option<u8> {
+    let s = s.trim().to_ascii_lowercase();
+    COMPASS
+        .iter()
+        .position(|c| *c == s)
+        .map(|i| i as u8)
+        .or_else(|| s.parse::<u8>().ok().filter(|f| *f < 4))
+}
+
+pub fn compass(f: u8) -> &'static str {
+    COMPASS[(f & 3) as usize]
 }
 
 fn split_port(s: &str) -> Result<(String, String), String> {

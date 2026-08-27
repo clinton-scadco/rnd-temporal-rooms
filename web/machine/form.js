@@ -15,6 +15,20 @@
 // The one thing worth being careful about is the frame: `basis()` below is the
 // same construction as `frame_of` in Rust and `axes` in the .obj writer. If
 // those three disagree, elbows point into space.
+//
+// Experiment 10 made this window an *editor* rather than a viewer. Clicking a
+// machine selects it, dragging it slides it across the storey it stands on,
+// and two keys lift it and turn it. None of that touches the geometry: the
+// mouse produces a change to the document, the document is posted, and a whole
+// new plant comes back. That is slower than moving a mesh and it is the only
+// version of the feature worth having -- what the player is manipulating is
+// the machine, and the pipework regenerating around the thing they moved is
+// the entire point of the experiment.
+//
+// Picking is done on the CPU, against the per-component boxes the server sends
+// with the scene, rather than with a colour-buffer readback. A plant is a few
+// dozen boxes and a ray test is a few dozen comparisons; a readback is a
+// pipeline stall.
 
 const VERT = `#version 300 es
 precision highp float;
@@ -98,6 +112,45 @@ void main() {
   outColour = vec4(pow(col, vec3(0.4545)), 1.0);
 }`;
 
+// The boxes drawn over the plant when the player is placing things: a
+// component's solid, the room it needs to be serviced in, and the verdict on
+// it. Lines rather than faces, because the whole purpose is to see the plant
+// *through* them.
+const LINE_VERT = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+uniform mat4 uViewProj;
+uniform vec3 uLo;
+uniform vec3 uHi;
+void main() {
+  vec3 p = mix(uLo, uHi, aPos);
+  gl_Position = uViewProj * vec4(p, 1.0);
+}`;
+
+const LINE_FRAG = `#version 300 es
+precision highp float;
+uniform vec4 uColour;
+out vec4 outColour;
+void main() { outColour = uColour; }`;
+
+/// The unit cube's twelve edges, as pairs of corners in 0..1.
+const CUBE = (() => {
+  const c = [];
+  for (let i = 0; i < 8; i++) {
+    for (const bit of [1, 2, 4]) {
+      const j = i ^ bit;
+      if (j > i) c.push(i & 1, (i >> 1) & 1, (i >> 2) & 1, j & 1, (j >> 1) & 1, (j >> 2) & 1);
+    }
+  }
+  return new Float32Array(c);
+})();
+
+const VERDICT = {
+  clear: [0.30, 0.85, 0.45, 0.75],
+  watch: [0.98, 0.78, 0.22, 0.85],
+  bad: [0.98, 0.32, 0.30, 0.95],
+};
+
 export const view = {
   lod: 0,
   style: 'works',
@@ -110,19 +163,39 @@ export const view = {
   stats: null,
   shell: '',
   hash: '',
+  // Experiment 10: whether the placement overlay is on, and what the last
+  // build thought of the plant.
+  boxes: true,
+  units: [],
+  issues: [],
+  runs: [],
+  levels: 1,
 };
 
 let gl = null;
 let prog = null;
 let uni = {};
+let lineProg = null;
+let lineUni = {};
+let lineVao = null;
 let kit = null;      // { meshes: {tag: {vao-parts}}, mats: {tag: {...}} }
 let scene = null;    // { batches: [...], bounds }
 let canvas = null;
 let cam = { yaw: 0.7, pitch: 0.5, dist: 60, at: [0, 4, 0] };
 let need = true;
 let names = [];
+// Experiment 10: what the pointer is allowed to do to the document, handed in
+// by `app.js` so that this file still knows nothing about the document.
+let edit = null;   // { onPick, onMove, onLift, onTurn, tile }
+let held = null;   // the component under the pointer, mid-drag
 
 export function ready() { return !!gl; }
+
+/// What the pointer may do to the document. `app.js` hands this in; this file
+/// still has no idea what a component is called or how one is moved.
+export function authoring(hooks) {
+  edit = hooks;
+}
 
 export async function initForm(el) {
   canvas = el;
@@ -133,9 +206,24 @@ export async function initForm(el) {
   for (const n of ['uViewProj', 'uColour', 'uRough', 'uMetal', 'uEye', 'uPick']) {
     uni[n] = gl.getUniformLocation(prog, n);
   }
+  lineProg = link(LINE_VERT, LINE_FRAG);
+  for (const n of ['uViewProj', 'uColour', 'uLo', 'uHi']) {
+    lineUni[n] = gl.getUniformLocation(lineProg, n);
+  }
+  lineVao = gl.createVertexArray();
+  gl.bindVertexArray(lineVao);
+  const lb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, lb);
+  gl.bufferData(gl.ARRAY_BUFFER, CUBE, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
   gl.cullFace(gl.BACK);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
   const res = await fetch('/api/kit').then(r => r.json());
   kit = { meshes: {}, mats: {} };
@@ -187,6 +275,13 @@ export function show(json, refit) {
   view.stats = json.stats;
   view.shell = json.shell;
   view.hash = json.hash;
+  // Experiment 10: everything the placement overlay draws and the inspector
+  // reads, worked out by the same pass that built the plant so that the two
+  // can never disagree about what is wrong with it.
+  view.units = json.units || [];
+  view.issues = json.issues || [];
+  view.runs = json.runs || [];
+  view.levels = json.levels || 1;
   const paint = json.paint || [110, 120, 130];
 
   // Pieces arrive owned by a *thing* -- a component, a run, the steel under
@@ -276,17 +371,40 @@ export function invalidate() { need = true; }
 function drag() {
   let down = null;
   canvas.addEventListener('pointerdown', e => {
-    down = { x: e.clientX, y: e.clientY, b: e.button };
+    down = { x: e.clientX, y: e.clientY, b: e.button, ox: e.clientX, oy: e.clientY };
     canvas.setPointerCapture(e.pointerId);
+    // Left button on a machine picks it up. Anything else is the camera, so
+    // the orbit controls this window has always had are untouched.
+    held = null;
+    if (edit && e.button === 0 && !e.shiftKey) {
+      const hit = under(e);
+      if (hit) {
+        edit.onPick(hit.name);
+        held = { name: hit.name, from: [hit.x, hit.y, hit.z], moved: false };
+      }
+    }
   });
   canvas.addEventListener('pointerup', e => {
     down = null;
+    held = null;
     canvas.releasePointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', e => {
     if (!down) return;
+    // Dragging a held machine slides it across the storey it stands on. The
+    // ground plane of *its own level*, not of the yard: a component six metres
+    // up follows the pointer at six metres up, which is the difference between
+    // moving something and dropping it.
+    if (held) {
+      const at = onPlane(e, held.from[2]);
+      if (at) {
+        const t = edit.tile(at);
+        if (t && edit.onMove(held.name, t.x, t.y)) held.moved = true;
+      }
+      return;
+    }
     const dx = e.clientX - down.x, dy = e.clientY - down.y;
-    down = { x: e.clientX, y: e.clientY, b: down.b };
+    down = { x: e.clientX, y: e.clientY, b: down.b, ox: down.ox, oy: down.oy };
     if (down.b === 2 || e.shiftKey) {
       // On the ground plane, screen-right is (cos yaw, -sin yaw) and
       // up-the-screen is -(sin yaw, cos yaw): the same pair the eye is built
@@ -311,6 +429,94 @@ function drag() {
     need = true;
   }, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Two keys, and they are the two verbs the experiment is about.
+  canvas.tabIndex = 0;
+  canvas.addEventListener('keydown', e => {
+    if (!edit) return;
+    const k = e.key.toLowerCase();
+    if (k === 'r') { edit.onTurn(e.shiftKey ? -1 : 1); e.preventDefault(); }
+    else if (k === 'pageup' || k === 'e') { edit.onLift(1); e.preventDefault(); }
+    else if (k === 'pagedown' || k === 'q') { edit.onLift(-1); e.preventDefault(); }
+    else if (k === 'b') { view.boxes = !view.boxes; need = true; e.preventDefault(); }
+  });
+}
+
+// ---------------------------------------------------------------- picking
+
+/// Where the pointer is, in clip space.
+function ndc(e) {
+  const r = canvas.getBoundingClientRect();
+  return [((e.clientX - r.left) / r.width) * 2 - 1, 1 - ((e.clientY - r.top) / r.height) * 2];
+}
+
+function eyeAt() {
+  return [
+    cam.at[0] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw),
+    cam.at[1] + cam.dist * Math.sin(cam.pitch),
+    cam.at[2] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw),
+  ];
+}
+
+/// The ray under the pointer, in world space. Built by inverting the same two
+/// matrices the frame was drawn with rather than by a second projection of its
+/// own, so that what is picked is what was seen.
+function ray(e) {
+  const w = canvas.clientWidth || 1, h = canvas.clientHeight || 1;
+  const eye = eyeAt();
+  const [nx, ny] = ndc(e);
+  // Camera basis: the same one `lookAt` builds.
+  const z = norm([eye[0] - cam.at[0], eye[1] - cam.at[1], eye[2] - cam.at[2]]);
+  const x = norm(cross([0, 1, 0], z));
+  const y = cross(z, x);
+  const tan = Math.tan(0.9 / 2);
+  const ax = nx * tan * (w / h), ay = ny * tan;
+  const d = norm([
+    x[0] * ax + y[0] * ay - z[0],
+    x[1] * ax + y[1] * ay - z[1],
+    x[2] * ax + y[2] * ay - z[2],
+  ]);
+  return { o: eye, d };
+}
+
+/// The nearest component the pointer is over, from the boxes the server sent.
+function under(e) {
+  if (!view.units.length) return null;
+  const { o, d } = ray(e);
+  let best = null;
+  for (const u of view.units) {
+    const t = hitBox(o, d, u.solid.lo, u.solid.hi);
+    if (t !== null && (!best || t < best.t)) best = { t, ...u, ...{ x: u.x, y: u.y, z: u.z } };
+  }
+  return best;
+}
+
+/// Slab test. Returns the near intersection distance, or null.
+function hitBox(o, d, lo, hi) {
+  let t0 = 0.001, t1 = 1e9;
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(d[i]) < 1e-9) {
+      if (o[i] < lo[i] || o[i] > hi[i]) return null;
+      continue;
+    }
+    let a = (lo[i] - o[i]) / d[i];
+    let b = (hi[i] - o[i]) / d[i];
+    if (a > b) { const t = a; a = b; b = t; }
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, b);
+    if (t0 > t1) return null;
+  }
+  return t0;
+}
+
+/// Where the pointer meets the floor of one storey, in metres.
+function onPlane(e, level) {
+  const { o, d } = ray(e);
+  const y = level * 2;   // one tile up is two metres, and the grid is cubic
+  if (Math.abs(d[1]) < 1e-6) return null;
+  const t = (y - o[1]) / d[1];
+  if (t <= 0) return null;
+  return [o[0] + d[0] * t, y, o[2] + d[2] * t];
 }
 
 function frame() {
@@ -330,11 +536,7 @@ function draw() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   if (!scene) return;
 
-  const eye = [
-    cam.at[0] + cam.dist * Math.cos(cam.pitch) * Math.sin(cam.yaw),
-    cam.at[1] + cam.dist * Math.sin(cam.pitch),
-    cam.at[2] + cam.dist * Math.cos(cam.pitch) * Math.cos(cam.yaw),
-  ];
+  const eye = eyeAt();
   const vp = mul(perspective(0.9, w / h, 0.4, 4000), lookAt(eye, cam.at));
 
   gl.useProgram(prog);
@@ -358,6 +560,44 @@ function draw() {
     gl.drawElementsInstanced(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0, n);
   }
   gl.bindVertexArray(null);
+  if (view.boxes) overlay(vp);
+}
+
+/// Green, yellow, red -- round every component, and round the room the
+/// selected one needs to be serviced in.
+///
+/// The note asked for exactly this and it is worth being literal about it:
+/// spatial optimisation only becomes gameplay if the player can *see* the
+/// space. Drawn last, without depth writes, so the boxes read as annotation
+/// over the plant rather than as more plant.
+function overlay(vp) {
+  if (!view.units.length) return;
+  gl.useProgram(lineProg);
+  gl.uniformMatrix4fv(lineUni.uViewProj, false, vp);
+  gl.bindVertexArray(lineVao);
+  gl.depthMask(false);
+  const chosen = view.pick >= 0 ? names[view.pick] : null;
+  for (const u of view.units) {
+    const on = u.name === chosen;
+    // Everything that is not clear, plus whatever is selected. A plant with
+    // nothing wrong with it should look like a plant, not like a wireframe.
+    if (u.verdict === 'clear' && !on) continue;
+    const c = VERDICT[u.verdict] || VERDICT.clear;
+    gl.uniform4fv(lineUni.uColour, on ? [c[0], c[1], c[2], 1.0] : c);
+    box(u.solid.lo, u.solid.hi);
+    if (on && u.service) {
+      gl.uniform4fv(lineUni.uColour, [0.45, 0.70, 0.98, 0.55]);
+      box(u.service.lo, u.service.hi);
+    }
+  }
+  gl.depthMask(true);
+  gl.bindVertexArray(null);
+}
+
+function box(lo, hi) {
+  gl.uniform3fv(lineUni.uLo, lo);
+  gl.uniform3fv(lineUni.uHi, hi);
+  gl.drawArrays(gl.LINES, 0, 24);
 }
 
 /// One box, from the scene's own proxy volume: what an installation costs when

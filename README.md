@@ -105,6 +105,11 @@ turns out to do over half of the work.
 .\run.ps1 -Machine read designs/10-refinery.machine --png sheet.png
 .\run.ps1 -Machine reads                       # every design, at every grade
 .\run.ps1 -Machine form designs/03-compact.machine --grade a --png then.png
+
+# Experiment 10: where everything is, which face every port ended up on,
+# how every connection was routed, and what is in the way
+.\run.ps1 -Machine space designs/17-stacked.machine
+.\run.ps1 -Machine spaces                      # every design, routed and judged
 ```
 
 `run.ps1` exists because rustup installs the MSVC toolchain without setting the
@@ -1894,6 +1899,289 @@ into a deliberate visual style without touching the generator. It can, and the
 mechanism is smaller than expected again: **twelve materials assigned by
 function, six rules about how things are joined, four rules about how things are
 mounted, and one flight of stairs that goes where there is room for it.**
+
+## Experiment 10: 3D authoring
+
+Experiment 08 asked whether a functional design could be turned into a
+recognisable industrial scene, and the answer was yes. Experiment 09 asked how
+far a look gets without touching the generator, and the answer was *most of the
+way*. So the interesting question stopped being about pictures:
+
+> **Can a player manipulate this industrial scene directly, and does the
+> procedural system reliably turn their functional 3D decisions into geometry
+> that makes physical visual sense?**
+
+The note that asked for it put the deliverable in eight lines:
+
+```text
+Component {
+    type
+    position: xyz
+    rotation
+}
+
+Connection {
+    fromPort
+    toPort
+}
+```
+
+which is a very small change to the document and a very large one to everything
+downstream of it.
+
+### 1. The document grew an axis and a rotation
+
+```text
+reactor   R1  at 0,0    throttle 40
+exchanger HX1 at 4,0    face east
+exchanger HX2 at 4,0,3  face east     # six metres above HX1, not beside it
+```
+
+`at x,y` still means what it always did; `at x,y,z` adds the third tile. The
+grid is cubic — one tile is two metres east, south *or up* — so the whole of the
+document's geometry stays integer and stays comparable.
+
+Three rules fall straight out of it:
+
+```text
+two components may share tiles         if they do not share a height
+reach is measured in three dimensions  stacking is a way of being close
+a component above the slab needs a deck  which the structural pass builds
+```
+
+`face` is the other half, and it is the half that makes the first half worth
+having. An authored rotation turns the footprint, turns the machine, and turns
+every nozzle on it. An *inferred* one — which is what every component starts
+with, and what experiment 08 always used — turns the machine and leaves the
+footprint alone, because a footprint that reshaped itself when somebody drew a
+wire on the far side would be a document editing itself.
+
+Neither reaches the simulator. `tests/space.rs` turns every component in a plant
+a quarter turn, lifts a generator two storeys, and asserts the scoreboard does
+not move by so much as a tick.
+
+### 2. A port became an interface
+
+This is the change the pipework noticed, and the note said it best:
+
+> The procedural generator should understand interfaces, not merely endpoints.
+
+Experiment 08 chose a port's face by looking at what it was wired to and picking
+the nearest side. That reads correctly at a glance and is nonsense on
+inspection: a steam outlet would appear on whichever wall happened to face the
+turbine, including the floor, and a shaft would leave a motor out of its side.
+
+Now every archetype declares, per domain and direction, which of its six faces
+that port is allowed to be on:
+
+```text
+a can's shaft leaves the end of the barrel, and only the end
+a vessel vents upwards, and only upwards
+a shell's process ports are on the tube ends, or on the crown of the shell
+a bin takes material in at the top and drops it out of the bottom
+a turbine takes steam in at the top and exhausts it downwards
+```
+
+The old nearest-side rule still runs, but only *within* the allowed set — and
+never onto a face with less than half a tile of air in front of it, because a
+nozzle nothing can be bolted to is a lost connection dressed up as a legal one.
+Where the archetype leaves no choice, the remedy is to turn the machine, which
+is what `face` is for.
+
+Each socket then carries what the router is obliged to respect:
+
+```text
+out       the flange normal: the direction a line leaves in
+bore      from the port's rate, as it always was
+class     light / standard / heavy, derived from domain and rate
+stub      the straight run off the flange before anything may bend
+layer     which of the plant's five storeys a line off it belongs on
+axis      for a shaft, the line the coupling has to lie on
+```
+
+`machine space` prints the table:
+
+```text
+  port            domain     face    class       bore  stub  at
+  ------------------------------------------------------------------------
+  R1.heat         heat       up      heavy        520  1000  (4250, 9250, 4250)
+  HX1.heat        heat       up      standard     285   500  (11250, 4250, 3250)
+  HX1.steam       gas        east    standard     210   500  (13750, 3250, 3250)
+  T1.rotary       rotary     east    heavy        220   500  (21750, 1250, 2250)
+  G1.rotary       rotary     west    heavy        195   500  (22250, 1250, 2250)
+```
+
+### 3. The router walks straight sections, and is allowed to refuse
+
+Experiment 08's router was a shortest-path solver with a bend penalty bolted on.
+Shortest paths on a grid are staircases, and a staircase drawn in 858mm lagged
+pipe is a picture of something that could not be built. So the search space
+changed shape:
+
+```text
+a node is (corner, heading)
+an edge is a straight run of at least `straight` millimetres
+```
+
+Six of the note's nine rules are now true *by construction* rather than by
+penalty — there is no path in the search space that bends twice in a metre, so
+no amount of bad luck can produce one:
+
+| rule | how |
+|---|---|
+| socket direction | the first and last sections are the flange normal, and nothing else is offered |
+| minimum straight before bend | the gates: the first bend is `stub` from the flange, and so is the last |
+| allowed bend radius | `straight` is at least twice the radius plus a diameter, so every corner can afford its own elbows |
+| pipe diameter | the bore, from the port's rate |
+| clearance from equipment | a cost inside it, forbidden through it |
+| clearance between pipes | a laid route claims its cells and charges for the ones beside them |
+| preferred elevations | five named storeys, one per domain |
+| support spacing | per domain, and the structural pass reads the same list |
+| junction rules | two lines off one socket share a corridor and get a tee |
+
+The elevations are the cheapest good idea in the note. Industrial routing has
+conventions; exploiting them makes the output believable *and* constrains the
+search:
+
+```text
+Ground   700 mm   pumped services, along the floor
+Drive   1250 mm   shafts and rods: every one in the plant at one height
+Feed    2750 mm   chutes and conveyors, above head height and falling
+Rack    4250 mm   the process rack: steam, heat, anything hot
+Tray    5600 mm   cable tray, over the top of everything else
+```
+
+And then the part that matters most. Experiment 08 could not fail: when A* found
+nothing it drew a straight line through the plant and moved on, which made
+"every wire has a route" true and meaningless. A run is now laid at the first of
+three tiers that works:
+
+```text
+clean   every rule above, in full
+tight   half the straight off the flange, the stylistic half of the straight
+        between bends, and permission to share a corridor
+lost    no valid route found -- and nothing at all is drawn
+```
+
+The geometric half of the minimum straight — twice the bend radius plus a
+diameter — is never relaxed, because giving it up does not produce a shorter run,
+it produces two elbows drawn through each other.
+
+That immediately earned its keep. `07-crushline` has two motors bolted to the
+same end of the same shaft. Only one of them can be: a coupling is a straight
+line between two flanges, one motor is already on that line, and the other is
+three and a half metres to the south. Experiment 08 drew it anyway — a shaft with
+two right angles in it, arriving at a flange sideways — and nobody noticed for
+two experiments. Experiment 10 declines:
+
+```text
+  connection                domain     tier    metres  bends  elevation
+  ------------------------------------------------------------------------
+  MO1.rotary -> SH1.in      rotary     clean        2      0  drive
+  MO2.rotary -> SH1.in      rotary     lost         0      0  drive
+
+  rule              level   what
+  ------------------------------------------------------------------------
+  no route          red     no valid route found for MO2.rotary -> SH1.in
+```
+
+Across the seventeen designs, 204 connections of 209 are laid under the full
+set, four are squeezed and one is refused. All five exceptions are drive shafts,
+which is the domain with by far the strictest rules — four metres of straight
+between bends, because a shaft that bends is a gearbox nobody placed.
+
+### 4. Space is scarce, and the plant says who is in whose way
+
+The note's warning was exact:
+
+> Otherwise 3D placement just becomes the same easy `x100000` problem with
+> objects stacked vertically until the entire factory resembles a lasagne.
+
+Free placement is only interesting if space is scarce, and space is only scarce
+if something *needs* it. So every component claims four volumes rather than one:
+
+```text
+solid       the machine itself: nothing else may be here at all
+service     the room a person needs to work on it -- on any one of its sides
+hot         the separation a hot machine needs from a cold one
+exclusion   the straight run off each flange, which belongs to the pipework
+```
+
+and `space::check` reads the finished plant and reports six rules:
+
+| rule | red or yellow |
+|---|---|
+| equipment cannot overlap | red — two solids intersect |
+| big vessels need foundations | red — a tower on a mezzanine is not a design |
+| shafts need alignment | red — a drive's two ends are not on one axis |
+| pipes need routes | red for refused, yellow for squeezed |
+| some parts need maintenance access | yellow — boxed in on all four sides |
+| hot objects need separation | yellow — a cold machine inside a hot one's halo |
+
+The first thing it found was that this repository has never had an aligned drive
+train. Twenty-two of its drives arrive at their far flange between two and five
+metres off the axis they left on — one design in three. Every one of them was
+drawn by experiment 08 as a shaft with two right angles in it, and every one of
+them is now red.
+
+It reports; it does not refuse. The *document* refuses the things that are not a
+design at all — two components on the same tiles at the same height, a wire
+between ports that cannot carry each other — and everything here is downstream
+of that, because the difference between an illegal machine and a badly laid-out
+one is the whole of what makes the second one interesting to play with.
+
+The service rule is worth a note, because the first version of it was wrong in
+an instructive way. It required the *front* to be clear, and it fired on half of
+every design in the repository — a rule that fires on everything is not a rule,
+it is a background colour. What a machine actually needs is to be approachable
+from *somewhere*, so the four sides are tried in order and only a machine boxed
+in on all of them is a fault. That took the count from 92 warnings to six.
+
+### 5. Building upwards has consequences nobody drew
+
+```text
+a component above the slab       -> a deck, its columns, its edge and its rail
+a deck with no way onto it       -> a flight of stairs from the storey below
+a floor with a machine through it -> a hole in the floor
+a serviceable port above head height -> a platform, measured from its own deck
+a run longer than its span       -> a support, and a clamp where it lands
+```
+
+`designs/17-stacked.machine` is the whole experiment in one file: `03-compact`,
+with the second exchanger train put on a mezzanine over the first.
+
+```text
+                    03-compact   17-stacked
+electricity            108.00       108.00   /tick
+fuel                    40.00        40.00   /tick
+water                  160.00       160.00   /tick
+footprint                  72           60   tiles
+plot covered              81%          97%
+connections           8 clean      8 clean
+```
+
+Same power, same fuel, on five sixths of the ground — and the cost of the trade
+is visible from the outside, because the deck needs columns down to the slab, an
+edge, a handrail and a flight of stairs, all of which appear without being asked
+for and all of which take up room the spatial rules then measure.
+
+### What it answered, and what it did not
+
+| the question | the answer |
+|---|---|
+| Can the player author in three dimensions? | Yes, and the document barely changed: one integer and one optional quarter-turn per component. Everything hard was downstream. |
+| Did the third axis need to be authored at all? | Yes, and this was the surprise. Experiment 08's *inferred* elevation is better than it sounds and is still the default — but inference cannot express "put the second train over the first", and that is the decision the note wanted the player to own. |
+| Is the routing trustworthy now? | Much more so. The staircases are gone by construction rather than by tuning, and the remaining defects are ones the plant reports about itself. |
+| Was letting it fail the right call? | Unambiguously. It found a defect in a shipped design that two experiments of looking at screenshots had missed, and a hole in a plant is a thing a player can fix. |
+| Did spatial constraints make placement interesting? | Enough to tell. Stacking buys footprint and costs steel, service access is a real constraint on packing, and shaft alignment is the first rule in this repository that a player has to arrange geometry to satisfy. Whether it is *fun* is a question for a play session, not a test suite. |
+| Did the derived structure keep up? | Mostly. Decks, columns, rails, stairs and holes in floors all fall out. What does not yet is a deck's own effect on routing: the structural pass runs after the router, so a pipe can pass through a floor that did not exist when it was laid. |
+| What about the asset spike? | Not done, deliberately. The note called it a visual spike rather than the next phase, and priorities 1 to 4 filled the experiment. The kit is still twenty-nine meshes. |
+| Did anything get worse? | Runs are longer, and visibly so. Enforcing a minimum straight on the section that arrives at a flange means a line that used to jog twice now goes round the outside, and a heat main that used to cut the corner now climbs to the rack first. That is the price of every corner being an elbow that fits, and it is worth paying. |
+
+The thing being tested was whether a player's three-dimensional decisions can be
+turned into geometry that makes physical sense. They can, and the mechanism is
+smaller than expected for the third time: **six faces per archetype, a straight
+section as the unit of search, three tiers, and permission to say no.**
 
 ## The tiers
 

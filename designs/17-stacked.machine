@@ -1,0 +1,55 @@
+# Experiment 10, in one file: the same plant as 03-compact, built upwards.
+#
+# 03-compact answers the power brief on 72 tiles of plot by packing everything
+# onto the slab. This answers it -- same power, same fuel, same water -- on 60,
+# by putting the second exchanger train on a mezzanine over the first. That is
+# the whole of what experiment 10 added to the document: `up`, and `face`.
+#
+# What it costs is visible from the outside. The deck needs columns down to
+# the ground, an edge, a handrail and a flight of stairs, all of which appear
+# without being asked for and all of which take up room the spatial rules then
+# measure. What it buys is a third of the footprint -- and the brief asks for
+# footprint, so this is a real trade rather than a decoration.
+#
+# The `face` lines are doing work too. Each train is turned so that it points
+# along the row, rather than wherever the flow inference would have pointed it,
+# and the drive trains come out straight enough that `machine space` has
+# nothing to say about them -- which is more than can be said for most of the
+# designs in this directory.
+#
+# It is not perfect, and it is more interesting for not being. Two yellows:
+#
+#   the pump is a metre from a reactor, which is hot
+#   the upper exchanger is boxed in on all four sides
+#
+# Both are the cost of the packing, both would be fixed by giving something a
+# tile of room, and both are exactly the trade the spatial rules exist to make
+# visible. `machine space designs/17-stacked.machine` says so.
+
+machine "Stacked"
+brief power
+
+reactor   R1  at 0,0  throttle 40
+
+# The ground floor: reactor, one exchanger train, and the feedwater pump.
+exchanger HX1 at 4,0        face east
+turbine   T1  at 7,0        face east
+generator G1  at 10,0       face east
+
+pump      W1  at 4,3
+
+# And the second train, six metres up, directly over the first.
+exchanger HX2 at 4,0,3      face east
+turbine   T2  at 7,0,3      face east
+generator G2  at 10,0,3     face east
+
+wire R1.heat -> HX1.heat
+wire R1.heat -> HX2.heat
+wire W1.water -> HX1.water
+wire W1.water -> HX2.water
+
+wire HX1.steam -> T1.steam
+wire HX2.steam -> T2.steam
+
+wire T1.rotary -> G1.rotary
+wire T2.rotary -> G2.rotary

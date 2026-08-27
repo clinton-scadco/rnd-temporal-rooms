@@ -53,26 +53,51 @@ export function portsOf(kind, dir) {
 }
 export function unitOf(name) { return state.design.units.find(u => u.name === name); }
 
+// Experiment 10: a footprint turns with the component, so `w` and `h` are the
+// placed dimensions rather than the catalogue's. Only an *authored* rotation
+// turns it -- an inferred one is the visual pipeline's business, and the
+// browser never sees it.
 export function box(u) {
   const p = part(u.kind);
-  return { x: u.x, y: u.y, w: p ? p.w : 1, h: p ? p.h : 1 };
+  const t = turned(u);
+  return {
+    x: u.x,
+    y: u.y,
+    z: u.z || 0,
+    w: p ? (t ? p.h : p.w) : 1,
+    h: p ? (t ? p.w : p.h) : 1,
+    d: p ? (p.storeys || 1) : 1,
+  };
+}
+
+export function turned(u) {
+  return u.face !== null && u.face !== undefined && (u.face & 1) === 1;
 }
 
 /// Clear tiles between two footprints, which is what the reach rule measures.
+/// Three dimensions since experiment 10: stacking a component on top of the
+/// one it feeds is a legitimate way of being next to it.
 export function gap(a, b) {
   const A = box(a), B = box(b);
   const dx = Math.max(B.x - (A.x + A.w), A.x - (B.x + B.w), 0);
   const dy = Math.max(B.y - (A.y + A.h), A.y - (B.y + B.h), 0);
-  return dx + dy;
+  const dz = Math.max(B.z - (A.z + A.d), A.z - (B.z + B.d), 0);
+  return dx + dy + dz;
 }
 
-export function overlaps(u, x, y, ignore) {
-  const p = part(u.kind || u);
-  const w = p.w, h = p.h;
-  return state.design.units.some(o =>
-    o.name !== ignore &&
-    x < o.x + part(o.kind).w && o.x < x + w &&
-    y < o.y + part(o.kind).h && o.y < y + h);
+/// Whether a component put at these tiles would be inside another one.
+/// Sharing a footprint is not a clash -- it is a stack, which is the whole
+/// point of the third tile. Sharing a footprint at the same height is.
+export function overlaps(u, x, y, z, ignore) {
+  const me = typeof u === 'string' ? { kind: u, face: null } : u;
+  const A = box({ ...me, x, y, z: z || 0 });
+  return state.design.units.some(o => {
+    if (o.name === ignore) return false;
+    const B = box(o);
+    return A.x < B.x + B.w && B.x < A.x + A.w &&
+           A.y < B.y + B.h && B.y < A.y + A.h &&
+           A.z < B.z + B.d && B.z < A.z + A.d;
+  });
 }
 
 /// Exactly the rule the compiler uses, so nothing can be drawn that will then
@@ -89,7 +114,9 @@ export function wireProblem(a, ai, b, bi) {
   if (pa.type !== pb.type) return `${pa.name} carries ${pa.type}, ${pb.name} takes ${pb.type}`;
   const g = gap(a, b);
   const reach = state.cat.constants.reach;
-  if (g > reach) return `${g} tiles apart — a connection reaches ${reach}. Put a pipe in between`;
+  if (g > reach) {
+    return `${g} tiles apart — a connection reaches ${reach}. Move them together, stack them, or put a pipe in between`;
+  }
   if (state.design.wires.some(w =>
       w.from === a.name && w.fromPort === pa.name && w.to === b.name && w.toPort === pb.name)) {
     return 'already wired';
@@ -133,9 +160,9 @@ export function uniqueName(kind) {
   }
 }
 
-export function place(kind, x, y) {
+export function place(kind, x, y, z) {
   const u = {
-    name: uniqueName(kind), kind, x, y,
+    name: uniqueName(kind), kind, x, y, z: z || 0, face: null,
     throttle: 100, pulse: false, high: 1200, low: 0,
     draws: kind === 'inlet' ? 'ore' : 'water', ratio: 4, limit: 100, stages: 2,
   };
@@ -144,12 +171,54 @@ export function place(kind, x, y) {
   return u;
 }
 
-export function move(name, x, y) {
+export function move(name, x, y, z) {
   const u = unitOf(name);
   if (!u) return;
   u.x = x; u.y = y;
+  if (z !== undefined) u.z = Math.max(0, z);
   // Moving is a structural edit here, unlike in the workbench: distance is a
   // rule, so dragging a component out of reach really does break the wire.
+  changed(true);
+}
+
+/// Experiment 10: up a storey, down a storey. Refused at the floor and
+/// wherever the component would end up inside another one, because the
+/// document already refuses that and a control that offers an illegal move is
+/// a control that lies.
+export function lift(name, by) {
+  const u = unitOf(name);
+  if (!u) return false;
+  const z = Math.max(0, (u.z || 0) + by);
+  if (z === (u.z || 0) || overlaps(u, u.x, u.y, z, name)) return false;
+  u.z = z;
+  changed(true);
+  return true;
+}
+
+/// And a quarter turn. The first one takes the component from "wherever the
+/// flow points it" to a decision the player owns; after that it just turns.
+export function turn(name, by) {
+  const u = unitOf(name);
+  if (!u) return false;
+  const was = u.face === null || u.face === undefined ? 0 : u.face;
+  const face = (was + by + 4) & 3;
+  const saved = u.face;
+  u.face = face;
+  // A turn changes the footprint, so it can be refused for exactly the reason
+  // a move can.
+  if (overlaps(u, u.x, u.y, u.z || 0, name)) {
+    u.face = saved;
+    return false;
+  }
+  changed(true);
+  return true;
+}
+
+/// Back to letting the flow decide, which is where every component starts.
+export function freeface(name) {
+  const u = unitOf(name);
+  if (!u) return;
+  u.face = null;
   changed(true);
 }
 

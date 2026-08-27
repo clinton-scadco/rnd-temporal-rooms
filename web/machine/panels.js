@@ -10,9 +10,23 @@
 // `30/tick of Iron Ore, powder or finer, 80%+ pure` -- and the costs after them
 // are the same for all four.
 
-import { state, part, unitOf, retune, unwire, num, toNum, brief } from './doc.js';
+import {
+  state,
+  part,
+  unitOf,
+  retune,
+  unwire,
+  num,
+  toNum,
+  brief,
+  lift,
+  turn,
+  freeface,
+  changed,
+} from './doc.js';
 import { statusColour, portColour, drawWave } from './render.js';
 import { select } from './canvas.js';
+import * as plant from './form.js';
 
 const $ = s => document.querySelector(s);
 const el = (tag, cls, text) => {
@@ -244,6 +258,7 @@ export function renderInspector() {
     box.appendChild(el('p', 'hint', 'not part of a machine that runs yet'));
   }
 
+  placement(box, u);
   tunables(box, u, p);
 
   // Ports, with what is in them and what crossed them.
@@ -272,6 +287,98 @@ export function renderInspector() {
   box.appendChild(t);
 
   box.appendChild(el('p', 'hint', p.blurb));
+}
+
+/// Experiment 10: where the component is, and the two controls that move it
+/// in the dimensions the plan view has no axis for.
+///
+/// The plan is still where x and y are edited, because a plan is the right
+/// tool for a plan. What lives here is the third tile and the quarter turn --
+/// both of which the 3D view also does from the keyboard, and both of which go
+/// through the same two functions in `doc.js`, so the two ways of doing it can
+/// never drift apart.
+function placement(box, u) {
+  const wrap = el('div', 'place');
+  const at = el('div', 'where');
+  const p = part(u.kind);
+  const t = (u.face & 1) === 1;
+  at.append(
+    el('span', 'k', 'at'),
+    el('b', null, `${u.x}, ${u.y}`),
+    el('span', 'k', 'up'),
+    el('b', null, String(u.z || 0)),
+    el('span', 'k', 'plan'),
+    el('b', null, `${t ? p.h : p.w} x ${t ? p.w : p.h} x ${p.storeys || 1}`),
+  );
+  wrap.appendChild(at);
+
+  const row = el('div', 'group place');
+  const button = (label, title, fn) => {
+    const b = el('button', null, label);
+    b.title = title;
+    b.addEventListener('click', fn);
+    row.appendChild(b);
+    return b;
+  };
+  button('up a level', 'stack it on whatever is under it', () => lift(u.name, 1));
+  button('down', 'back towards the slab', () => lift(u.name, -1));
+  button('turn', 'a quarter turn clockwise -- this moves its ports', () => turn(u.name, 1));
+  wrap.appendChild(row);
+
+  // Which way it is pointing, and whether that was the player's decision or
+  // the flow's. Saying which matters: an inferred facing follows the wires
+  // around, and an authored one stays where it was put.
+  const face = el('div', 'facing');
+  if (u.face === null || u.face === undefined) {
+    face.appendChild(el('span', 'hint', 'facing whichever way the flow through it points'));
+  } else {
+    face.append(
+      el('span', 'k', 'faces'),
+      el('b', null, ['east', 'south', 'west', 'north'][u.face & 3]),
+    );
+    const free = el('button', 'link', 'let the flow decide');
+    free.addEventListener('click', () => freeface(u.name));
+    face.appendChild(free);
+  }
+  wrap.appendChild(face);
+  box.appendChild(wrap);
+}
+
+/// The plant's opinion of the plant: every spatial rule it breaks, and every
+/// connection the router refused.
+///
+/// This is the other half of experiment 10's answer to "is spatial
+/// optimisation gameplay". The boxes in the 3D view say *where*; this says
+/// *what*, in a sentence, with the thing to click on to go and look at it.
+export function renderSpace() {
+  const box = document.querySelector('#space');
+  if (!box) return;
+  box.replaceChildren();
+  const issues = (plant.view && plant.view.issues) || [];
+  const s = plant.view && plant.view.stats;
+  if (!s) return;
+
+  box.appendChild(el('h3', null, 'space'));
+  if (!issues.length) {
+    box.appendChild(el('p', 'clean', 'nothing is in anything else\u2019s way, and every connection was routed under the full rules.'));
+    return;
+  }
+  for (const i of issues) {
+    const row = el('div', 'issue ' + (i.bad ? 'bad' : 'warn'));
+    row.append(el('b', null, i.rule), el('span', null, i.what));
+    row.title = i.what;
+    row.addEventListener('click', () => {
+      // Issues name a component or a connection; both are things the
+      // inspector already knows how to show.
+      const name = i.of;
+      const j = state.design.wires.findIndex(
+        w => `${w.from}.${w.fromPort} -> ${w.to}.${w.toPort}` === name,
+      );
+      state.selected = j >= 0 ? { what: 'wire', i: j } : { what: 'unit', name };
+      changed(false);
+    });
+    box.appendChild(row);
+  }
 }
 
 function cell(text, cls) { return el('td', cls, text); }
@@ -521,7 +628,11 @@ export function emit() {
   const wide = Math.max(4, ...d.units.map(u => u.name.length));
   let s = `machine "${d.name}"\nbrief ${d.brief}\n\n`;
   for (const u of d.units) {
-    s += `${u.kind.padEnd(9)} ${u.name.padEnd(wide)} at ${u.x},${u.y}`;
+    const at = (u.z || 0) === 0 ? `${u.x},${u.y}` : `${u.x},${u.y},${u.z}`;
+    s += `${u.kind.padEnd(9)} ${u.name.padEnd(wide)} at ${at}`;
+    if (u.face !== null && u.face !== undefined) {
+      s += `  face ${['east', 'south', 'west', 'north'][u.face & 3]}`;
+    }
     if (u.kind === 'reactor' && u.throttle !== 100) s += `  throttle ${u.throttle}`;
     if (u.kind === 'pump' && u.draws !== 'water') s += `  draws ${u.draws}`;
     if (u.kind === 'inlet' && u.draws !== 'ore') s += `  draws ${u.draws}`;

@@ -1,5 +1,5 @@
-//! # Experiments 06, 07 and 08: the machine designer, the construction kit,
-//! # and the plant it builds
+//! # Experiments 06 to 10: the machine designer, the construction kit, the
+//! # plant it builds, and the three dimensions it is built in
 //!
 //! An isolated prototype, deliberately not wired into anything else. The
 //! question it exists to answer is not about scale -- that battle has already
@@ -30,7 +30,8 @@
 //!   eval     what it is worth, against whichever of four briefs it claims
 //!   snap     state(t) in the shape a renderer needs, and why things are stopped
 //!   web      all of the above, over a socket, to a canvas
-//!   form     experiment 08: the same document, built as a plant
+//!   form     experiments 08-10: the same document, built as a plant, and
+//!            what a player may do to it in three dimensions
 //! ```
 //!
 //! `form` is downstream of every other module here and upstream of none of

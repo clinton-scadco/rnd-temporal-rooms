@@ -17,8 +17,17 @@
 //!   machine kit [--png P]          the asset library: one of everything
 //!   machine read FILE [--png P]    experiment 09: one plant at all four grades
 //!   machine reads                  every design, at all four grades
+//!   machine space FILE             experiment 10: where everything is, and why
+//!   machine spaces                 every design, routed and judged
 //!   machine serve [--port N]       the designer
 //! ```
+//!
+//! `space` is experiment 10's acceptance command, in the same sense that
+//! `reuse` is experiment 07's. The experiment's claim is that a player can
+//! place machinery in three dimensions and that the generator will turn those
+//! decisions into geometry that makes physical sense -- so the command prints
+//! the decisions, the interfaces they produced, and every rule the result
+//! breaks. If the plant is wrong, it is wrong on this page first.
 //!
 //! `reuse` is experiment 07's own acceptance test and the reason it is a
 //! command rather than a paragraph. The note that asked for the experiment was
@@ -59,13 +68,16 @@ fn main() {
         "kit" => kit_sheet(rest),
         "read" => read_one(rest),
         "reads" => read_all(rest),
+        "space" => space_one(rest),
+        "spaces" => space_all(rest),
         "reuse" => reuse(),
         "all" => all(),
         other if other.ends_with(".machine") => run(&args),
         other => {
             eprintln!(
                 "`{other}` is not a command. Try `run`, `why`, `compile`, `verify`, \
-                 `parts`, `reuse`, `form`, `forms`, `read`, `reads` or `serve`."
+                 `parts`, `reuse`, `form`, `forms`, `read`, `reads`, `space`, \
+                 `spaces` or `serve`."
             );
             2
         }
@@ -512,10 +524,16 @@ fn form_one(args: &[String]) -> i32 {
     println!("  {:<16}{:016x}", "visual seed", scene.seed.whole);
     println!("  {:<16}{:016x}", "scene hash", scene.hash());
     println!();
-    println!("  {:<16}{:>8}", "components", s.units);
+    println!("  {:<16}{:>8}   on {} storeys", "components", s.units, s.levels);
     println!(
         "  {:<16}{:>8}   {} m of run, {} bends, {} supports",
         "connections", s.runs, s.run_mm / 1000, s.bends, s.supports
+    );
+    // Experiment 10: how many of them the router could actually lay, which is
+    // the number the note cared about more than any of the ones above it.
+    println!(
+        "  {:<16}{:>8}   {} clean, {} tight, {} with no valid route",
+        "routed", s.clean + s.tight, s.clean, s.tight, s.lost
     );
     println!();
     println!("  {:<16}{:>8}", "pieces", s.pieces);
@@ -548,6 +566,21 @@ fn form_one(args: &[String]) -> i32 {
             treatment(dom)
         );
         i += mine.len();
+    }
+
+    // Experiment 10's spatial reading of the result. Silent when the plant is
+    // clean, which is most of the point: it is a list of things to fix.
+    if !scene.issues.is_empty() {
+        println!("\n  {:<18}{:<8}{}", "rule", "level", "what");
+        println!("  {}", "-".repeat(78));
+        for i in &scene.issues {
+            println!(
+                "  {:<18}{:<8}{}",
+                i.rule,
+                if i.bad { "red" } else { "yellow" },
+                i.what
+            );
+        }
     }
 
     if let Some(out) = flag(args, "--png") {
@@ -690,6 +723,185 @@ fn form_all(args: &[String]) -> i32 {
         form::kit::MATS.len()
     );
     worst
+}
+
+// --------------------------------------------- experiment 10: the third axis
+
+/// One design, placed: where every component is, which face every port ended
+/// up on, how every connection was routed, and what is wrong with the result.
+fn space_one(args: &[String]) -> i32 {
+    let (path, d) = match load(args) {
+        Ok(v) => v,
+        Err(e) => return bail(e),
+    };
+    let ask = ask_of(args);
+    let scene = match form::build(&d, ask) {
+        Ok(s) => s,
+        Err(e) => return bail(format!("{path}: {e}")),
+    };
+    let plan = form::layout::plan(&d);
+    let s = scene.stats();
+
+    println!("{path}\n");
+    println!("  {:<16}{}", "machine", scene.name);
+    println!(
+        "  {:<16}{} x {} m on {} storeys",
+        "plot",
+        s.size.x / 1000,
+        s.size.z / 1000,
+        s.levels
+    );
+    println!("  {:<16}{:016x}", "scene hash", scene.hash());
+
+    // ------------------------------------------------------------ placement
+    println!(
+        "\n  {:<8}{:<11}{:<9}{:>4}{:>4}{:>4}  {:<7}{:<7}{}",
+        "unit", "kind", "shape", "x", "y", "up", "faces", "turned", "verdict"
+    );
+    println!("  {}", "-".repeat(72));
+    for u in &scene.units {
+        println!(
+            "  {:<8}{:<11}{:<9}{:>4}{:>4}{:>4}  {:<7}{:<7}{}",
+            u.name,
+            u.kind,
+            u.arch,
+            u.tile.0,
+            u.tile.1,
+            u.tile.2,
+            temporal_rooms::machine::design::compass(u.yaw),
+            if u.turned { "yes" } else { "" },
+            u.verdict.colour()
+        );
+    }
+
+    // ---------------------------------------------------------------- ports
+    //
+    // The table that says a port is an interface rather than a coordinate.
+    println!(
+        "\n  {:<16}{:<11}{:<8}{:<10}{:>6}{:>6}  {}",
+        "port", "domain", "face", "class", "bore", "stub", "at"
+    );
+    println!("  {}", "-".repeat(78));
+    for u in &plan.units {
+        let part = parts::part(u.kind);
+        for so in &u.sockets {
+            println!(
+                "  {:<16}{:<11}{:<8}{:<10}{:>6}{:>6}  {}",
+                format!("{}.{}", u.name, part.ports[so.port].name),
+                so.dom.tag(),
+                where_it_points(so.out),
+                so.class.tag(),
+                so.bore,
+                so.stub,
+                so.at
+            );
+        }
+    }
+
+    // ---------------------------------------------------------- connections
+    println!(
+        "\n  {:<26}{:<11}{:<7}{:>7}{:>7}  {}",
+        "connection", "domain", "tier", "metres", "bends", "elevation"
+    );
+    println!("  {}", "-".repeat(78));
+    for r in &scene.routes {
+        let rule = form::route::rules(r.dom, r.bore);
+        println!(
+            "  {:<26}{:<11}{:<7}{:>7}{:>7}  {}",
+            r.name,
+            r.dom.tag(),
+            r.tier.tag(),
+            r.length / 1000,
+            r.bends,
+            rule.layer.tag()
+        );
+    }
+    println!(
+        "\n  {} of {} connections laid under the full rules, {} relaxed, {} refused",
+        s.clean,
+        s.runs,
+        s.tight,
+        s.lost
+    );
+
+    // --------------------------------------------------------------- issues
+    if scene.issues.is_empty() {
+        println!("\n  nothing is in anything else's way.");
+    } else {
+        println!("\n  {:<18}{:<8}{}", "rule", "level", "what");
+        println!("  {}", "-".repeat(78));
+        for i in &scene.issues {
+            println!("  {:<18}{:<8}{}", i.rule, if i.bad { "red" } else { "yellow" }, i.what);
+        }
+    }
+    0
+}
+
+fn where_it_points(d: form::P3) -> &'static str {
+    match (d.x, d.y, d.z) {
+        (x, _, _) if x > 0 => "east",
+        (x, _, _) if x < 0 => "west",
+        (_, y, _) if y > 0 => "up",
+        (_, y, _) if y < 0 => "down",
+        (_, _, z) if z > 0 => "south",
+        _ => "north",
+    }
+}
+
+/// Every design, placed and judged. The one number this exists to print is the
+/// `lost` column: how many connections the router refused, across the whole
+/// repository, under the full rules.
+///
+/// Exits non-zero if anything was refused, which today is exactly one thing and
+/// on purpose -- `07-crushline` has two motors bolted to the same end of one
+/// shaft, and the comment at the top of it explains why that is left in.
+fn space_all(args: &[String]) -> i32 {
+    let ask = ask_of(args);
+    let paths = design_paths();
+    if paths.is_empty() {
+        eprintln!("no designs in ./designs");
+        return 1;
+    }
+    println!(
+        "{:<26}{:>6}{:>7}{:>7}{:>7}{:>7}{:>8}{:>8}",
+        "design", "up", "clean", "tight", "lost", "bends", "red", "yellow"
+    );
+    println!("{}", "-".repeat(76));
+    let (mut lost, mut red, mut yellow, mut clean, mut tight) = (0, 0, 0, 0, 0);
+    for path in &paths {
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let Ok(d) = Design::parse(&src) else { continue };
+        let Ok(scene) = form::build(&d, ask) else { continue };
+        let s = scene.stats();
+        let r = scene.issues.iter().filter(|i| i.bad).count();
+        let y = scene.issues.len() - r;
+        println!(
+            "{:<26}{:>6}{:>7}{:>7}{:>7}{:>7}{:>8}{:>8}",
+            short(path),
+            s.levels,
+            s.clean,
+            s.tight,
+            s.lost,
+            s.bends,
+            r,
+            y
+        );
+        clean += s.clean;
+        tight += s.tight;
+        lost += s.lost;
+        red += r;
+        yellow += y;
+    }
+    println!("{}", "-".repeat(76));
+    println!(
+        "\n  {clean} connections laid under the full rules, {tight} relaxed, {lost} refused."
+    );
+    println!("  {red} things are in something else's way; {yellow} are merely awkward.");
+    if lost == 0 {
+        0
+    } else {
+        1
+    }
 }
 
 // ------------------------------------------- experiment 09: the readability

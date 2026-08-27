@@ -384,6 +384,93 @@ pub const SHAFT_LOSS_PCT: u64 = 1;
 /// how you buy distance, and the price of distance is the loss.
 pub const REACH: i32 = 6;
 
+// --------------------------------------------------- experiment 10: upwards
+
+/// One tile of the designer's grid, in millimetres, and therefore one step of
+/// the `up` axis as well. Experiment 10 makes the grid cubic: `at 4,2,3` is
+/// three tiles up in exactly the sense that it is four tiles east.
+pub const TILE_MM: u32 = 2000;
+
+/// How tall a component is, in millimetres.
+///
+/// This table lived in the visual pipeline until experiment 10, and moving it
+/// here is the whole of that experiment's first paragraph. Height used to be a
+/// *drawing* decision -- nothing in the document could see it, because nothing
+/// in the document could stack. Now the player places components in three
+/// dimensions, so "how tall is a reactor" is a question the document has to be
+/// able to answer before anybody draws anything: it is what decides whether
+/// putting a condenser on top of one is a design or a collision.
+///
+/// Height is deliberately not derived from footprint. A 2x2 tank and a 2x2
+/// gearbox are the same square metre of plan and profoundly different objects,
+/// and a plant where everything is as tall as it is wide looks like a city.
+pub fn height(k: Kind) -> u32 {
+    use Kind::*;
+    match k {
+        Reactor => 9000,
+        Burner => 4200,
+        Heater => 2000,
+        Mains => 3400,
+        Pump => 1400,
+        Inlet => 3600,
+        Outlet => 1800,
+        Skip => 2200,
+        Radiator => 2800,
+        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft | Cable => 1000,
+        Hopper => 4600,
+        Tank => 7000,
+        Drum => 3000,
+        Flywheel => 2600,
+        Valve | Clutch => 1200,
+        Exchanger => 3600,
+        Preheater => 2400,
+        Condenser => 3200,
+        Furnace => 5200,
+        Turbine => 3000,
+        Generator => 2600,
+        Motor => 1800,
+        Gearbox => 1800,
+        Crank => 2000,
+        Crusher => 5000,
+        Mill => 3400,
+        Separator => 5200,
+        RollMill => 3400,
+        Press => 6000,
+        Lathe => 2200,
+        Column => 15000,
+    }
+}
+
+/// How far off the ground a component's underside sits, in millimetres: heavy
+/// things get a plinth, things that discharge downwards get legs, and a few
+/// things are hung on a frame at working height.
+///
+/// Here rather than in the visual pipeline for the same reason as `height`:
+/// what a component occupies is `lift .. lift + height`, and a document that
+/// lets the player stack has to know both to say whether two things clash.
+pub fn lift(k: Kind) -> u32 {
+    use Kind::*;
+    match k {
+        // On the slab.
+        Heater | Mains | Outlet | Skip | Lathe | Column | Valve | Clutch => 0,
+        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft | Cable => 0,
+        // On legs, because something has to fit underneath.
+        Inlet | Hopper | Separator => 2400,
+        // On a steel frame, at working height.
+        Radiator | Condenser => 3200,
+        // Everything else is heavy, and heavy things get a plinth.
+        _ => 400,
+    }
+}
+
+/// How many tiles of the `up` axis a component occupies, from the slab it
+/// stands on to the top of it. The document's own unit of height: what `up 3`
+/// has to clear to be legal.
+pub fn storeys(k: Kind) -> i32 {
+    let total = lift(k) + height(k);
+    ((total + TILE_MM - 1) / TILE_MM) as i32
+}
+
 /// Gas per tick below which a turbine will not turn over at all.
 pub const TURBINE_MIN: u64 = 40;
 pub const SPIN_MAX: u32 = 30;

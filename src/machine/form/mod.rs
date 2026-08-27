@@ -1,4 +1,5 @@
-//! # Experiments 08 and 09: procedural machine form, and reading it
+//! # Experiments 08, 09 and 10: procedural machine form, reading it, and
+//! # letting the player author it
 //!
 //! A machine design is a document: components on a tile grid, typed ports,
 //! wires, tunings. Experiment 08 asks whether that document can be turned into
@@ -7,10 +8,11 @@
 //!
 //! ```text
 //!   machine design
-//!     -> semantic 3D layout     volumes, mounts, orientation, sockets
-//!     -> connection routing     A* on a coarse grid, per domain
+//!     -> semantic 3D layout     volumes, mounts, orientation, interfaces
+//!     -> connection routing     A* over straight sections, per domain
 //!     -> structural inference   what has to hold all that up
 //!     -> procedural dressing    what a works actually looks like
+//!     -> spatial reading        what is standing in what else's way
 //!     -> renderable machine     instance buffers, batched, by LOD
 //! ```
 //!
@@ -80,6 +82,25 @@
 //! and `C` and `D` may only add to and refine what is already there. So the
 //! four builds are four pictures of one machine, which is the only way the
 //! comparison in `machine read` means anything at all.
+//!
+//! ## Experiment 10: the player gets the third axis
+//!
+//! Experiments 08 and 09 were about what a design *looks* like. Experiment 10
+//! is about what a player can *do* to it, and it changed three things here:
+//!
+//! ```text
+//!   layout   a port is an interface -- a face, a class, a stub, an axis --
+//!            and the machine it is on can be lifted and turned
+//!   route    the search walks straight sections rather than cells, keeps
+//!            nine named rules, and is allowed to answer "no"
+//!   space    a sixth pass that writes no geometry at all: it reads the
+//!            finished plant and says what is in what else's way
+//! ```
+//!
+//! `space` is the one worth arguing about. It is in this module tree because a
+//! service clearance is a fact about geometry, and geometry is derived -- so
+//! the core rule still holds, in its strongest form: the pass that judges the
+//! plant cannot edit the machine, because it cannot edit anything.
 
 pub mod body;
 pub mod frame;
@@ -89,6 +110,7 @@ pub mod obj;
 pub mod paint;
 pub mod route;
 pub mod seed;
+pub mod space;
 pub mod shell;
 pub mod shot;
 
@@ -587,6 +609,16 @@ pub struct Scene {
     /// Section 9's very far level: one box, and nothing else at all.
     pub proxy: Vol,
     pub routes: Vec<route::Run>,
+    /// Experiment 10: every spatial rule this plant breaks, and every
+    /// connection it could not make. The plant is still built -- the point of
+    /// the pass is that the player is *told*, not that they are stopped.
+    pub issues: Vec<space::Issue>,
+    /// How many tiles of the `up` axis the design used. One means the player
+    /// built the way experiment 08 made them.
+    pub levels: i32,
+    /// Where each component ended up, kept so that a client can draw the
+    /// selection, the clearances and the verdict without rebuilding anything.
+    pub units: Vec<space::Placement>,
 }
 
 impl Scene {
@@ -706,6 +738,11 @@ impl Scene {
             mats: batches.iter().map(|b| b.mat).collect::<std::collections::BTreeSet<_>>().len(),
             bends: self.routes.iter().map(|r| r.bends).sum(),
             run_mm: self.routes.iter().map(|r| r.length as i64).sum(),
+            clean: self.routes.iter().filter(|r| r.tier == route::Tier::Clean).count(),
+            tight: self.routes.iter().filter(|r| r.tier == route::Tier::Tight).count(),
+            lost: self.routes.iter().filter(|r| r.tier == route::Tier::Lost).count(),
+            snags: self.issues.iter().filter(|i| i.bad).count(),
+            levels: self.levels,
             supports: self.pieces.iter().filter(|p| p.mesh == Mesh::Support).count(),
             size: self.bounds.size(),
         }
@@ -740,6 +777,15 @@ pub struct Stats {
     pub mats: usize,
     pub bends: usize,
     pub run_mm: i64,
+    /// Experiment 10: how many connections were laid under the full rules, how
+    /// many had to squeeze, and how many could not be laid at all.
+    pub clean: usize,
+    pub tight: usize,
+    pub lost: usize,
+    /// How many spatial rules the plant is actually breaking.
+    pub snags: usize,
+    /// How many storeys the player built on.
+    pub levels: i32,
     pub supports: usize,
     pub size: P3,
 }
@@ -788,6 +834,12 @@ pub fn build(d: &Design, ask: Ask) -> Result<Scene, String> {
     // a pass that may read anything and may write exactly one field.
     paint::apply(&plan, &routes, &owners, ask.grade, &mut pieces);
 
+    // Experiment 10's reading of the result. It writes no geometry at all --
+    // it takes the finished plant and says what is wrong with it, which is a
+    // sixth pass in the pipeline's own sense: it reads what the five before it
+    // wrote and nothing goes backwards.
+    let (units, issues) = space::check(&plan, &routes);
+
     let mut all = bounds;
     for p in &pieces {
         all = all.join(p.vol());
@@ -819,6 +871,9 @@ pub fn build(d: &Design, ask: Ask) -> Result<Scene, String> {
         bounds: all,
         proxy: if first { all } else { solid },
         routes,
+        issues,
+        levels: d.storeys().max(1),
+        units,
     })
 }
 
@@ -860,6 +915,9 @@ pub fn sheet() -> Scene {
         bounds,
         proxy: bounds,
         routes: Vec::new(),
+        issues: Vec::new(),
+        levels: 1,
+        units: Vec::new(),
     }
 }
 
@@ -872,6 +930,10 @@ fn m(v: Mm) -> f64 {
 
 fn xyz(p: P3) -> Json {
     Json::arr(vec![m(p.x), m(p.y), m(p.z)])
+}
+
+fn vol(v: Vol) -> Json {
+    Json::obj().set("lo", xyz(v.lo)).set("hi", xyz(v.hi))
 }
 
 impl Scene {
@@ -924,6 +986,63 @@ impl Scene {
                 ),
             )
             .set("batches", Json::Arr(batches))
+            .set("levels", self.levels as i64)
+            .set(
+                "units",
+                Json::Arr(
+                    self.units
+                        .iter()
+                        .map(|u| {
+                            Json::obj()
+                                .set("name", u.name.clone())
+                                .set("kind", u.kind.clone())
+                                .set("arch", u.arch)
+                                .set("x", u.tile.0 as i64)
+                                .set("y", u.tile.1 as i64)
+                                .set("z", u.tile.2 as i64)
+                                .set("yaw", u.yaw as i64)
+                                .set("turned", u.turned)
+                                .set("verdict", u.verdict.tag())
+                                .set("colour", u.verdict.colour())
+                                .set("solid", vol(u.solid))
+                                .set("service", vol(u.service))
+                        })
+                        .collect(),
+                ),
+            )
+            .set(
+                "issues",
+                Json::Arr(
+                    self.issues
+                        .iter()
+                        .map(|i| {
+                            Json::obj()
+                                .set("of", i.of.clone())
+                                .set("rule", i.rule)
+                                .set("what", i.what.clone())
+                                .set("bad", i.bad)
+                        })
+                        .collect(),
+                ),
+            )
+            .set(
+                "runs",
+                Json::Arr(
+                    self.routes
+                        .iter()
+                        .map(|r| {
+                            Json::obj()
+                                .set("name", r.name.clone())
+                                .set("domain", r.dom.tag())
+                                .set("tier", r.tier.tag())
+                                .set("said", r.tier.said())
+                                .set("metres", (r.length / 1000) as i64)
+                                .set("bends", r.bends as i64)
+                                .set("bore", r.bore as i64)
+                        })
+                        .collect(),
+                ),
+            )
             .set(
                 "bounds",
                 Json::obj().set("lo", xyz(self.bounds.lo)).set("hi", xyz(self.bounds.hi)),
@@ -947,7 +1066,12 @@ impl Scene {
                     .set("tris", s.tris as i64)
                     .set("bends", s.bends as i64)
                     .set("runMetres", (s.run_mm / 1000) as i64)
-                    .set("supports", s.supports as i64),
+                    .set("supports", s.supports as i64)
+                    .set("clean", s.clean as i64)
+                    .set("tight", s.tight as i64)
+                    .set("lost", s.lost as i64)
+                    .set("snags", s.snags as i64)
+                    .set("levels", s.levels as i64),
             )
     }
 }

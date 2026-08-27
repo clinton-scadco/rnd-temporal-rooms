@@ -48,15 +48,31 @@ export function layout() {
   const out = new Map();
   for (const u of state.design.units) {
     const b = box(u);
+    // Experiment 10: a component on an upper storey is drawn a little up and
+    // to the left of the tiles it occupies, so that a stack reads as a stack
+    // rather than as one component hiding another.
+    //
+    // A plan of a building with two floors in it has to do *something*, and
+    // the two honest options are to draw one floor at a time or to offset
+    // them. Offsetting keeps the whole machine on one page, which is what the
+    // plan is for -- and the plan is no longer the only view, so it does not
+    // have to carry the third dimension by itself any more.
+    const up = (u.z || 0) * SHIFT;
     out.set(u.name, {
       u,
-      x: b.x * TILE, y: b.y * TILE,
+      level: u.z || 0,
+      x: b.x * TILE - up, y: b.y * TILE - up,
       w: b.w * TILE, h: b.h * TILE,
-      cx: (b.x + b.w / 2) * TILE, cy: (b.y + b.h / 2) * TILE,
+      cx: (b.x + b.w / 2) * TILE - up, cy: (b.y + b.h / 2) * TILE - up,
     });
   }
   return out;
 }
+
+/// How far one storey shifts a footprint on the plan. A fifth of a tile: far
+/// enough that two boxes on the same tiles are two boxes, near enough that the
+/// plan is still a plan.
+const SHIFT = 0.2 * 60;
 
 /// Where port `i` of a component sits: inputs down the left edge, outputs down
 /// the right. Hit testing uses this same function, so the square you click is
@@ -90,7 +106,11 @@ export function eachPort(boxes, fn) {
 export function hitUnit(boxes, wx, wy) {
   let found = null;
   for (const b of boxes.values()) {
-    if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) found = b;
+    if (wx < b.x || wx > b.x + b.w || wy < b.y || wy > b.y + b.h) continue;
+    // Where two storeys overlap, the click lands on the higher one -- it is
+    // the one drawn on top, and clicking what you can see is the whole
+    // contract of a hit test.
+    if (!found || b.level >= found.level) found = b;
   }
   return found;
 }

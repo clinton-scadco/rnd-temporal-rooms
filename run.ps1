@@ -28,6 +28,9 @@ param(
     # Experiment 09 builds it four ways and compares them:
     #   -Machine read designs/x.machine [--png sheet.png]
     #   -Machine reads                 every design, at all four grades
+    # Experiment 10 hands the third dimension to the player and reports on it:
+    #   -Machine space designs/x.machine   placement, ports, routing, clashes
+    #   -Machine spaces                    every design, routed and judged
     # Anything that builds a plant takes --grade a|b|c|d as well as --style and
     # --seed.
     [switch]$Machine,

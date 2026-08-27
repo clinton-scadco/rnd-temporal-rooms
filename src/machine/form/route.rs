@@ -47,9 +47,69 @@
 //! laid. Both of those are arbitrary; both of them have to be *stable*, or the
 //! same design would build differently on two machines, which is the one thing
 //! section 7 does not allow.
+//!
+//! # Experiment 10: routing that can be trusted, and can refuse
+//!
+//! The note that asked for experiment 10 was blunt about this file:
+//!
+//! > From the screenshot, pipe generation has reached the point where visual
+//! > errors will actively undermine the mechanic.
+//!
+//! It is right, and the reason is that experiment 08's router was a *shortest
+//! path* solver with a bend penalty bolted on. Shortest paths on a grid are
+//! staircases, and a staircase drawn in 800mm lagged pipe is a picture of
+//! something that could not be built. So the search no longer walks cells. It
+//! walks **straight sections**:
+//!
+//! ```text
+//!   a node is (corner, heading)
+//!   an edge is a straight run of at least `straight` millimetres
+//! ```
+//!
+//! which makes six of the note's nine rules true by construction rather than
+//! by penalty -- there is no path in the search space that bends twice in a
+//! metre, so no amount of bad luck can produce one.
+//!
+//! ```text
+//!   socket direction              the first and last sections are the flange
+//!                                 normal, and nothing else is offered
+//!   minimum straight before bend  the gate cells: the first bend is `stub`
+//!                                 from the flange, and so is the last
+//!   allowed bend radius           `straight` is at least twice the radius,
+//!                                 so every corner can afford its own elbow
+//!   pipe diameter                 the bore, from the port's rate
+//!   clearance from equipment      a cost inside it, forbidden through it
+//!   clearance between pipes       a laid route claims its cells and charges
+//!                                 for the ones beside them
+//!   preferred elevations          `Layer`: five storeys, one per domain
+//!   support spacing               `span`, per domain, and the structural pass
+//!                                 reads exactly the same list
+//!   junction rules                two lines off one socket get a tee
+//! ```
+//!
+//! # And it is allowed to fail
+//!
+//! Experiment 08 could not fail. If A* found nothing it drew a straight line
+//! from one socket to the other, through whatever was in the way, and called
+//! it `direct`. The note is right about that too:
+//!
+//! > “No valid route found.” That is better than generating nonsense.
+//!
+//! So a run is laid at the first of three tiers that works:
+//!
+//! ```text
+//!   clean   every rule above, in full
+//!   tight   half the straights, and it may share a corridor with another line
+//!   lost    no valid route found -- and nothing is drawn
+//! ```
+//!
+//! A lost run still exists: it keeps its name, it is counted, and the designer
+//! says so. What it does not do is invent geometry. That is the whole point of
+//! the tier: a plant with a hole in it is a plant the player can fix, and a
+//! plant with a pipe through a turbine is a plant that has lied to them.
 
 use super::kit::{Mat, Mesh};
-use super::layout::{Placed, Plan, RACK_Y, SHAFT_Y};
+use super::layout::{Layer, Plan, Socket};
 use super::seed::Seed;
 use super::{p3, paint, spin_for, Grade, Mm, Owner, Owns, Piece, Vol, CLOSE, FAR, MEDIUM, P3, SIX};
 use crate::machine::design::Design;
@@ -78,9 +138,111 @@ pub struct Run {
     pub bends: usize,
     /// Where the structural pass will have to put something.
     pub props: Vec<P3>,
-    /// True if the router could not find a way through and the run is a
-    /// straight line drawn in defiance of the plant. Rare, and worth knowing.
-    pub direct: bool,
+    /// Experiment 10: which set of rules this run had to be laid under, and
+    /// whether it could be laid at all.
+    pub tier: Tier,
+}
+
+/// How hard the router had to try.
+///
+/// Not a quality score -- a statement about what the player is looking at. A
+/// `Tight` run is a real run that had to squeeze; a `Lost` one is a hole in
+/// the plant, drawn as nothing, and reported as such.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, PartialOrd, Ord)]
+pub enum Tier {
+    Clean,
+    Tight,
+    Lost,
+}
+
+impl Tier {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Tier::Clean => "clean",
+            Tier::Tight => "tight",
+            Tier::Lost => "lost",
+        }
+    }
+    pub fn said(self) -> &'static str {
+        match self {
+            Tier::Clean => "routed",
+            Tier::Tight => "routed, but only by relaxing the rules",
+            Tier::Lost => "no valid route found",
+        }
+    }
+    pub fn lost(self) -> bool {
+        self == Tier::Lost
+    }
+}
+
+impl Run {
+    /// Whether there is any pipe to draw. A lost run has a name, a domain and
+    /// a bore, and no geometry whatsoever.
+    pub fn laid(&self) -> bool {
+        self.path.len() >= 2
+    }
+}
+
+// ------------------------------------------------------------------- rules
+
+/// What a domain's pipework is allowed to do.
+///
+/// The note asked for these by name. They are here rather than spread through
+/// the search because a rule that is a magic number inside an inner loop is a
+/// rule nobody can change, and half the value of writing them down is being
+/// able to argue about them.
+#[derive(Clone, Copy, Debug)]
+pub struct Rules {
+    /// The shortest straight section the router may produce between two bends.
+    pub straight: Mm,
+    /// The radius every corner is drawn at, and therefore the length each
+    /// corner takes out of the straights either side of it.
+    pub bend: Mm,
+    /// Which storey the long middle of a run belongs on.
+    pub layer: Layer,
+    /// How far apart this domain's supports go.
+    pub span: Mm,
+    /// What a corner costs, in tenths of a cell.
+    pub turn: u32,
+}
+
+impl Rules {
+    /// The shortest section a run may contain, under one tier's rules.
+    ///
+    /// Two floors, and only one of them is negotiable. The domain's own
+    /// minimum is a *style*: shafts run four metres straight because that is
+    /// what a line shaft looks like, and a tight route is allowed to argue
+    /// with it. The other is geometry -- a section with a bend on each end has
+    /// to give up the radius twice and still be a section -- and nothing is
+    /// allowed to argue with that, because the result is not a shorter run, it
+    /// is two elbows drawn through each other.
+    pub fn least(&self, tier: Tier) -> Mm {
+        match tier {
+            Tier::Clean => self.straight,
+            // Twice the radius, plus the diameter it was derived from.
+            _ => ((self.bend * 8) / 3).max(self.straight / 2),
+        }
+    }
+}
+
+/// The rules for one run, which depend on the domain and on how big the line
+/// is: a 900mm lagged main is not allowed the bends a garden hose is.
+pub fn rules(dom: Domain, bore: Mm) -> Rules {
+    let t = treat(dom);
+    let od = outer(dom, bore);
+    // Three diameters of long-radius bend, which is what makes a corner look
+    // like a fitting rather than a crease.
+    let bend = (od * 3) / 2;
+    Rules {
+        // Twice the bend radius, plus a diameter to see it by: a straight that
+        // cannot pay for the elbow on each of its ends is the defect that ate
+        // forty per cent of experiment 08's corners.
+        straight: (bend * 2 + od).max(t.min_straight),
+        bend,
+        layer: t.layer,
+        span: t.span,
+        turn: t.bend_cost,
+    }
 }
 
 // -------------------------------------------------------------- treatments
@@ -96,8 +258,13 @@ struct Treat {
     elbow: bool,
     /// Charged per corner, in tenths of a cell.
     bend_cost: u32,
-    /// The height this domain would rather live at.
-    home: Mm,
+    /// The floor under `Rules::straight`: the shortest straight section this
+    /// domain will tolerate however small the pipe is.
+    min_straight: Mm,
+    /// Which of the plant's storeys it belongs on.
+    layer: Layer,
+    /// How far apart it needs holding up.
+    span: Mm,
 }
 
 /// The outside diameter of a run: what the pipe actually measures across, as
@@ -119,7 +286,9 @@ fn treat(d: Domain) -> Treat {
             trim: Some((Mesh::Flange, Mat::Steel, 4000)),
             elbow: true,
             bend_cost: 30,
-            home: 900,
+            min_straight: 1200,
+            layer: Layer::Ground,
+            span: 4500,
         },
         Domain::Gas => Treat {
             mesh: Mesh::Cyl,
@@ -128,7 +297,9 @@ fn treat(d: Domain) -> Treat {
             trim: Some((Mesh::Band, Mat::Lag, 1600)),
             elbow: true,
             bend_cost: 30,
-            home: RACK_Y,
+            min_straight: 1500,
+            layer: Layer::Rack,
+            span: 4000,
         },
         Domain::Heat => Treat {
             mesh: Mesh::Cyl,
@@ -137,7 +308,9 @@ fn treat(d: Domain) -> Treat {
             trim: Some((Mesh::Band, Mat::Steel, 800)),
             elbow: true,
             bend_cost: 34,
-            home: RACK_Y,
+            min_straight: 2000,
+            layer: Layer::Rack,
+            span: 4000,
         },
         Domain::Rotary => Treat {
             mesh: Mesh::Cyl,
@@ -148,7 +321,12 @@ fn treat(d: Domain) -> Treat {
             // A shaft that bends is a gearbox nobody placed, so make the
             // router work very hard to avoid one.
             bend_cost: 260,
-            home: SHAFT_Y,
+            // A shaft that bends is a gearbox nobody placed, so it is not
+            // merely expensive to bend one -- there is no short straight it
+            // could bend into.
+            min_straight: 4000,
+            layer: Layer::Drive,
+            span: 4000,
         },
         Domain::Mech => Treat {
             mesh: Mesh::Cyl,
@@ -157,7 +335,9 @@ fn treat(d: Domain) -> Treat {
             trim: None,
             elbow: false,
             bend_cost: 320,
-            home: SHAFT_Y,
+            min_straight: 5000,
+            layer: Layer::Drive,
+            span: 0,
         },
         Domain::Electrical => Treat {
             mesh: Mesh::Box,
@@ -166,7 +346,9 @@ fn treat(d: Domain) -> Treat {
             trim: Some((Mesh::Box, Mat::Dark, 2200)),
             elbow: false,
             bend_cost: 18,
-            home: RACK_Y - 800,
+            min_straight: 1000,
+            layer: Layer::Tray,
+            span: 4500,
         },
         Domain::Material => Treat {
             mesh: Mesh::Box,
@@ -175,7 +357,9 @@ fn treat(d: Domain) -> Treat {
             trim: Some((Mesh::Band, Mat::Dark, 2600)),
             elbow: false,
             bend_cost: 48,
-            home: super::layout::FEED_Y,
+            min_straight: 2500,
+            layer: Layer::Feed,
+            span: 4500,
         },
     }
 }
@@ -190,11 +374,21 @@ const SKY: Mm = 3000;
 /// The margin round the plot a pipe may use to get round the outside.
 const MARGIN: Mm = 3000;
 
+/// What is in a cell.
+const SOLID: u8 = 1;
+/// Somebody's service clearance: passable, expensive, and a rule the tight
+/// tier is allowed to break more cheaply than the clean one.
+const CLEAR: u8 = 2;
+/// A laid route is in it. Nothing else may go through.
+const TAKEN: u8 = 4;
+/// Beside a laid route. Passable, but a line that runs down the side of
+/// another line for twenty metres is what a rack is for, not what a pipe does.
+const BESIDE: u8 = 8;
+
 struct Grid {
     o: P3,
     n: (i32, i32, i32),
     cell: Mm,
-    /// 1 solid, 2 in somebody's clearance, 4 already taken by a route.
     mark: Vec<u8>,
 }
 
@@ -217,8 +411,8 @@ impl Grid {
             if (n.0 as i64) * (n.1 as i64) * (n.2 as i64) <= 400_000 || cell >= 2000 {
                 let mut g = Grid { o: lo, n, cell, mark: vec![0; (n.0 * n.1 * n.2) as usize] };
                 for u in &plan.units {
-                    g.fill(u.vol, 1);
-                    g.fill(u.clear, 2);
+                    g.fill(u.vol, SOLID);
+                    g.fill(u.clear, CLEAR);
                 }
                 return g;
             }
@@ -263,6 +457,40 @@ impl Grid {
         }
     }
 
+    /// Millimetres to whole cells, never fewer than one, and rounded *up*: a
+    /// rule the grid cannot represent is a rule that quietly does not apply,
+    /// which is worse than not having written it down.
+    ///
+    /// Up rather than down for exactly that reason. Rounding a 1200mm minimum
+    /// down to two cells makes it a 1000mm minimum, and then the code says one
+    /// thing and the plant does another -- which is how a rule turns into a
+    /// comment.
+    fn cells(&self, mm: Mm) -> i32 {
+        ((mm + self.cell - 1) / self.cell).max(1)
+    }
+
+    /// Claim a laid route, and charge for the corridor beside it.
+    fn claim(&mut self, cells: &[(i32, i32, i32)]) {
+        for &c in cells {
+            if !self.inside(c) {
+                continue;
+            }
+            let i = self.idx(c);
+            self.mark[i] |= TAKEN;
+        }
+        for &c in cells {
+            for d in SIX {
+                let n = (c.0 + d.x, c.1 + d.y, c.2 + d.z);
+                if !self.inside(n) {
+                    continue;
+                }
+                let i = self.idx(n);
+                if self.mark[i] & TAKEN == 0 {
+                    self.mark[i] |= BESIDE;
+                }
+            }
+        }
+    }
 }
 
 // -------------------------------------------------------------- the search
@@ -285,8 +513,15 @@ pub fn run(d: &Design, plan: &Plan, seed: &Seed) -> Vec<Run> {
         (Reverse(rate), i)
     });
 
-    let mut out: Vec<Run> = Vec::with_capacity(links.len());
     let mut done: Vec<(usize, Run)> = Vec::with_capacity(links.len());
+    // What each laid run took, and the two flanges it took it between. A line
+    // that leaves the same nozzle as one already laid is a *branch*, and a
+    // branch shares its parent's corridor -- which is exactly the situation
+    // `junctions` already assumes when it puts a tee in. Without this, the
+    // second line off a socket has to fight the first one for the same
+    // half-metre of air and loses, which is a strange way to draw a tee.
+    let mut laid: Vec<(P3, P3, Vec<(i32, i32, i32)>)> = Vec::new();
+
     for &i in &order {
         let l = links[i];
         let (a, b) = (&plan.units[l.from], &plan.units[l.to]);
@@ -299,63 +534,88 @@ pub fn run(d: &Design, plan: &Plan, seed: &Seed) -> Vec<Run> {
             d.wires[i].from, d.wires[i].from_port, d.wires[i].to, d.wires[i].to_port
         );
         let serve = paint::service(d, l.from, l.from_port);
-        let r = one(&mut g, a, sa, b, sb, dom, serve, name);
+
+        let kin: Vec<usize> = laid
+            .iter()
+            .enumerate()
+            .filter(|(_, (p, q, _))| {
+                *p == sa.at || *q == sa.at || *p == sb.at || *q == sb.at
+            })
+            .map(|(k, _)| k)
+            .collect();
+        let held: Vec<Vec<(usize, u8)>> =
+            kin.iter().map(|&k| release(&mut g, &laid[k].2)).collect();
+
+        let (r, taken) = one(&mut g, sa, sb, dom, serve, name);
+
+        for saved in held {
+            for (i, m) in saved {
+                g.mark[i] |= m;
+            }
+        }
+        laid.push((sa.at, sb.at, taken));
         done.push((i, r));
     }
     // Back into document order, so that two designs that differ only in the
     // order two wires were drawn still hash the same.
     done.sort_by_key(|(i, _)| *i);
-    for (_, r) in done {
-        out.push(r);
-    }
-    out
+    done.into_iter().map(|(_, r)| r).collect()
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Give a laid run's cells back for the duration of one search, remembering
+/// what they were so they can be handed straight back.
+fn release(g: &mut Grid, cells: &[(i32, i32, i32)]) -> Vec<(usize, u8)> {
+    let mut saved = Vec::with_capacity(cells.len());
+    for &c in cells {
+        if !g.inside(c) {
+            continue;
+        }
+        let i = g.idx(c);
+        saved.push((i, g.mark[i] & (TAKEN | BESIDE)));
+        g.mark[i] &= !(TAKEN | BESIDE);
+    }
+    saved
+}
+
+/// One connection, at the first tier that can carry it.
 fn one(
     g: &mut Grid,
-    a: &Placed,
-    sa: &super::layout::Socket,
-    b: &Placed,
-    sb: &super::layout::Socket,
+    sa: &Socket,
+    sb: &Socket,
     dom: Domain,
     serve: Subst,
     name: String,
-) -> Run {
-    let t = treat(dom);
-    let start = g.cell_of(sa.at.add(sa.out.mul(g.cell)));
-    let goal = g.cell_of(sb.at.add(sb.out.mul(g.cell)));
+) -> (Run, Vec<(i32, i32, i32)>) {
+    let bore = sa.bore.max(sb.bore);
+    let rule = rules(dom, bore);
 
-    // A socket is on the surface of the thing it belongs to, so the cell it
-    // sits in is inside somebody's solid. Open a pocket one cell across around
-    // each end -- and *only* around each end, because opening the whole
-    // component lets the pipe leave through the far wall, which looks exactly
-    // as wrong as it sounds.
-    let held = [pocket(g, sa.at), pocket(g, sb.at)];
-
-    let cells = search(g, start, goal, &t);
-
-    for saved in held {
-        for (i, m) in saved {
-            g.mark[i] = m;
+    let mut laid: Option<(Tier, Vec<(i32, i32, i32)>, Vec<P3>)> = None;
+    for tier in [Tier::Clean, Tier::Tight] {
+        // The socket cells are inside their own machine's solid, so a pocket
+        // is opened around each -- and *only* around each, because opening the
+        // whole component lets the pipe leave through the far wall, which
+        // looks exactly as wrong as it sounds.
+        let held = [pocket(g, sa.at), pocket(g, sb.at)];
+        let got = attempt(g, sa, sb, &rule, tier);
+        for saved in held {
+            for (i, m) in saved {
+                g.mark[i] = m;
+            }
+        }
+        if let Some((cells, path)) = got {
+            laid = Some((tier, cells, path));
+            break;
         }
     }
-    let _ = (a, b);
 
-    let mut path: Vec<P3> = Vec::new();
-    let direct = cells.is_empty();
-    path.push(sa.at);
-    for c in &cells {
-        path.push(g.world(*c));
-    }
-    path.push(sb.at);
-    let path = simplify(path);
-
-    // Claim it, so the next route has to go round.
-    for c in &cells {
-        let i = g.idx(*c);
-        g.mark[i] |= 4;
-    }
+    let (tier, path, took) = match laid {
+        Some((tier, cells, path)) => {
+            g.claim(&cells);
+            (tier, path, cells)
+        }
+        // No valid route found. Nothing is drawn, and the plant says so.
+        None => (Tier::Lost, Vec::new(), Vec::new()),
+    };
 
     let mut length = 0;
     let mut bends = 0;
@@ -365,19 +625,351 @@ fn one(
             bends += 1;
         }
     }
-    let props = props_along(&path, dom);
-    Run {
-        name,
-        dom,
-        serve,
-        bore: sa.bore.max(sb.bore),
-        ends: (sa.bore, sb.bore),
-        path,
-        length,
-        bends,
-        props,
-        direct,
+    let props = if path.len() >= 2 { props_along(&path, rule.span) } else { Vec::new() };
+    (
+        Run { name, dom, serve, bore, ends: (sa.bore, sb.bore), path, length, bends, props, tier },
+        took,
+    )
+}
+
+/// One try, under one tier's rules. `None` means there is no such route, which
+/// is a legitimate answer and the point of the whole exercise.
+fn attempt(
+    g: &Grid,
+    sa: &Socket,
+    sb: &Socket,
+    rule: &Rules,
+    tier: Tier,
+) -> Option<(Vec<(i32, i32, i32)>, Vec<P3>)> {
+    // What the tight tier relaxes: the straight off the flange, the *stylistic*
+    // half of the straight between bends, and permission to share a corridor.
+    // What it never relaxes is the geometric half -- see `Rules::least`. That
+    // one is the whole reason the search walks sections instead of cells, and
+    // giving it up hands back the staircases experiment 10 exists to remove. A
+    // run that cannot be laid without them is better lost.
+    let ease = if tier == Tier::Tight { 2 } else { 1 };
+    let stub_a = g.cells(sa.stub / ease);
+    let stub_b = g.cells(sb.stub / ease);
+    let straight = g.cells(rule.least(tier));
+
+    // Two flanges pointing at each other on one axis are *coupled*, and a
+    // coupling is not a routing problem. This is the commonest connection in
+    // the plant -- a turbine driving the generator bolted to the end of it --
+    // and under the gate rule below it would be refused, because both stubs
+    // want more room than there is between the two machines. There is no bend
+    // to keep clear of: there is no bend.
+    if let Some(path) = coupled(g, sa, sb, tier) {
+        let mut taken = Vec::new();
+        walk(g, path[0], path[1], &mut taken);
+        return Some((taken, path));
     }
+
+    // The gates: where the first bend is allowed to be, and where the last one
+    // is. Between the flange and its gate the line is straight by definition,
+    // which is the note's "minimum straight section before bend" made true by
+    // construction rather than by hoping.
+    let a0 = g.cell_of(sa.at);
+    let b0 = g.cell_of(sb.at);
+    let a1 = step(a0, sa.out, stub_a);
+    let b1 = step(b0, sb.out, stub_b);
+    if !g.inside(a1) || !g.inside(b1) {
+        return None;
+    }
+    // Both stubs have to actually be clear, or the flange is inside something.
+    if !clear_run(g, a0, sa.out, stub_a, tier) || !clear_run(g, b0, sb.out, stub_b, tier) {
+        return None;
+    }
+    // The far gate is where the *last bend* is allowed to be, so the line may
+    // arrive at it from any direction at all -- what the rule guarantees is
+    // the straight between it and the flange, and that is guaranteed by there
+    // being no corner in it.
+    //
+    // The one arrival that is not allowed is straight back out of the machine,
+    // because turning round at the gate is not a bend, it is a mistake. This
+    // was the first version's error and it cost two runs in every design: a
+    // line was made to approach a flange along the flange's own axis for four
+    // metres, which is a fine rule for a pipe rack and an impossible one for a
+    // machine with two metres of yard beside it.
+    let cells = search(g, a1, sa.out, stub_a, b1, sb.out, stub_b, straight, rule, tier)?;
+
+    // Socket, gate, corners, gate, socket -- then let `simplify` collapse the
+    // ones that turned out to be collinear.
+    let mut path = Vec::with_capacity(cells.len() + 4);
+    path.push(sa.at);
+    path.push(sa.at.add(sa.out.mul(stub_a * g.cell)));
+    for c in cells.iter().skip(1).take(cells.len().saturating_sub(2)) {
+        path.push(g.world(*c));
+    }
+    path.push(sb.at.add(sb.out.mul(stub_b * g.cell)));
+    path.push(sb.at);
+    let path = square(simplify(path));
+
+    // The cells this run has now taken: every cell of every section, so the
+    // next route has to go round rather than through.
+    let mut taken = Vec::new();
+    for i in 1..path.len() {
+        walk(g, path[i - 1], path[i], &mut taken);
+    }
+    Some((taken, path))
+}
+
+/// The straight line between two flanges that are already facing each other.
+///
+/// `None` unless the two sockets are on one axis, pointing at each other, with
+/// clear air in between -- in which case the answer is two points and no
+/// search at all. It is also the only route a shaft is ever really allowed:
+/// `space` will call anything else misaligned.
+fn coupled(g: &Grid, sa: &Socket, sb: &Socket, tier: Tier) -> Option<Vec<P3>> {
+    if sa.out != sb.out.neg() {
+        return None;
+    }
+    let d = sb.at.sub(sa.at);
+    // On the axis, pointing the right way along it, and actually apart.
+    if d.axis() != sa.out.axis() {
+        return None;
+    }
+    let along = d.x * sa.out.x + d.y * sa.out.y + d.z * sa.out.z;
+    if along <= 0 {
+        return None;
+    }
+    let mut cells = Vec::new();
+    walk(g, sa.at, sb.at, &mut cells);
+    // Skip the two end cells: those are inside the machines the flanges are
+    // bolted to, and a flange is allowed to be inside its own machine.
+    for c in cells.iter().skip(1).take(cells.len().saturating_sub(2)) {
+        if !g.inside(*c) {
+            return None;
+        }
+        let m = g.mark[g.idx(*c)];
+        if m & SOLID != 0 {
+            return None;
+        }
+        if m & TAKEN != 0 && tier == Tier::Clean {
+            return None;
+        }
+    }
+    Some(vec![sa.at, sb.at])
+}
+
+fn step(c: (i32, i32, i32), d: P3, k: i32) -> (i32, i32, i32) {
+    (c.0 + d.x * k, c.1 + d.y * k, c.2 + d.z * k)
+}
+
+/// Whether the `k` cells out of a socket are actually available.
+fn clear_run(g: &Grid, from: (i32, i32, i32), d: P3, k: i32, tier: Tier) -> bool {
+    for i in 1..=k {
+        let c = step(from, d, i);
+        if !g.inside(c) {
+            return false;
+        }
+        let m = g.mark[g.idx(c)];
+        if m & SOLID != 0 {
+            return false;
+        }
+        if m & TAKEN != 0 && tier == Tier::Clean {
+            return false;
+        }
+    }
+    true
+}
+
+/// Every cell a straight section passes through.
+fn walk(g: &Grid, a: P3, b: P3, out: &mut Vec<(i32, i32, i32)>) {
+    let d = b.sub(a);
+    let n = (d.len() / g.cell).max(1);
+    for i in 0..=n {
+        out.push(g.cell_of(p3(a.x + d.x * i / n, a.y + d.y * i / n, a.z + d.z * i / n)));
+    }
+}
+
+/// A* over `(corner, heading)`, where an edge is a *straight section* rather
+/// than a step.
+///
+/// This is the whole of experiment 10's routing change. Because the shortest
+/// edge in the graph is `straight` cells long, there is no path in the search
+/// space that bends twice inside a metre -- so the minimum-straight rule is
+/// not a penalty that a determined enough cost function can talk its way out
+/// of, it is a property of what "path" means here.
+///
+/// It also collapses the search. Experiment 08 expanded a hundred thousand
+/// cells to cross a plant; this expands a few hundred corners, and spends the
+/// difference on being able to afford the rules.
+#[allow(clippy::too_many_arguments)]
+fn search(
+    g: &Grid,
+    start: (i32, i32, i32),
+    head: P3,
+    // How many cells the line has already travelled in `head` to get here: the
+    // stub off the flange, which is part of the same straight section as
+    // anything that carries on in the same direction.
+    run_in: i32,
+    goal: (i32, i32, i32),
+    // `away` is the one direction the goal may not be arrived from: back out
+    // of the machine it belongs to. `run_out` is the stub on the far side of
+    // it, which is part of the same section as an arrival along that axis.
+    away: P3,
+    run_out: i32,
+    straight: i32,
+    rule: &Rules,
+    tier: Tier,
+) -> Option<Vec<(i32, i32, i32)>> {
+    let cells = (g.n.0 * g.n.1 * g.n.2) as usize;
+    let n = cells * 6;
+    let mut dist: Vec<u32> = vec![u32::MAX; n];
+    let mut prev: Vec<u32> = vec![u32::MAX; n];
+    let mut heap: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
+
+    let dir_of = |d: P3| SIX.iter().position(|&s| s == d).unwrap_or(0);
+    let key = |c: (i32, i32, i32), d: usize| g.idx(c) * 6 + d;
+    let hcost = |c: (i32, i32, i32)| {
+        (((c.0 - goal.0).abs() + (c.1 - goal.1).abs() + (c.2 - goal.2).abs()) * 10) as u32
+    };
+
+    let s = key(start, dir_of(head));
+    dist[s] = 0;
+    heap.push(Reverse((hcost(start), s as u32)));
+
+    let mut seen = 0usize;
+    let mut best: Option<u32> = None;
+    while let Some(Reverse((_, k))) = heap.pop() {
+        let k = k as usize;
+        let cell = k / 6;
+        let from = SIX[k % 6];
+        let c = (
+            (cell as i32) / (g.n.1 * g.n.2),
+            ((cell as i32) / g.n.2) % g.n.1,
+            (cell as i32) % g.n.2,
+        );
+        if c == goal {
+            best = Some(k as u32);
+            break;
+        }
+        seen += 1;
+        if seen > 200_000 {
+            break;
+        }
+        let d0 = dist[k];
+        let at_start = k == s;
+        for &d in SIX.iter() {
+            // A section never doubles back. Nor does it continue in the
+            // direction it arrived in -- that is not a new section, it is the
+            // same one, and it is already represented by one longer edge.
+            //
+            // The exception is the very first node, whose heading is not a
+            // section this search laid but the stub off the flange. Carrying
+            // straight on out of a nozzle is a run, not a bend, and refusing
+            // to consider it was worth four lost drive shafts.
+            if d == from.neg() || (d == from && !at_start) {
+                continue;
+            }
+            let turn = if d == from { 0 } else { rule.turn };
+            let mut run = 0u32;
+            let mut at;
+            for i in 1.. {
+                let next = step(c, d, i);
+                if !g.inside(next) {
+                    break;
+                }
+                let Some(cost) = step_cost(g, next, rule, tier) else { break };
+                run += cost;
+                at = next;
+                // The goal is a corner like any other, except that it may only
+                // be arrived at along the flange normal.
+                // Continuing straight out of the flange is *one section with
+                // the stub*, so what it owes is the minimum less what the stub
+                // has already paid. Anything else owes the whole minimum.
+                //
+                // Leaving this out was worth one bad corner in every design:
+                // a line would leave a flange, run half a metre, and turn --
+                // a straight section a fifth of the length of the elbow that
+                // was then drawn on the end of it.
+                let mut need = straight;
+                if at_start && d == from {
+                    need = (straight - run_in).max(1);
+                }
+                let long_enough = i >= need;
+                let is_goal = at == goal;
+                if is_goal && d == away {
+                    break;
+                }
+                // Arriving at the far gate is a corner like any other, and
+                // the section into it owes the same minimum -- less the stub
+                // beyond it, when the line carries straight on through into
+                // the flange. Letting the goal be reached by any edge at all
+                // was worth one short section on the far end of every run,
+                // which is the end a viewer is looking at.
+                if is_goal {
+                    let owed = if d == away.neg() { (straight - run_out).max(1) } else { straight };
+                    if i < owed {
+                        break;
+                    }
+                } else if !long_enough {
+                    continue;
+                }
+                let nk = key(at, dir_of(d));
+                let nd = d0 + run + turn;
+                if nd < dist[nk] {
+                    dist[nk] = nd;
+                    prev[nk] = k as u32;
+                    heap.push(Reverse((nd + hcost(at), nk as u32)));
+                }
+                if is_goal {
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut k = best?;
+    let mut out = Vec::new();
+    loop {
+        let cell = (k as usize) / 6;
+        out.push((
+            (cell as i32) / (g.n.1 * g.n.2),
+            ((cell as i32) / g.n.2) % g.n.1,
+            (cell as i32) % g.n.2,
+        ));
+        let p = prev[k as usize];
+        if p == u32::MAX {
+            break;
+        }
+        k = p;
+    }
+    out.reverse();
+    Some(out)
+}
+
+/// What one cell of travel costs, or `None` if the line may not go there.
+///
+/// The four terms are the note's four, and the layer term is the one that does
+/// the visible work: a run that is not yet where it is going would rather be
+/// on its own storey than anywhere else, so lines climb to the rack, travel,
+/// and come down -- which is what a plant looks like.
+fn step_cost(g: &Grid, c: (i32, i32, i32), rule: &Rules, tier: Tier) -> Option<u32> {
+    let m = g.mark[g.idx(c)];
+    if m & SOLID != 0 {
+        return None;
+    }
+    if m & TAKEN != 0 && tier == Tier::Clean {
+        return None;
+    }
+    let mut cost = 10u32;
+    if m & TAKEN != 0 {
+        cost += 60;
+    }
+    if m & BESIDE != 0 {
+        cost += 8;
+    }
+    if m & CLEAR != 0 {
+        cost += if tier == Tier::Clean { 26 } else { 10 };
+    }
+    let y = g.o.y + c.1 * g.cell;
+    cost += (((y - rule.layer.y()).abs() / g.cell).min(10) as u32) * 4;
+    // Nothing wants to lie across the walkway.
+    if c.1 <= 1 {
+        cost += 14;
+    }
+    Some(cost)
 }
 
 /// Open the cells around one socket, and remember what they were.
@@ -393,107 +985,41 @@ fn pocket(g: &mut Grid, at: P3) -> Vec<(usize, u8)> {
                 }
                 let i = g.idx(n);
                 saved.push((i, g.mark[i]));
-                g.mark[i] &= !(1 | 4);
+                g.mark[i] &= !(SOLID | TAKEN);
             }
         }
     }
     saved
 }
 
-/// A* over `(cell, heading)`, because a bend penalty is a property of an edge
-/// rather than of a cell and pretending otherwise produces staircases.
-fn search(g: &Grid, start: (i32, i32, i32), goal: (i32, i32, i32), t: &Treat) -> Vec<(i32, i32, i32)> {
-    let cells = (g.n.0 * g.n.1 * g.n.2) as usize;
-    let n = cells * 7;
-    let mut dist: Vec<u32> = vec![u32::MAX; n];
-    let mut prev: Vec<u32> = vec![u32::MAX; n];
-    let mut heap: BinaryHeap<Reverse<(u32, u32)>> = BinaryHeap::new();
-
-    let key = |c: (i32, i32, i32), d: usize| g.idx(c) * 7 + d;
-    let hcost = |c: (i32, i32, i32)| {
-        (((c.0 - goal.0).abs() + (c.1 - goal.1).abs() + (c.2 - goal.2).abs()) * 10) as u32
-    };
-
-    // Heading 6 means "has not started yet", so the first step is free of a
-    // bend penalty whichever way it goes.
-    let s = key(start, 6);
-    dist[s] = 0;
-    heap.push(Reverse((hcost(start), s as u32)));
-
-    let mut seen = 0usize;
-    let mut best: Option<u32> = None;
-    while let Some(Reverse((_, k))) = heap.pop() {
-        let k = k as usize;
-        let cell = k / 7;
-        let head = k % 7;
-        let c = (
-            (cell as i32) / (g.n.1 * g.n.2),
-            ((cell as i32) / g.n.2) % g.n.1,
-            (cell as i32) % g.n.2,
-        );
-        if c == goal {
-            best = Some(k as u32);
-            break;
-        }
-        seen += 1;
-        if seen > 600_000 {
-            break;
-        }
-        let d0 = dist[k];
-        for (di, step) in SIX.iter().enumerate() {
-            let nc = (c.0 + step.x, c.1 + step.y, c.2 + step.z);
-            if !g.inside(nc) {
-                continue;
-            }
-            let m = g.mark[g.idx(nc)];
-            if m & 1 != 0 || m & 4 != 0 {
-                continue;
-            }
-            let mut cost = 10u32;
-            if m & 2 != 0 {
-                cost += 26;
-            }
-            if head != 6 && head != di {
-                cost += t.bend_cost;
-            }
-            // Prefer the domain's own height for the long horizontal middle of
-            // a run; the ends can be wherever the sockets are.
-            let y = g.o.y + nc.1 * g.cell;
-            let off = ((y - t.home).abs() / g.cell).min(8) as u32;
-            cost += off * 3;
-            // Nothing wants to lie on the walkway.
-            if nc.1 <= 1 && step.y == 0 {
-                cost += 14;
-            }
-            let nk = key(nc, di);
-            let nd = d0 + cost;
-            if nd < dist[nk] {
-                dist[nk] = nd;
-                prev[nk] = k as u32;
-                heap.push(Reverse((nd + hcost(nc), nk as u32)));
-            }
-        }
+/// Square the path off.
+///
+/// The search works in cell centres and the sockets do not sit on them, so the
+/// section leaving a flange and the section arriving at one can each be a few
+/// centimetres off axis. Rather than leave a diagonal in an orthogonal plant,
+/// the gate point is moved onto the flange's own two axes -- it is a corner
+/// either way, and this way it is a corner at a right angle.
+fn square(mut path: Vec<P3>) -> Vec<P3> {
+    let n = path.len();
+    if n < 3 {
+        return path;
     }
-
-    let Some(mut k) = best else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    loop {
-        let cell = (k as usize) / 7;
-        out.push((
-            (cell as i32) / (g.n.1 * g.n.2),
-            ((cell as i32) / g.n.2) % g.n.1,
-            (cell as i32) % g.n.2,
-        ));
-        let p = prev[k as usize];
-        if p == u32::MAX {
-            break;
-        }
-        k = p;
+    for (i, j) in [(0usize, 1usize), (n - 1, n - 2)] {
+        let (a, b) = (path[i], path[j]);
+        let d = b.sub(a);
+        path[j] = match d.axis() {
+            Some(0) => p3(b.x, a.y, a.z),
+            Some(1) => p3(a.x, b.y, a.z),
+            Some(2) => p3(a.x, a.y, b.z),
+            // Not on an axis at all: keep whichever component is largest and
+            // let the elbow at the next corner absorb the rest.
+            _ if d.x.abs() >= d.y.abs() && d.x.abs() >= d.z.abs() => p3(b.x, a.y, a.z),
+            _ if d.y.abs() >= d.z.abs() => p3(a.x, b.y, a.z),
+            _ => p3(a.x, a.y, b.z),
+        };
     }
-    out.reverse();
-    out
+    path.dedup();
+    path
 }
 
 /// Collinear points are not corners.
@@ -524,8 +1050,12 @@ pub fn elbows_of(r: &Run) -> Vec<bool> {
 
 /// The bend radius a run's elbows are drawn at, which is the length each of
 /// them takes out of the straight either side of it.
+///
+/// One number, read by the router when it decides how long a straight has to
+/// be and by `dress` when it puts an elbow in one. Experiment 09 found out the
+/// hard way what happens when two places decide the same thing separately.
 pub fn bend_of(r: &Run) -> Mm {
-    (outer(r.dom, r.bore) * 3) / 2
+    rules(r.dom, r.bore).bend
 }
 
 /// Which corners of a path get a real elbow, decided once.
@@ -586,15 +1116,10 @@ fn turns(a: P3, b: P3, c: P3) -> bool {
 /// straight, because a thirteen-metre span made of eight short sections is
 /// still a thirteen-metre span, and the first version of this function
 /// cheerfully left it hanging in the air.
-fn props_along(path: &[P3], dom: Domain) -> Vec<P3> {
-    if matches!(dom, Domain::Mech) {
+fn props_along(path: &[P3], gap: Mm) -> Vec<P3> {
+    if gap <= 0 {
         return Vec::new();
     }
-    let gap = match dom {
-        Domain::Heat | Domain::Gas => 4000,
-        Domain::Rotary => 4000,
-        _ => 4500,
-    };
     let mut out = Vec::new();
     let mut since = gap / 2;
     for i in 1..path.len() {
@@ -624,6 +1149,14 @@ fn props_along(path: &[P3], dom: Domain) -> Vec<P3> {
 
 /// A routed connection, as pieces.
 pub fn dress(r: &Run, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) {
+    // A run the router could not lay is drawn as nothing at all. That is the
+    // entire behavioural difference experiment 10 asked for here, and it is
+    // worth more than the rest of this function put together: the plant now
+    // shows a hole where the player has asked for something impossible,
+    // instead of a pipe through a machine.
+    if !r.laid() {
+        return;
+    }
     let t = treat(r.dom);
     let od = outer(r.dom, r.bore);
     let bend = bend_of(r);
@@ -926,7 +1459,7 @@ pub fn junctions(runs: &[Run], owners: &[Owner], grade: Grade, out: &mut Vec<Pie
         return;
     }
     for r in runs.iter() {
-        if r.path.len() < 2 {
+        if !r.laid() {
             continue;
         }
         let at = r.path[0];

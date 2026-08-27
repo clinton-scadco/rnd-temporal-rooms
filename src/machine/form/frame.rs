@@ -34,6 +34,20 @@
 //! because a flight that lands in the yard is invisible until somebody paints
 //! it like a stair.
 //!
+//! Experiment 10 added the consequence of the player being allowed to build
+//! upwards at all:
+//!
+//! ```text
+//!   anything placed above the slab   -> a deck, its columns, and its edge
+//!   a deck with no way onto it       -> a stair, from the deck below
+//! ```
+//!
+//! which is the note's own list, and the reason `up` is a placement decision
+//! rather than a rendering trick. Lifting a condenser six metres is not free:
+//! it buys back the ground under it and it costs a floor, four columns, a
+//! handrail and a flight of stairs, all of which appear by themselves and all
+//! of which take up room that the spatial rules then measure.
+//!
 //! # Why it is a separate pass
 //!
 //! Because it can only run once the equipment and the pipework exist. That is
@@ -57,6 +71,10 @@ const WALK: Mm = 1200;
 const RISE: Mm = 250;
 const GOING: Mm = 300;
 const RAIL_H: Mm = 1100;
+/// How deep a floor is: grating, its beams, and the services under it.
+const DECK: Mm = 400;
+/// How far apart the columns holding one up go.
+const COLUMN: Mm = 6000;
 
 pub fn infer(
     plan: &Plan,
@@ -66,6 +84,10 @@ pub fn infer(
     owners: &mut Vec<Owner>,
     out: &mut Vec<Piece>,
 ) {
+    // Experiment 10, and the first thing that happens, because everything
+    // after it stands on the answer.
+    decks(plan, grade, owners, out);
+
     for u in &plan.units {
         let id = own(owners, &u.name, u.mount.tag(), Owns::Frame);
         let n0 = out.len();
@@ -92,18 +114,26 @@ pub fn infer(
 
         // Anything a person has to get to, above head height, gets a way to
         // get to it. A distillation column is the extreme case and looks it.
-        let high = u.sockets.iter().any(|s| s.at.y > REACH) || u.top() > REACH + 3000;
+        //
+        // Above head height *of the floor it stands on*, which is experiment
+        // 10's correction. The first version measured from the slab, so every
+        // machine on a mezzanine was declared unreachable and given its own
+        // private staircase down to the yard -- five flights climbing past
+        // each other to reach a deck that already had one.
+        let high = u.sockets.iter().any(|s| s.at.y > u.base + REACH)
+            || u.top() > u.base + REACH + 3000;
         if high && u.arch != super::layout::Arch::Run {
             let pid = own(owners, &u.name, "platform", Owns::Frame);
             let n1 = out.len();
             let mut r = seed.at(&u.name, "platform");
-            let levels = ((u.top() - 2000) / 5000).clamp(1, 3);
+            let levels = ((u.top() - u.base - 2000) / 5000).clamp(1, 3);
+            let floor = u.base + 3000;
             for k in 0..levels {
                 let y = u.vol.lo.y + (u.vol.hi.y - u.vol.lo.y) * (k + 1) / (levels + 1);
-                platform(u, y.max(3000), out);
+                platform(u, y.max(floor), out);
             }
             let y = u.vol.lo.y + (u.vol.hi.y - u.vol.lo.y) / (levels + 1);
-            stair(u, y.max(3000), plan, grade, &mut r, out);
+            stair(u, y.max(floor), u.base, plan, grade, &mut r, out);
             for p in out[n1..].iter_mut() {
                 p.of = pid;
             }
@@ -184,6 +214,184 @@ pub fn infer(
 /// end. The props it took over are returned so the per-run pass knows not to
 /// put a post under them as well -- which is the only coordination between the
 /// two, and it goes one way, like everything else here.
+/// The floors the player built on.
+///
+/// A component with `up` greater than zero is standing on something, and this
+/// is the something. One deck per storey, covering the union of everything on
+/// it, plus a metre of walkway; columns on a grid down to whatever is below;
+/// an edge beam and a handrail; and a flight of stairs up from the storey
+/// underneath, because a floor nobody can reach is scenery.
+///
+/// Grouped by storey rather than by component on purpose. Four machines on
+/// level three share one floor, which is both what a works looks like and the
+/// difference between a mezzanine and four coffee tables.
+fn decks(plan: &Plan, grade: Grade, owners: &mut Vec<Owner>, out: &mut Vec<Piece>) {
+    let mut by: BTreeMap<i32, Vec<&super::layout::Placed>> = BTreeMap::new();
+    for u in plan.units.iter().filter(|u| u.level > 0) {
+        by.entry(u.level).or_default().push(u);
+    }
+    for (level, units) in by {
+        let y = units[0].base;
+        let mut area = units[0].vol;
+        for u in &units {
+            area = area.join(u.vol);
+        }
+        // The floor is the footprint of what stands on it, plus somewhere to
+        // stand beside it.
+        let deck = Vol::new(
+            p3(area.lo.x - WALK, y - DECK, area.lo.z - WALK),
+            p3(area.hi.x + WALK, y, area.hi.z + WALK),
+        );
+        let id = own(owners, &format!("level {level}"), "deck", Owns::Frame);
+        let n0 = out.len();
+
+        // The floor itself, as grating panels rather than one slab: at this
+        // distance the difference is whether you can see the plant under it.
+        let s = deck.size();
+        let nx = (s.x / (WALK * 2)).max(2);
+        let nz = (s.z / (WALK * 2)).max(2);
+        let (px, pz) = (s.x / nx, s.z / nz);
+        for i in 0..nx {
+            for j in 0..nz {
+                let at = p3(deck.lo.x + px * i + px / 2, y - 80, deck.lo.z + pz * j + pz / 2);
+                let panel = Vol::new(
+                    p3(at.x - px / 2, y - DECK, at.z - pz / 2),
+                    p3(at.x + px / 2, y, at.z + pz / 2),
+                );
+                // A floor has a hole in it where something comes up through
+                // it. Nine metres of reactor standing beside a mezzanine is
+                // exactly that case, and a floor that ignored it would be a
+                // sheet of grating with a pressure vessel growing out of it.
+                if plan.units.iter().any(|o| o.vol.hits(panel)) {
+                    continue;
+                }
+                out.push(Piece::up(Mesh::Grate, Mat::Galv, at, p3(px, 80, pz)).lod(FAR));
+            }
+        }
+
+        // Edge beams all the way round, which is what a floor is actually made
+        // of and what stops it reading as a hovering rug.
+        let corners = [
+            p3(deck.lo.x, y - DECK / 2, deck.lo.z),
+            p3(deck.hi.x, y - DECK / 2, deck.lo.z),
+            p3(deck.hi.x, y - DECK / 2, deck.hi.z),
+            p3(deck.lo.x, y - DECK / 2, deck.hi.z),
+        ];
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            out.push(Piece::span(Mesh::Beam, Mat::Dark, a, b, DECK / 2).lod(FAR));
+        }
+
+        // Columns on a grid, down to the ground. Not to the storey below: a
+        // column that stops on a floor is a column standing on nothing, and
+        // the whole point of this pass is that nothing stands on nothing.
+        let cx = (s.x / COLUMN).max(1);
+        let cz = (s.z / COLUMN).max(1);
+        for i in 0..=cx {
+            for j in 0..=cz {
+                if i > 0 && i < cx && j > 0 && j < cz {
+                    continue;
+                }
+                let at = p3(deck.lo.x + s.x * i / cx, 0, deck.lo.z + s.z * j / cz);
+                // And a column does not stand up through a machine either.
+                let post = Vol::new(p3(at.x - 200, 0, at.z - 200), p3(at.x + 200, y, at.z + 200));
+                if plan.units.iter().any(|o| o.vol.hits(post)) {
+                    continue;
+                }
+                out.push(
+                    Piece::up(Mesh::Beam, Mat::Dark, at, p3(240, y - DECK, 240)).lod(FAR),
+                );
+                if grade.detailed() {
+                    out.push(
+                        Piece::up(Mesh::Box, Mat::Concrete, p3(at.x, -150, at.z), p3(900, 250, 900))
+                            .lod(FAR),
+                    );
+                }
+            }
+        }
+
+        // Handrail round the edge, and a way up.
+        for k in 0..4 {
+            let (a, b) = (
+                p3(corners[k].x, y, corners[k].z),
+                p3(corners[(k + 1) % 4].x, y, corners[(k + 1) % 4].z),
+            );
+            let d = b.sub(a);
+            let n = (d.len() / WALK).max(1);
+            for i in 0..n {
+                let at = a.add(p3(d.x * i / n, 0, d.z * i / n));
+                out.push(
+                    Piece::new(Mesh::Rail, Mat::Galv, at, d, p3(80, d.len() / n, RAIL_H))
+                        .spin(upright(d))
+                        .lod(CLOSE),
+                );
+            }
+        }
+        flight(deck, y, plan, out);
+
+        for p in out[n0..].iter_mut() {
+            p.of = id;
+        }
+    }
+}
+
+/// A stair up onto a deck, on whichever side has the most room for it.
+///
+/// The same rule as the platform stair and for the same reason -- a flight
+/// that lands inside a machine is a flight nobody can use -- but it climbs the
+/// whole storey rather than a fraction of a vessel, so it gets a landing at
+/// the top and a stringer either side.
+fn flight(deck: Vol, y: Mm, plan: &Plan, out: &mut Vec<Piece>) {
+    let n = (y / RISE).max(2);
+    let reach = n * GOING;
+    let sides = [
+        (p3(deck.hi.x, y, deck.centre().z), super::EAST),
+        (p3(deck.centre().x, y, deck.hi.z), super::SOUTH),
+        (p3(deck.lo.x, y, deck.centre().z), super::WEST),
+        (p3(deck.centre().x, y, deck.lo.z), super::NORTH),
+    ];
+    // How much of the plant a flight down this side would go through.
+    let clash = |k: usize| -> usize {
+        let (start, dir) = sides[k];
+        (0..=n)
+            .filter(|step| {
+                let at = start.add(dir.mul(GOING * step)).add(p3(0, -RISE * step, 0));
+                let tread = Vol::new(
+                    p3(at.x - 700, at.y - RISE, at.z - 700),
+                    p3(at.x + 700, at.y + RAIL_H, at.z + 700),
+                );
+                plan.units.iter().any(|o| o.vol.hits(tread))
+            })
+            .count()
+    };
+    let Some(k) = (0..4).min_by_key(|&k| (clash(k), k)) else { return };
+    let (start, dir) = sides[k];
+    let _ = reach;
+    for step in 0..n {
+        let at = start.add(dir.mul(GOING * step)).add(p3(0, -RISE * step, 0));
+        out.push(
+            Piece::new(
+                Mesh::Step,
+                Mat::Galv,
+                p3(at.x, at.y - RISE, at.z),
+                super::UP,
+                p3(1000, RISE, GOING),
+            )
+            .spin(if dir.x != 0 { 1 } else { 0 })
+            .lod(MEDIUM),
+        );
+    }
+    // A stringer either side, from the landing to the ground.
+    let end = start.add(dir.mul(GOING * n)).add(p3(0, -RISE * n, 0));
+    let across = if dir.x != 0 { p3(0, 0, 500) } else { p3(500, 0, 0) };
+    for sign in [-1, 1] {
+        let off = across.mul(sign);
+        out.push(
+            Piece::span(Mesh::Beam, Mat::Dark, start.add(off), end.add(off), 120).lod(MEDIUM),
+        );
+    }
+}
+
 fn rack(
     plan: &Plan,
     routes: &[Run],
@@ -416,8 +624,20 @@ fn upright(along: P3) -> u8 {
 /// not enough: the stair takes the least bad and walks through a separator.
 /// Three landings per face give it twelve, and a plant that tight nearly
 /// always has exactly one gap. It finds it 26 times out of 822.
-fn stair(u: &Placed, y: Mm, plan: &Plan, grade: Grade, r: &mut super::seed::Rng, out: &mut Vec<Piece>) {
+#[allow(clippy::too_many_arguments)]
+fn stair(
+    u: &Placed,
+    y: Mm,
+    floor: Mm,
+    plan: &Plan,
+    grade: Grade,
+    r: &mut super::seed::Rng,
+    out: &mut Vec<Piece>,
+) {
     let plot = plan.plot;
+    // How far the flight actually has to come down: to the deck this machine
+    // stands on, not to the ground under the whole plant.
+    let drop = (y - floor).max(RISE * 2);
     let v = u.vol.grow_flat(WALK);
     let want = r.pick(4);
     let faces = [
@@ -438,7 +658,7 @@ fn stair(u: &Placed, y: Mm, plan: &Plan, grade: Grade, r: &mut super::seed::Rng,
     };
     let want = want + 4;
     let side = if grade.detailed() {
-        let reach = (y / RISE).max(2) * GOING;
+        let reach = (drop / RISE).max(2) * GOING;
         let room = |k: usize| -> Mm {
             let (start, dir) = spot(k);
             let end = start.add(dir.mul(reach));
@@ -454,7 +674,7 @@ fn stair(u: &Placed, y: Mm, plan: &Plan, grade: Grade, r: &mut super::seed::Rng,
         // thing it misses at the top is not the thing it hits at the bottom.
         let clash = |k: usize| -> Mm {
             let (start, dir) = spot(k);
-            let n = (y / RISE).max(2);
+            let n = (drop / RISE).max(2);
             let mut hits = 0;
             for step in 0..=n {
                 let at = start.add(dir.mul(GOING * step)).add(p3(0, -RISE * step, 0));
@@ -480,7 +700,7 @@ fn stair(u: &Placed, y: Mm, plan: &Plan, grade: Grade, r: &mut super::seed::Rng,
         want
     };
     let (start, dir) = spot(side);
-    let n = (y / RISE).max(2);
+    let n = (drop / RISE).max(2);
     for k in 0..n {
         let at = start.add(dir.mul(GOING * k)).add(p3(0, -RISE * k, 0));
         out.push(
