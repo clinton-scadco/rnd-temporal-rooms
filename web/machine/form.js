@@ -380,7 +380,17 @@ function drag() {
       const hit = under(e);
       if (hit) {
         edit.onPick(hit.name);
-        held = { name: hit.name, from: [hit.x, hit.y, hit.z], moved: false };
+        // Prototype 2 hands in no `onMove`, which is how a window built for
+        // dragging becomes a window where nothing moves: a committed
+        // component is placed or deleted, and never slid.
+        if (edit.onMove) held = { name: hit.name, from: [hit.x, hit.y, hit.z], moved: false };
+      } else if (edit.onGround) {
+        // Empty floor, at whichever storey the caller is working on. This is
+        // the other half of place-and-delete: the pointer names a tile, the
+        // caller turns it into a command.
+        const at = onPlane(e, edit.level ? edit.level() : 0);
+        const t = at && edit.tile(at);
+        if (t) edit.onGround(t.x, t.y);
       }
     }
   });
@@ -396,6 +406,7 @@ function drag() {
     // up follows the pointer at six metres up, which is the difference between
     // moving something and dropping it.
     if (held) {
+      if (!edit.onMove) return;
       const at = onPlane(e, held.from[2]);
       if (at) {
         const t = edit.tile(at);

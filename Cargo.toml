@@ -19,6 +19,13 @@ path = "src/main.rs"
 name = "machine"
 path = "src/bin/machine.rs"
 
+# Prototype 2 is the multiplayer slice: a third binary, because it holds state
+# -- rooms, clocks and one reconstruction per player -- and the two servers
+# above it deliberately hold none.
+[[bin]]
+name = "room"
+path = "src/bin/room.rs"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

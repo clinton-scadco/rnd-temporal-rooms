@@ -138,6 +138,43 @@
 //! periodic orbit, and keeping the orbit is what lets two buildings with the
 //! same average behave differently when the world outside them changes.
 
+//! # Prototype 2 asks: can two people build one?
+//!
+//! Everything above is a laboratory. A solver that compresses a billion
+//! machines, a designer that turns one building into an exact periodic orbit,
+//! a renderer that turns that design into a plant, and an editor that lets a
+//! player put it where they want it -- four experiments, no game. So the last
+//! one stops proving things separately and asks the only question that cannot
+//! be answered in a laboratory:
+//!
+//! ```text
+//!   Can two players continuously build and redesign a deterministic factory
+//!   together, in real time, while the simulation keeps running and both
+//!   clients remain exactly synchronized?
+//! ```
+//!
+//! The answer is yes, and the price is one sentence long: **a command is an
+//! intention, not a diff.** Prototype 1's log held document diffs, which two
+//! clients cannot produce against documents that have already diverged. So a
+//! command says what somebody *meant* -- put a yard here, commit this design
+//! -- the host validates it and stamps `(tick, sequence)`, and the diff is
+//! derived on every replica by recompiling the document.
+//!
+//! ```text
+//!   Cmd  ->  World (the game document)  ->  Graph  ->  the solver, unchanged
+//! ```
+//!
+//! `mp` is the whole of it, and nothing below it learned that the game is
+//! multiplayer: `world` is the document and the compiler that lowers it,
+//! `lower` turns a machine design into a world recipe by reading its orbit,
+//! `cmd` is what a player may do, `goal` is what the room is for, `room` holds
+//! the clock and one reconstruction per player, and `net` is the only stateful
+//! server in the crate.
+//!
+//! The `Carry` that crosses a Prototype 1 edit turned out, with no changes at
+//! all, to be the snapshot a joining client is handed at tick 80,000 -- which
+//! `live`'s own notes predicted and this experiment finally cashed.
+
 pub mod analytic;
 pub mod domains;
 pub mod dsl;
@@ -146,6 +183,7 @@ pub mod json;
 pub mod live;
 pub mod machine;
 pub mod model;
+pub mod mp;
 pub mod pop;
 pub mod rooms;
 pub mod scenario;

@@ -75,6 +75,26 @@ how things are joined and installed, and articulated archetypes. The repaint —
 which is a pass that may write one field of a piece and cannot move anything —
 turns out to do over half of the work.
 
+**Experiment 10** hands the third dimension to the player: a component gets an
+elevation and a quarter turn, a port becomes an interface rather than a
+coordinate, and the router is allowed to say *no valid route found* rather than
+draw nonsense.
+
+**Prototype 2** stops proving things separately. Four laboratories and no game
+is a poor place to stop, so the eleventh experiment is the first small complete
+one: two players, one room code, one clock that never pauses, machines designed
+in three dimensions and placed in a world that is already running, and three
+independent reconstructions of the same command stream, compared by hash every
+simulated second.
+
+> **Can two players continuously build and redesign a deterministic factory
+> together, in real time, while the simulation keeps running and both clients
+> remain exactly synchronized?**
+
+Yes — and the solver did not change by one line. What changed is what a command
+*is*: an intention rather than a document diff, validated and stamped by one
+authority, with the diff derived deterministically on the other side.
+
 ## Quick start
 
 ```powershell
@@ -110,6 +130,14 @@ turns out to do over half of the work.
 # how every connection was routed, and what is in the way
 .\run.ps1 -Machine space designs/17-stacked.machine
 .\run.ps1 -Machine spaces                      # every design, routed and judged
+
+# Prototype 2: two players, one factory, one clock that does not stop
+.\run.ps1 -Room                                # the game, at :8790
+.\run.ps1 -Room test                           # the primary multiplayer test
+.\run.ps1 -Room fail                           # the failure tests
+.\run.ps1 -Room goals                          # twenty-one hand-written problems
+.\run.ps1 -Room parts                          # the catalogue, and what it compiles to
+.\run.ps1 -Room check                          # its front end, without a browser
 ```
 
 `run.ps1` exists because rustup installs the MSVC toolchain without setting the
@@ -2183,6 +2211,392 @@ turned into geometry that makes physical sense. They can, and the mechanism is
 smaller than expected for the third time: **six faces per archetype, a straight
 section as the unit of search, three tiers, and permission to say no.**
 
+## Prototype 2: the multiplayer vertical slice
+
+Everything above this line proved something and then put it back in the box. A
+solver that compresses a billion machines, a designer that turns a building
+into an exact periodic orbit, a renderer that turns that design into a plant,
+and an editor that lets a player move it around in three dimensions — four
+laboratories, no game. So the eleventh experiment stops proving things
+separately:
+
+> **Can two players continuously build and redesign a deterministic factory
+> together, in real time, while the simulation keeps running and both clients
+> remain exactly synchronized?**
+
+Yes. And the price is one sentence long, the same shape as Prototype 1's: **a
+command is an intention, not a diff.**
+
+```text
+   intention  →  host validates, stamps (tick, sequence)  →  broadcast
+                                                                 │
+        ┌────────────────────────────────────────────────────────┘
+        ▼
+  GAME DOCUMENT      physical installations, positions, owned designs
+        │ compile
+        ▼
+  SIMULATION IR      population classes, storages, channels, regions
+        │ live::with_states
+        ▼
+  state(tick)        the only thing anybody is allowed to draw
+```
+
+Nothing below the second arrow learned that the game is multiplayer. `dsl`,
+`pop`, `rooms`, `domains` and `live` are untouched; `mp` is 4,800 lines of
+document, compiler, protocol and arbitration sitting on top of them.
+
+```powershell
+.\run.ps1 -Room              # the game, at http://127.0.0.1:8790
+.\run.ps1 -Room test         # section 25's scenario, played headlessly
+.\run.ps1 -Room fail         # section 26: eleven ways to be ambiguous
+.\run.ps1 -Room check        # the front end, without a browser
+```
+
+### 1. A command is an intention
+
+Prototype 1's log held `live::Edit`s, which are *document diffs*: replace this
+node, remove that wire. That works for one player and cannot work for two,
+because two clients produce diffs against documents that have already diverged.
+So a command here says what somebody *meant* —
+
+```text
+PlaceMachine   { proto: "stamping", x: 40, y: 6, face: 0 }
+CreateConnection { from: 12, to: 8, item: "IronBillet" }
+CommitMachineDesign { id: 8, design: … }
+```
+
+— and the diff is *derived*, deterministically, by recompiling the document.
+The host validates, stamps `(tick, sequence)`, applies, and broadcasts; every
+replica applies the same command in the same order and gets the same answer, or
+the experiment has failed. Ordering is `tick` then `sequence` and nothing else:
+not arrival order, not frame timing, not who has the better connection.
+
+A refused command **never enters the log**, so replaying the log cannot
+reproduce it — and every refusal in `mp::cmd` is structural (the id is not
+there, the item is not made, somebody else holds the lock), which is what makes
+it safe to broadcast a rejection as confidently as an acceptance.
+
+### 2. The clock does not stop
+
+```text
+SIM_TICK_RATE = 60          one second, everywhere
+```
+
+Gameplay is authored in seconds and compiled into ticks. A mine produces `100
+IronOre / second`, never `1.67 / tick`; a belt's latency is `base + distance /
+speed` in whole ticks. The one pause the game has is before the host presses
+start, and there is no matching stop — the goal is on screen, then the clock
+runs, and every player builds inside a system that is already going.
+
+That has a consequence the brief was explicit about and the implementation had
+to answer: **"the factory does not compile" cannot be an outcome.** The
+language below is entitled to refuse a plant whose press has nowhere to put its
+gears, and a player who has just placed a press is in exactly that state for as
+long as it takes them to place a bay. So the compiler asks a narrower question
+than the language does:
+
+```text
+is this installation commissioned?
+  every input item arrives at exactly one bay wired into it, and
+  every output item leaves to exactly one bay wired out of it
+```
+
+Anything that fails is left out of the IR and told why, in a sentence its
+inspector shows — *"nothing delivers coal to a bay wired into it"*. It is still
+in the document, still drawn, still deletable. The check is a fixpoint, because
+dropping one machine can starve the bay that fed the next one.
+
+### 3. A machine's recipe is its orbit
+
+This is the join between the two halves of the project, and it is the shortest
+file in the experiment.
+
+Experiment 06 refused to let a finished machine collapse into `input ×
+efficiency = output`, and compiled it to a startup transient plus an exact
+periodic orbit instead. That refusal is what makes the lowering trivial: a
+machine that repeats itself every `period` ticks, having taken this and given
+that, **is** a recipe.
+
+```text
+orbit:  took { Coal 495, IronBillet 1980, Power 4840 }
+        gave { Iron(gear) 1980 }                        over 40 ticks
+world:  process { consumes 99 Coal, 396 IronBillet, 968 Power
+                  takes 8 s  produces 396 Gear }
+```
+
+Nobody typed "a stamping line makes 49.5 gears a second". It makes 396 gears
+every eight seconds because that is what its press, its furnace and its two
+motors do, and adding a third motor changes the number — which is the whole
+reason a placed machine is worth opening.
+
+Two conversions happen on the way across, and both are gameplay decisions:
+
+**A designer tick is a game second.** Experiment 06's clock was its own, and
+its numbers were chosen to read well against it: 108 MW a tick, 20 gears a
+tick. Read at sixty ticks a second those become 6,480 MW and 1,200 gears a
+second, which is section 20's warning about mistaking resolution for pace
+arriving exactly on schedule.
+
+**The orbit is reduced to its primitive cycle.** An orbit is a fact about the
+machine's *internal* state coming round again, and it can be sixty ticks long
+while every flow across the boundary repeats every ten:
+
+```text
+period 60, flows { 6000, 5610, 18672, 2244 }   gcd 6
+cycle  10, flows { 1000,  935,  3112,  374 }
+```
+
+Identical rate, exact arithmetic, and the finest granularity the orbit
+justifies. Without it a steam crusher swallows eighteen thousand water in one
+gulp and needs a bay the size of a lake to run at all.
+
+The catalogue is six machines and no recipes:
+
+```text
+steamplant       1.0s  40 Coal + 160 Water                     ->  108 Power
+turbinehall      1.0s  50 Coal + 200 Water                     ->  132 Power
+crusher         10.0s  1000 Coal + 935 IronOre + 3112 Water    ->  374 Concentrate
+stamping         8.0s  99 Coal + 396 IronBillet + 968 Power    ->  396 Gear
+machining        9.0s  360 IronBillet + 1160 Power             ->  216 Gear
+refinery         1.0s  42 Coal + 120 Crude + 18 Water          ->  36 LightFraction
+                                                                 + 48 MiddleFraction
+```
+
+Only the crusher powers itself — it burns coal to raise its own steam, which is
+the design it was argued into over three experiments. Everything that makes
+gears runs off the grid, so a gear line is always a gear line *and* a power
+station, and a power station is always a coal problem. That is not a balance
+decision; it is what the designs happen to do, discovered by lowering them.
+
+The lowering also produced the experiment's most embarrassing bug. `Totals::
+power` is a *mirror* of the Power entries in `gave`, kept separately because
+the first brief is written in megawatts — and the first version of the lowering
+added it on top, doubling every generator in the game. The test that caught it
+does not check that 216 MW is a plausible number; it checks that the lowered
+rate is the orbit's rate, in integers, for every machine in the catalogue.
+
+### 4. The machine keeps running while you redesign it
+
+Opening a placed machine does not stop it. The player edits a **draft**, which
+lives in the document beside the live design and is replicated like everything
+else — so the other player can watch the redesign happen without being able to
+touch it:
+
+```text
+LIVE    Machining Cell, 216 Gear every 9 s, population intact, still queueing
+DRAFT   + one motor, wired to the cable and the line shaft
+```
+
+Component-level commands (`PlaceComponent`, `ConnectComponent`,
+`TuneComponent`, …) apply to the draft and are marked non-structural, so they
+never reach a rendezvous and cannot cost one. Then:
+
+```text
+CommitMachineDesign(machineId, design)
+```
+
+is one command at one canonical tick. The old design ends, the new one begins,
+external bays keep their contents, and the machine's population starts from a
+deterministic cold state — the conservative rule section 14 asked for, chosen
+because a transient poured into a population is a state nobody can name.
+
+A commit that would make the machine *bigger* than the space it stands in is
+refused, because place-and-delete means nothing ever silently moves.
+
+Two players cannot edit one draft. The lock is one field in the document,
+visible to everybody, and it is deliberately the cheapest thing that works —
+collaborative editing of one 3D design is a research project, and this is a
+lock.
+
+### 4a. Why is it stopped? Asked at two altitudes
+
+The live nature of the simulation means failure has to be understandable in
+seconds, and there are two different questions hiding in "why is nothing coming
+out of that".
+
+Outside, the world inspector reads the solver's own diagnosis — `why::diagnose`,
+written for Prototype 1 and unchanged:
+
+```text
+Press8   STARVED
+needs 396 IronBillet, 12 in Bay4
+next delivery in 3.2s (Belt14)
+utilisation 41%   busy 0 / idle 1 / blocked 0
+```
+
+Inside, the machine answers about itself, at the phase its own orbit is in when
+read against the room's clock — a designer tick is a game second, so a settled
+machine at second 4,000 is indistinguishable from itself at `transient + 4000 %
+period`:
+
+```text
+holding it back
+  MI1 (mill)      STARVED   67 rotary of the 80 it wants
+  C2  (crusher)   BLOCKED   its out port is full
+```
+
+The two altitudes deliberately do not talk to each other. The inner view is the
+machine on its design's own supply; the outer one is the authority on whether
+the machine turned at all. Coupling them — running the component simulation
+against the world's actual deliveries rather than against the orbit — is the
+obvious next thing and was not needed to answer this experiment's question.
+
+### 5. Place, delete, and the ghost in between
+
+Committed objects do not move. Wanting one elsewhere is a delete and a place,
+at two different ticks, and everything before the commit — the ghost under the
+pointer, the rotation, the red outline over a collision — is a picture in one
+browser that no other machine ever hears about. The reason is on the wire
+rather than on the screen: a drag is a stream of positions with no canonical
+order; a place is one command with one tick and one sequence number.
+
+A deleted thing leaves a translucent ghost for eight seconds with a **Restore**
+on it, and restore issues a *new placement command at the tick it is pressed*.
+The seconds the thing was missing really happened, and the factory really did
+run without it:
+
+```text
+tick 9,600   DeleteStorage(Yard13)      the press loses its power buffer
+tick 9,960   Restore → PlaceStorage     a new yard, empty, at the same tiles
+```
+
+### 6. Joining a room that is already running
+
+```text
+join:   snapshot @ tick X   (world document, Carry, accounts, goal)
+then:   every command with seq > X's
+never:  the host's simulation state
+```
+
+The `Carry` is Prototype 1's, unchanged — the note that introduced it said it
+was "also, not by coincidence, exactly the canonical snapshot the networking
+proof needs", and that turned out to be true a year of experiments later. The
+snapshot goes through JSON on the way even for a replica sitting in the same
+process, because a snapshot that is really a `clone()` proves nothing about a
+snapshot that is really a socket.
+
+Joining does not pause, stop or rewind the host. `joining_does_not_disturb_the_
+host` checks that, by comparing the host's clock, probe and books either side
+of an arrival.
+
+### 7. Three reconstructions, compared every second
+
+A client of this game is a browser, and a browser cannot run the solver. So a
+"client" in `mp::room` is a `Sim` in the host process fed **nothing but the
+broadcast command stream**: its own world document, its own compiled plant, its
+own carry, its own books. It shares no memory with the host's simulation and is
+never copied from it after the join.
+
+Every simulated second, each of them hashes:
+
+```text
+hash = FNV-1a( tick ‖ world.signature() ‖ carry.signature() ‖ accounts.signature() )
+```
+
+and the host compares. A mismatch resends a snapshot and replays the tail.
+
+```text
+probe @ 60s     host 907d6f32250c7005   Ada 907d6f32250c7005   Bee 907d6f32250c7005
+probe @ 150s    host 0a224030bfbbcf71   Ada 0a224030bfbbcf71   Bee 0a224030bfbbcf71
+probe @ 1070s   host d6603f2757ba9d72   Ada d6603f2757ba9d72   Bee d6603f2757ba9d72
+```
+
+**The hash caught a real desynchronisation, and it is worth writing down.** The
+room closes its books at every lattice point, and the first version closed them
+all at the *end* of whatever interval a client happened to ask about. Ada
+polling every twenty seconds and Bee every forty then computed different hashes
+for the same second — the same room, hashed with a different amount of the
+future already in it. Nothing about that is visible in a test where everybody
+polls together, and nothing about it is visible in the code. It showed up as
+three mismatches in `room test`, which is exactly what an acceptance command is
+for.
+
+### 8. Goals: twenty-one problems, not a generator
+
+Twenty-one templates are written by hand, each one a factory problem somebody
+thought was interesting; the seed chooses among them and picks numbers inside
+ranges the template declares, and nothing else is random.
+
+```text
+delivery      first-gears          Deliver 9,886 gears.
+throughput    steady-gears         Hold 21 gears a second for 53 seconds.
+power         big-grid             Hold 496 power a second for 70 seconds.
+efficiency    frugal-concentrate   Deliver 6,519 concentrate having drawn no more
+                                   than 42,772 coal.
+space         compact-gears        Hold 18 gears a second for 32 seconds, with the
+                                   whole factory inside 1,372 tiles.
+mixed         power-and-product    Hold 148 power and 18 gears a second, both at
+                                   once, for 44 seconds.
+```
+
+The seed also chooses the room code and the starting plot, so a room worth
+playing again is one number long.
+
+Progress is measured **only on a lattice** of one sample a second. A rate is a
+question about a window, and a window needs two measurements; if each replica
+measured whenever it happened to be asked, two clients polling at different
+rates would disagree about a rate, then about a completion, then about
+everything. So a replica asked about tick 12,345 answers with the *state* at
+12,345 and the *accounts* at 12,300, and says so.
+
+One honest substitution: the brief suggests "waste less than X% heat", and a
+percentage needs a denominator the machine model does not define. The
+efficiency family asks two questions it can actually answer instead — a cap on
+an input, and, for power plants, `wasted / (wasted + power)` summed over the
+machines and weighted by cycles, which is a percentage with a meaning that
+moves when a reactor is turned down.
+
+When the goal is met the room records the tick, the totals, the machine count
+and the footprint — and **keeps running**. There is no stop.
+
+### 9. The failure tests
+
+Section 26 lists nine ways for two players to be ambiguous. `room fail` runs
+eleven:
+
+```text
+ok   two commands at the same tick            both at tick 300, ordered 1 then 2
+ok   two players placing on the same tiles    that overlaps Bay8
+ok   place and delete in the same instant     it existed for zero ticks and left a ghost
+ok   a bay wired to itself                    two bays cannot be wired together
+ok   two players in one draft                 player 1 is already editing Press11
+ok   deleting a machine somebody is editing   player 1 is editing Press11
+ok   joining while a machine is being edited  the joiner is handed the draft and the lock
+ok   committing while the world changes       one command at tick 720
+ok   a command that arrives late              stamped at tick 1200 -- the host's clock
+ok   leaving and coming back                  rebuilt from a snapshot, agrees at 34s
+ok   a client whose hash does not match       1 mismatch, 1 snapshot resent, agreeing again
+```
+
+The last one has to reach in and corrupt a replica, because there is no other
+way to see the correction path without waiting for a bug.
+
+### What it answered, and what it did not
+
+| the question | the answer |
+|---|---|
+| Can two players build one factory while it runs? | Yes. `room test` plays section 25's scenario end to end — host, goal, late join at tick 720, world logistics at one scale while a machine is redesigned at another, a commit, a delete, a restore — and the three reconstructions agree at every probe. |
+| Did the solver have to change? | No. Not one line of `dsl`, `pop`, `rooms`, `domains`, `sim` or `live`. The multiplayer layer is a document, a compiler and a protocol on top of an interface that already had the right shape. |
+| Was `Carry` really the snapshot? | Yes, unchanged, including through JSON. The one thing that had to be added was the *books* — a joining replica that started differencing its delivery counters from zero would count the room's whole history twice. |
+| Is an intention really better than a diff? | Yes, and it is not close. A diff needs a common ancestor; an intention needs a validator. It also made the entire refusal vocabulary fall out for free, because "why can't I do that" and "why won't this compile" turn out to be the same question asked at two altitudes. |
+| Does the machine designer survive contact with a live factory? | Yes, and the draft is why. The live machine keeps its population and its place in every queue while somebody rebuilds it in another window, and the redesign lands as one command at one tick. |
+| Does a machine's orbit make a good recipe? | Better than expected. It gives every machine a *cycle* as well as a rate, so a design with a long orbit runs in enormous batches and needs a bay that can hold one — a real consequence, discovered rather than designed, and the first time experiment 06's "keep the orbit, don't average it" refusal has cost the player anything. |
+| Is it a game yet? | It is a vertical slice. Two people can host, join, build, redesign, argue about a footprint and finish a goal; the parts that are missing are content and polish rather than architecture. Whether it is *fun* is a question for a play session, not a test suite. |
+| What did the hashes actually buy? | One real desynchronisation, in the accounting rather than the simulation, invisible to every test where both clients poll at the same rate. That is the entire argument for canonical hashes stated as an incident. |
+| Is a machine's design really its own? | Yes, and it is the one place the brief's rule needed a UI rather than an argument: **duplicate** is a placement command carrying a copy of the design the machine has at that instant. From the moment the copy lands the two are strangers, and editing one does nothing at all to the other. |
+| Are the diagnostics enough to play with? | At the world altitude, yes — Prototype 1's `why` was already written for exactly this. Inside a machine they are the machine's own, read at the phase its orbit is in, which answers "could this design use more?" but not "is the world feeding it?". Those are two questions and this prototype answers them in two windows. |
+| What is still whole-room? | The correction. A hash mismatch resends the whole snapshot rather than the one deterministic region that differs. The architecture is already per-room rather than per-application, so narrowing it is a change to what goes in the envelope rather than to who sends it. |
+| What is deliberately not here? | Accounts, matchmaking, dedicated servers, cloud persistence, blueprint propagation, collaborative editing of one draft, the full historical ghost timeline, and any attempt at prediction on the client. Section 27 asked for none of them and none of them answer the question. |
+
+The central proof was:
+
+> **A continuously running deterministic factory can be collaboratively
+> constructed at multiple scales by multiple players, with only discrete player
+> commands synchronized between them.**
+
+It survived. The clock never stopped, the browser never guessed, and the three
+copies of the room agreed to the bit.
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -2450,6 +2864,20 @@ src/machine/form/shot.rs    Ex 08: a rasteriser and a PNG writer, so it can be s
                             Ex 09: contact sheets, captions, and the palette metric
 tests/form.rs               Ex 08: the five claims, checked rather than asserted
 tests/read.rs               Ex 09: the five claims about what did *not* change
+tests/space.rs              Ex 10: placement, interfaces, routing and clashes
+
+src/mp/mod.rs        P2: sixty ticks a second, and the two seeds a room is
+src/mp/kit.rs        P2: what may be placed, in seconds rather than in ticks
+src/mp/lower.rs      P2: a machine design becomes a world recipe -- its own orbit
+src/mp/world.rs      P2: the game document, and the compiler down to the IR
+src/mp/cmd.rs        P2: sixteen intentions, and every refusal they can meet
+src/mp/goal.rs       P2: twenty-one hand-written problems, and the books
+src/mp/room.rs       P2: the clock, the log, and one reconstruction per player
+src/mp/net.rs        P2: the only stateful server in the repository
+src/bin/room.rs      P2: serve, test, fail, goals, parts
+web/room/            P2: the lobby, the plot, the inspector, the machine window
+tests/mp.rs          P2: twenty-five properties, with the clock held still
+tests/room_web.mjs   P2: two players and a whole session, without a browser
 ```
 
 Zero dependencies outside `std`. The workbench added a JSON codec and an HTTP
@@ -2464,9 +2892,20 @@ server rather than a dependency tree larger than the crate they serve.
 > **Experiment 06:** stop scaling buildings and start designing one.
 > **Experiment 07:** and then design something that is not a power plant.
 > **Experiment 08:** and then go and look at it.
+> **Experiment 09:** and then find out how much of *looking* is paint.
+> **Experiment 10:** and then let somebody move it.
+> **Prototype 2:** and then let two people build one together, without stopping
+> the clock.
 
-Next is **P2**: a server holding the command log and the canonical snapshots,
-one client playing normally, and a second client joining at tick 80,000,
-loading a snapshot, replaying the commands, and hashing identically — while
-someone is actively building. Both of those objects now exist and have a
-signature; what is missing is a second process.
+The thing this file asked for last — *a second client joining at tick 80,000,
+loading a snapshot, replaying the commands, and hashing identically, while
+someone is actively building* — now runs on every `cargo test`. The `Carry` it
+loads is Prototype 1's, unchanged, which is the part worth noticing: the
+snapshot the networking proof needed turned out to be the object an edit
+already produced.
+
+Next is content rather than architecture — more machines, more goals, a reason
+to keep a room open — and one piece of engineering that was deliberately left
+whole-room: a hash mismatch resends the entire snapshot, where the region
+structure underneath it could resend one deterministic region and replay the
+rest.

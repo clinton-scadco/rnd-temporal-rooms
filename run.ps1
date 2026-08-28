@@ -34,6 +34,16 @@ param(
     # Anything that builds a plant takes --grade a|b|c|d as well as --style and
     # --seed.
     [switch]$Machine,
+    # Prototype 2: the multiplayer vertical slice, which is a third binary
+    # because it is the only thing here that holds state. Everything after the
+    # switch is passed straight to it:
+    #   -Room                          the game, at http://127.0.0.1:8790
+    #   -Room test [--seed N]          section 25's scenario, played headlessly
+    #   -Room fail                     section 26's failure tests
+    #   -Room goals [--seed N]         the templates, and what a seed makes of one
+    #   -Room parts                    the catalogue, and the recipes it compiles to
+    #   -Room check                    the front end, against a live server
+    [switch]$Room,
     [string]$Play,
     # PowerShell binds anything starting with `-` to a parameter, so the
     # scenario's own options get first-class ones rather than being smuggled
@@ -98,6 +108,32 @@ if ($Machine) {
     $cli = @()
     if ($Configs) { $cli += $Configs }
     if ($cli -contains "serve" -and $Port -ne 8787) { $cli += @("--port", $Port) }
+    & $exe @cli
+    exit $LASTEXITCODE
+} elseif ($Room) {
+    cargo build --release --bin room
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $exe = Join-Path $PSScriptRoot "target/release/room.exe"
+    # `check` is the front end's own test, and it needs something to talk to.
+    # Starting and stopping that here is the difference between a test people
+    # run and a test people mean to run.
+    if ($Configs -and $Configs[0] -eq "check") {
+        $port = if ($Port -eq 8787) { 8797 } else { $Port }
+        $srv = Start-Process -FilePath $exe -ArgumentList "serve", "--port", $port `
+            -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 700
+            node (Join-Path $PSScriptRoot "tests/room_web.mjs") $port
+            exit $LASTEXITCODE
+        } finally {
+            if (-not $srv.HasExited) { Stop-Process -Id $srv.Id -Force }
+        }
+    }
+    $cli = @()
+    if ($Configs) { $cli += $Configs } else { $cli += "serve" }
+    if ($cli -contains "serve") {
+        $cli += @("--port", $(if ($Port -eq 8787) { 8790 } else { $Port }))
+    }
     & $exe @cli
     exit $LASTEXITCODE
 } elseif ($Test) {

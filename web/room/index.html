@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prototype 2 &middot; a room two people build in</title>
+<link rel="stylesheet" href="/room.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+
+<header id="bar">
+  <div class="brand">
+    <b>prototype&nbsp;2</b><span>one factory, two players, one clock</span>
+  </div>
+
+  <div class="group room" id="roombox" hidden>
+    <label>room</label><output id="code">------</output>
+    <button id="copy" title="copy the code">copy</button>
+  </div>
+
+  <div class="clock" id="clockbox" hidden>
+    <label>running</label><output id="clock">0:00</output>
+  </div>
+
+  <div class="group" id="views" hidden>
+    <button id="viewworld" class="on">world</button>
+    <button id="viewbench" disabled>machine</button>
+  </div>
+
+  <div class="who" id="who"></div>
+
+  <div class="sync" id="sync" title="canonical hashes, compared every simulated second"></div>
+</header>
+
+<!-- ------------------------------------------------------------ the lobby -->
+<div id="lobby">
+  <div class="card">
+    <h1>Build a factory with somebody else, while it runs.</h1>
+    <p class="lede">
+      The clock starts when the room does and never stops. Machines are
+      designed in three dimensions, placed in the world, wired together and
+      redesigned while everything else keeps running. Every player's copy of
+      the room is rebuilt from the same stream of commands and compared, by
+      hash, every simulated second.
+    </p>
+
+    <div class="two">
+      <section>
+        <h2>Host a room</h2>
+        <label class="field"><span>your name</span><input id="hostname" maxlength="16" value="host"></label>
+        <label class="field"><span>goal</span><select id="template"><option value="">rolled from the seed</option></select></label>
+        <label class="field"><span>seed</span><input id="seed" maxlength="18" placeholder="leave empty for a new one"></label>
+        <button id="host" class="primary">Host</button>
+      </section>
+      <section>
+        <h2>Join one</h2>
+        <label class="field"><span>your name</span><input id="joinname" maxlength="16" value="player two"></label>
+        <label class="field"><span>code</span><input id="joincode" maxlength="6" placeholder="ABCD12" autocapitalize="characters"></label>
+        <button id="join" class="primary">Join</button>
+        <div class="open" id="openrooms"></div>
+      </section>
+    </div>
+    <p class="err" id="lobbyerr"></p>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------- the game -->
+<main id="game" hidden>
+  <aside id="left">
+    <div id="goalcard">
+      <h2>objective</h2>
+      <div class="goaltitle" id="goaltitle"></div>
+      <p class="brief" id="goalbrief"></p>
+      <div id="goallines"></div>
+      <p class="note" id="goalnote"></p>
+    </div>
+
+    <div id="palettebox">
+      <h2>build</h2>
+      <p class="hint" id="tool">pick something, then click the plot &middot; <b>R</b> turns it &middot; <b>Esc</b> puts it down</p>
+      <div class="palette" id="palette"></div>
+      <h2>wire</h2>
+      <div class="tools">
+        <button data-mode="connect" title="a wire between a bay and a machine">connect</button>
+        <button data-mode="belt" title="500 a trip, six vehicles, over short distances">belt</button>
+        <button data-mode="rail" title="5,000 a trip, two vehicles -- it will not leave until it has a full load">rail</button>
+        <button data-mode="delete" title="a building, a wire, or a transport">delete</button>
+      </div>
+    </div>
+  </aside>
+
+  <section id="stage">
+    <canvas id="world"></canvas>
+    <div id="bench" hidden>
+      <canvas id="plant3d"></canvas>
+      <div id="benchbar">
+        <span id="benchname"></span>
+        <span class="rule"></span>
+        <button id="benchedit">open a draft</button>
+        <button id="benchcommit" disabled>commit design</button>
+        <button id="benchdiscard" disabled>discard</button>
+        <span class="rule"></span>
+        <label>level <output id="benchlevel">0</output></label>
+        <button id="benchup">+</button>
+        <button id="benchdown">&minus;</button>
+        <span class="rule"></span>
+        <span class="lock" id="benchlock"></span>
+        <button id="benchclose">back to the world</button>
+      </div>
+      <aside id="benchside">
+        <h2>components</h2>
+        <select id="family"></select>
+        <div class="palette small" id="parts"></div>
+        <h2>this design</h2>
+        <div id="benchinfo"></div>
+      </aside>
+    </div>
+    <div id="ghosts"></div>
+  </section>
+
+  <aside id="right">
+    <h2>inspector</h2>
+    <div id="inspect"><p class="muted">click anything.</p></div>
+    <h2>recently</h2>
+    <div id="feed"></div>
+  </aside>
+</main>
+
+<div id="briefing" hidden>
+  <div class="card">
+    <h1 id="brieftitle">Objective</h1>
+    <p class="lede" id="briefbrief"></p>
+    <p class="note" id="briefnote"></p>
+    <p class="muted">
+      The clock starts when you do, and there is no pause. Everything you build
+      after this you build inside a factory that is already running.
+    </p>
+    <button id="briefstart" class="primary">Start the room</button>
+    <p class="muted" id="briefwait" hidden>waiting for the host to start the room&hellip;</p>
+  </div>
+</div>
+
+<div id="won" hidden>
+  <div class="card">
+    <h1>Goal complete</h1>
+    <div id="wondetail"></div>
+    <p class="muted">The room keeps running. Nothing stops.</p>
+    <button id="wonclose">carry on</button>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
