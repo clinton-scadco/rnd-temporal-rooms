@@ -351,12 +351,19 @@ fn presence(j: &Json) -> Result<Json, String> {
 /// that could post any design here would be drawing something nobody else can
 /// see. `draft` asks for the one being edited; without it you get the design
 /// that is actually running.
+///
+/// The style is not a choice here, the way it is in the designer. The room's
+/// 3D window is an *editor*: the only reason to open a machine is to look at
+/// its components and place another one, and `works` and `hall` both answer
+/// that by putting walls and a roof between the player and the thing they
+/// came in to work on. So a room always builds the yard -- a slab, and the
+/// plant standing on it in the open -- and the enclosure a machine would
+/// otherwise wear is a question for the designer, where nobody is editing.
 fn form(req: &Req) -> Result<Json, String> {
     let j = req.json();
     let code = j.at("code").as_str().unwrap_or_default().to_uppercase();
     let id = j.at("id").as_u64().unwrap_or(0);
     let want_draft = j.at("draft").as_bool().unwrap_or(false);
-    let style = req.q("style");
     let grade = req.q("grade");
     let seed = req.q("seed").parse().unwrap_or(0);
     let design = with_rooms(|rs| {
@@ -366,7 +373,7 @@ fn form(req: &Req) -> Result<Json, String> {
         d.ok_or_else(|| "that installation has no design".to_string())
     })?;
     let ask = crate::machine::form::Ask {
-        style: crate::machine::form::Style::by_tag(&style).unwrap_or_default(),
+        style: crate::machine::form::Style::Yard,
         world: seed,
         grade: crate::machine::form::Grade::by_tag(&grade).unwrap_or_default(),
     };
