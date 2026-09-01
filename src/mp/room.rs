@@ -357,7 +357,10 @@ impl Sim {
         self.advance(c.tick)?;
         self.seq = self.seq.max(c.seq);
         match cmd::apply(&mut self.world, c) {
-            Ok(effects) => {
+            Ok(mut effects) => {
+                if let Act::Deliver { to, item, qty, from } = &c.act {
+                    effects.push(self.land(*to, item, *qty, from));
+                }
                 for e in &effects {
                     if let Effect::Removed { install, by, at } = e {
                         self.ghosts.push(Ghost::of(install, *by, *at));
@@ -376,6 +379,38 @@ impl Sim {
                 self.fault = Some(format!("`{}` was refused here: {e}", c.act.verb()));
                 Err(Fault::at(c.tick, &e))
             }
+        }
+    }
+
+    /// Put a load that arrived from another room into a bay.
+    ///
+    /// This is the one place in the game where a quantity appears in a plant
+    /// without a node having made it, and it works because of the rendezvous
+    /// Prototype 1 built: [`Sim::apply`] has just advanced this reconstruction
+    /// to the arrival's tick, so `carry` *is* the plant's state at that tick,
+    /// and the next `run` pours it back in. No recompile, no restart, and no
+    /// second authority -- the arrival came down the command log like
+    /// everything else, so every replica does this at the same tick with the
+    /// same number.
+    ///
+    /// What will not fit is spilled. A yard is a decision about how long a
+    /// room can be left alone, and undersizing one should cost something.
+    fn land(&mut self, to: Id, item: &str, qty: crate::model::Qty, from: &str) -> Effect {
+        let (name, cap) = match self.world.get(to) {
+            Some(i) => (i.name.clone(), i.capacity()),
+            None => (format!("#{to}"), 0),
+        };
+        let slot = self.carry.qty.entry((name.clone(), item.to_string())).or_insert(0);
+        let room = cap.saturating_sub(*slot);
+        let taken = qty.min(room);
+        *slot += taken;
+        Effect::Arrived {
+            to,
+            name,
+            item: item.to_string(),
+            qty: taken,
+            spilled: qty - taken,
+            from: from.to_string(),
         }
     }
 
@@ -688,6 +723,15 @@ impl Room {
     /// which is the only interpretation that two clients can agree on without
     /// asking each other.
     pub fn submit(&mut self, player: PlayerId, act: Act) -> Result<Cmd, String> {
+        self.submit_for(player, act).map(|(c, _)| c)
+    }
+
+    /// The same, and what it did.
+    ///
+    /// Prototype 3 wants the effects: a train that arrived at a yard too small
+    /// for it spilled, and the shipping office is entitled to know how much
+    /// before the next one leaves.
+    pub fn submit_for(&mut self, player: PlayerId, act: Act) -> Result<(Cmd, Vec<Effect>), String> {
         if !self.started {
             return Err("the room has not started yet".into());
         }
@@ -709,13 +753,24 @@ impl Room {
             }
         };
         for e in &effects {
-            if let Effect::Recommitted { name, to, .. } = e {
-                self.note(tick, player, "redesign", format!("{name} is now {to}"));
+            match e {
+                Effect::Recommitted { name, to, .. } => {
+                    self.note(tick, player, "redesign", format!("{name} is now {to}"));
+                }
+                Effect::Arrived { name, spilled, .. } if *spilled > 0 => {
+                    self.note(
+                        tick,
+                        player,
+                        "spill",
+                        format!("{name} was full: {} could not be unloaded", goal::commas(*spilled)),
+                    );
+                }
+                _ => {}
             }
         }
         self.note(tick, player, c.act.verb(), describe(&c.act, &self.host.world));
         self.log.push(c.clone());
-        Ok(c)
+        Ok((c, effects))
     }
 
     fn note(&mut self, at: Tick, by: PlayerId, verb: &'static str, what: String) {
@@ -926,6 +981,12 @@ fn describe(a: &Act, w: &World) -> String {
             format!("unwired {from} -> {to} in {}", name(*id))
         }
         Act::CommitMachineDesign { id, .. } => format!("committed {}", name(*id)),
+        Act::Deliver { to, item, qty, from } => format!(
+            "{} {} from {from} into {}",
+            goal::commas(*qty),
+            super::lower::item_title(item),
+            name(*to)
+        ),
     }
 }
 

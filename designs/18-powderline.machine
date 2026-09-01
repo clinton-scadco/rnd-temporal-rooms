@@ -1,0 +1,54 @@
+# The first machine the campaign asks anybody to own, and deliberately not a
+# very good one.
+#
+# Iron Valley wants ore powder, which is two crushings and a milling, and the
+# only interesting decision in the whole line is the drive train. A crusher
+# will not take a drive turning at speed 6 and a mill will not take one turning
+# slower than 4, so no single motor can serve both -- each crusher gets a motor
+# through a gearbox, and the mill gets one straight.
+#
+# And there the design stops being adequate. A mill wants 80 rotary and a motor
+# makes 54, so the mill runs at about two thirds and everything upstream backs
+# up behind it. That is on purpose: this is the machine a player is handed, and
+# the second motor it obviously wants is the first thing anybody will do to it.
+#
+#   drive train        180 MW off the grid, for 67 powder a second
+#   the mill           54 rotary of the 80 it asked for
+#   the obvious fix    another motor, a shaft, and a look at the gearboxes
+
+machine "Powder Line"
+brief crush
+
+inlet     I1  at 0,0    draws ore
+
+crusher   C1  at 3,0
+crusher   C2  at 7,0
+mill      MI1 at 11,0
+outlet    O1  at 15,0
+
+gearbox   GB1 at 3,4    ratio 4
+motor     MO1 at 3,7
+mains     M1  at 3,10
+
+gearbox   GB2 at 7,4    ratio 4
+motor     MO2 at 7,7
+mains     M2  at 7,10
+
+motor     MO3 at 11,4
+mains     M3  at 11,7
+
+wire M1.power -> MO1.power
+wire MO1.rotary -> GB1.in
+wire GB1.out -> C1.drive
+
+wire M2.power -> MO2.power
+wire MO2.rotary -> GB2.in
+wire GB2.out -> C2.drive
+
+wire M3.power -> MO3.power
+wire MO3.rotary -> MI1.drive
+
+wire I1.out -> C1.in
+wire C1.out -> C2.in
+wire C2.out -> MI1.in
+wire MI1.out -> O1.solid

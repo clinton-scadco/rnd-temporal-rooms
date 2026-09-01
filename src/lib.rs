@@ -175,7 +175,46 @@
 //! all, to be the snapshot a joining client is handed at tick 80,000 -- which
 //! `live`'s own notes predicted and this experiment finally cashed.
 
+//! # Prototype 3 asks: does finishing one make you want the next?
+//!
+//! Prototype 2 proved that two people can build one deterministic factory
+//! together while it runs. It did not prove that anybody would want to. A Room
+//! was still a disposable challenge -- meet the objective, read the screen,
+//! and there is nothing the finished factory is *for*.
+//!
+//! So `camp` is five hand-authored Rooms in a fixed graph, on one clock, with
+//! trains between them:
+//!
+//! ```text
+//!   enter Room -> build -> meet objective -> Room becomes productive
+//!        ^                                            |
+//!        |                                            v
+//!   reuse or redesign <- new problem needs <- gain a capability
+//! ```
+//!
+//! Four things had to become real. A world with more than one room in it
+//! (`camp::site`). Transport between them, which is where the project finally
+//! spends the promise it has been making since Prototype 1 -- you leave, you
+//! work somewhere else for twenty minutes, and the exact deterministic factory
+//! you designed has simply carried on (`camp::ship`). A design library that
+//! keeps *lineage*, so the answer to a new constraint is a derived copy rather
+//! than a rewrite (`camp::shelf`). And progression that is not a number:
+//! twelve unlockable **components**, never `smelting +10%`, because a
+//! component is a topology that did not exist before and is therefore a reason
+//! to reopen a machine you finished an hour ago (`camp::tech`).
+//!
+//! A room here *is* an `mp::room::Room`, unchanged: same log, same
+//! `(tick, sequence)`, same host-plus-one-replica-per-player, same canonical
+//! hash every simulated second. The one addition below the campaign is
+//! `cmd::Act::Deliver`, and it is a command rather than a poke at a simulation
+//! for the same reason everything else is -- an arrival only the host knew
+//! about would make every replica a different factory. A train landing in
+//! Manufacturing is stamped, ordered and logged like a player putting down a
+//! bay, and lands in the `Carry` at a rendezvous: Prototype 1's mechanism for
+//! *editing* a running plant, used unchanged for *supplying* one.
+
 pub mod analytic;
+pub mod camp;
 pub mod domains;
 pub mod dsl;
 pub mod graph;

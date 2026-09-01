@@ -104,6 +104,10 @@ pub struct Node {
     pub policy: Policy,
     pub priority: Vec<String>,
     pub initial: Vec<Amount>,
+    /// Items this bay has a slot for even though nothing in this document ever
+    /// delivers them: it is filled from outside, by a channel from another
+    /// region. See `holds` in the storage grammar.
+    pub holds: Vec<String>,
 }
 
 impl Node {
@@ -124,6 +128,7 @@ impl Node {
             policy: Policy::RoundRobin,
             priority: Vec::new(),
             initial: Vec::new(),
+            holds: Vec::new(),
         }
     }
 
@@ -382,6 +387,18 @@ impl Graph {
                 n.capacity = sd.capacity;
                 n.policy = sd.policy;
                 n.initial = amounts(&sd.initial);
+                // A declared slot is one nothing deposits into. Anything that
+                // is deposited into is re-derived on the way back in, so
+                // re-emitting it would be noise.
+                n.holds = sd
+                    .slots
+                    .iter()
+                    .filter(|i| !bp.actors.iter().any(|a| {
+                        a.out_stores.contains(&(si as u16))
+                            && a.outputs.iter().any(|o| o.item == **i)
+                    }))
+                    .map(|&i| name(i))
+                    .collect();
                 if sd.policy == Policy::Priority {
                     n.priority =
                         sd.order.iter().map(|&c| sanitise(&bp.actors[c as usize].name)).collect();
@@ -726,6 +743,9 @@ fn sanitise(name: &str) -> String {
 
 fn emit_storage(n: &Node, s: &mut String) {
     s.push_str(&format!("capacity {} ", n.capacity));
+    for it in &n.holds {
+        s.push_str(&format!("holds {it} "));
+    }
     for a in &n.initial {
         s.push_str(&format!("initial {} {} ", a.qty, a.item));
     }

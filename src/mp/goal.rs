@@ -89,6 +89,30 @@ pub enum Shape {
     /// Hold a load on the grid without throwing away more than this share of
     /// the heat that was raised for it.
     CleanPower { mw: u64, secs: u64, max_waste_pct: u64 },
+    /// A load that will not sit still.
+    ///
+    /// Three requirements, and the third is the one with teeth:
+    ///
+    /// ```text
+    ///   every second            >= base
+    ///   some second in every N  >= peak
+    ///   at most `hold` seconds in every N are above `spill`
+    /// ```
+    ///
+    /// Section 5 of Prototype 3's brief asks for a room whose demand is
+    /// unstable, and this is the only goal in the game that a *flat* factory
+    /// cannot answer. Four steam plants held wide open deliver a beautiful
+    /// straight line and fail on the third requirement; the answer is a plant
+    /// that idles and then surges, which is a fact about a machine's orbit
+    /// rather than about its average -- and keeping the orbit instead of the
+    /// average is the one thing experiment 06 refused to give up.
+    ///
+    /// It asks about a peak *somewhere* in each window rather than at a named
+    /// second, because the phase of a machine's orbit depends on the tick it
+    /// was placed at, and a goal nobody can aim at is a lottery.
+    Peak { base: u64, peak: u64, spill: u64, hold: u64, every: u64, secs: u64 },
+    /// Two problems at once, both of which must be true.
+    Both(Box<Shape>, Box<Shape>),
 }
 
 impl Shape {
@@ -98,7 +122,9 @@ impl Shape {
             Shape::Sustain { secs: s, .. }
             | Shape::SustainPair { secs: s, .. }
             | Shape::Compact { secs: s, .. }
-            | Shape::CleanPower { secs: s, .. } => secs(*s),
+            | Shape::CleanPower { secs: s, .. }
+            | Shape::Peak { secs: s, .. } => secs(*s),
+            Shape::Both(a, b) => a.window().max(b.window()),
             _ => 0,
         }
     }
@@ -112,7 +138,16 @@ impl Shape {
             Shape::Frugal { item, .. } => vec![item.clone()],
             Shape::DeliverPair { a, b } => vec![a.0.clone(), b.0.clone()],
             Shape::SustainPair { a, b, .. } => vec![a.0.clone(), b.0.clone()],
-            Shape::CleanPower { .. } => vec!["Power".to_string()],
+            Shape::CleanPower { .. } | Shape::Peak { .. } => vec!["Power".to_string()],
+            Shape::Both(a, b) => {
+                let mut v = a.items();
+                for i in b.items() {
+                    if !v.contains(&i) {
+                        v.push(i);
+                    }
+                }
+                v
+            }
         }
     }
 }
@@ -349,10 +384,97 @@ pub static TEMPLATES: &[Template] = &[
             tiles: r.between(1_100, 2_200) as i64,
         },
     },
+    // ---- prototype 3: the five rooms -----------------------------------
+    //
+    // These five take no numbers from the seed at all. A campaign is a
+    // *sequence* of problems that lean on each other -- the second room's
+    // coal comes from the first, and the fourth room's presses were unlocked
+    // by the third -- and a sequence whose middle term is rolled cannot be
+    // balanced by anybody. So the rooms are authored, exactly as section 5 of
+    // the brief asks for: five different problems rather than one problem with
+    // five sizes.
+    //
+    // They are templates rather than a table of their own because a goal has
+    // to survive a snapshot, and the only thing a snapshot carries is a seed
+    // and a template id. See `camp::site` for the rooms these belong to.
+    Template {
+        id: "site-basin",
+        family: Family::Space,
+        title: "Coal Basin",
+        note: "All the coal and water anybody could want, on a platform the size of a car park.",
+        make: |_| Shape::Compact {
+            item: s("Power"),
+            per_sec: 400,
+            secs: 45,
+            tiles: 480,
+        },
+    },
+    Template {
+        id: "site-valley",
+        family: Family::Delivery,
+        title: "Iron Valley",
+        note: "Ore to the horizon and a coal seam that will keep one plant alight. The rest arrives by rail.",
+        make: |_| Shape::Deliver { item: s("OrePowder"), qty: 24_000 },
+    },
+    Template {
+        id: "site-station",
+        family: Family::Power,
+        title: "Power Station",
+        note: "Water to spare and no fuel at all. Everything it burns spent a minute on a train.",
+        make: |_| Shape::Sustain { item: s("Power"), per_sec: 320, secs: 45 },
+    },
+    Template {
+        id: "site-works",
+        family: Family::Throughput,
+        title: "Manufacturing",
+        note: "No coal, no water, no grid. Everything this room runs on spent two minutes on a train.",
+        make: |_| Shape::Sustain { item: s("Gear"), per_sec: 45, secs: 45 },
+    },
+    Template {
+        id: "site-final",
+        family: Family::Mixed,
+        title: "Final Works",
+        note: "A load that will not sit still, and a gear line that has to keep going while it moves.",
+        make: |_| {
+            Shape::Both(
+                Box::new(Shape::Peak {
+                    base: 110,
+                    peak: 380,
+                    spill: 240,
+                    hold: 2,
+                    every: 10,
+                    secs: 75,
+                }),
+                Box::new(Shape::SustainPair {
+                    a: (s("Gear"), 30),
+                    b: (s("Concentrate"), 20),
+                    secs: 45,
+                }),
+            )
+        },
+    },
 ];
 
 pub fn template(id: &str) -> Option<&'static Template> {
     TEMPLATES.iter().find(|t| t.id == id)
+}
+
+impl Template {
+    /// Whether a seed may roll this one.
+    ///
+    /// The five campaign rooms may not be rolled. They are authored to lean
+    /// on each other, and one of them turning up on its own in a single-room
+    /// game would be a brief with half its premises missing -- "no coal, no
+    /// water, no grid" is a fine problem when there is a railway, and an
+    /// unwinnable one when there is not.
+    pub fn rollable(&self) -> bool {
+        !self.id.starts_with("site-")
+    }
+}
+
+/// The templates a seed may choose among.
+pub fn rollable() -> Vec<&'static Template> {
+    TEMPLATES.iter().filter(|t| t.rollable()).collect()
 }
 
 // ==================================================================== goal
@@ -374,7 +496,10 @@ impl Goal {
         let mut r = Rng(seed);
         let t = match forced.and_then(template) {
             Some(t) => t,
-            None => &TEMPLATES[r.pick(TEMPLATES.len())],
+            None => {
+                let open = rollable();
+                open[r.pick(open.len())]
+            }
         };
         let shape = (t.make)(&mut r);
         Goal {
@@ -389,49 +514,9 @@ impl Goal {
 
     /// The objective in one sentence, in seconds and whole items.
     pub fn brief(&self) -> String {
-        let n = commas;
-        match &self.shape {
-            Shape::Deliver { item, qty } => {
-                format!("Deliver {} {}.", n(*qty), item_title(item))
-            }
-            Shape::DeliverPair { a, b } => format!(
-                "Deliver {} {} and {} {}.",
-                n(a.1),
-                item_title(&a.0),
-                n(b.1),
-                item_title(&b.0)
-            ),
-            Shape::Sustain { item, per_sec, secs } => format!(
-                "Hold {} {} a second for {secs} seconds.",
-                n(*per_sec),
-                item_title(item)
-            ),
-            Shape::SustainPair { a, b, secs } => format!(
-                "Hold {} {} and {} {} a second, both at once, for {secs} seconds.",
-                n(a.1),
-                item_title(&a.0),
-                n(b.1),
-                item_title(&b.0)
-            ),
-            Shape::Frugal { item, qty, cap_item, cap_qty } => format!(
-                "Deliver {} {} having drawn no more than {} {}.",
-                n(*qty),
-                item_title(item),
-                n(*cap_qty),
-                item_title(cap_item)
-            ),
-            Shape::Compact { item, per_sec, secs, tiles } => format!(
-                "Hold {} {} a second for {secs} seconds, with the whole factory inside {} tiles.",
-                n(*per_sec),
-                item_title(item),
-                n(*tiles as u64)
-            ),
-            Shape::CleanPower { mw, secs, max_waste_pct } => format!(
-                "Hold {} MW for {secs} seconds while wasting less than {max_waste_pct}% of the heat you raise.",
-                n(*mw)
-            ),
-        }
+        sentence(&self.shape)
     }
+
 
     /// What the room is furnished with at tick zero.
     ///
@@ -508,6 +593,61 @@ impl Goal {
             .set("seed", Json::big(self.seed as u128))
             .set("window", self.shape.window())
             .set("progress", p.to_json())
+    }
+}
+
+/// One objective, in the sentence a player reads.
+///
+/// A free function rather than a method because [`Shape::Both`] has to ask it
+/// about its halves, and a goal made of two problems should read as two
+/// sentences rather than as a new kind of grammar.
+pub fn sentence(shape: &Shape) -> String {
+    let n = commas;
+    match shape {
+        Shape::Deliver { item, qty } => format!("Deliver {} {}.", n(*qty), item_title(item)),
+        Shape::DeliverPair { a, b } => format!(
+            "Deliver {} {} and {} {}.",
+            n(a.1),
+            item_title(&a.0),
+            n(b.1),
+            item_title(&b.0)
+        ),
+        Shape::Sustain { item, per_sec, secs } => format!(
+            "Hold {} {} a second for {secs} seconds.",
+            n(*per_sec),
+            item_title(item)
+        ),
+        Shape::SustainPair { a, b, secs } => format!(
+            "Hold {} {} and {} {} a second, both at once, for {secs} seconds.",
+            n(a.1),
+            item_title(&a.0),
+            n(b.1),
+            item_title(&b.0)
+        ),
+        Shape::Frugal { item, qty, cap_item, cap_qty } => format!(
+            "Deliver {} {} having drawn no more than {} {}.",
+            n(*qty),
+            item_title(item),
+            n(*cap_qty),
+            item_title(cap_item)
+        ),
+        Shape::Compact { item, per_sec, secs, tiles } => format!(
+            "Hold {} {} a second for {secs} seconds, with the whole factory inside {} tiles.",
+            n(*per_sec),
+            item_title(item),
+            n(*tiles as u64)
+        ),
+        Shape::CleanPower { mw, secs, max_waste_pct } => format!(
+            "Hold {} MW for {secs} seconds while wasting less than {max_waste_pct}% of the heat you raise.",
+            n(*mw)
+        ),
+        Shape::Peak { base, peak, spill, hold, every, secs } => format!(
+            "For {secs} seconds: never below {} MW, over {} MW at least once in every {every} seconds, and above {} MW for no more than {hold} seconds in any {every}.",
+            n(*base),
+            n(*peak),
+            n(*spill)
+        ),
+        Shape::Both(a, b) => format!("{} {}", sentence(a), sentence(b)),
     }
 }
 
@@ -860,6 +1000,14 @@ impl Progress {
 pub fn evaluate(goal: &Goal, acct: &Acct) -> Progress {
     let mut lines: Vec<Line> = Vec::new();
     let mut warming = false;
+    judge(&goal.shape, acct, &mut lines, &mut warming);
+    let met = !lines.is_empty() && lines.iter().all(|l| l.met);
+    Progress { lines, met, done_at: acct.done_at, done: acct.done.clone(), warming }
+}
+
+/// One shape's requirements, appended. Recursive, so that [`Shape::Both`] is
+/// two problems rather than a third kind of problem.
+fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) {
     let rate = |acct: &Acct, item: &str, secs_of: u64| -> Option<f64> {
         let (then, now) = acct.window(secs(secs_of))?;
         Some((now.got(item) - then.got(item)) as f64 / secs_of.max(1) as f64)
@@ -874,14 +1022,14 @@ pub fn evaluate(goal: &Goal, acct: &Acct) -> Progress {
             met: have >= qty as f64,
         });
     };
-    match &goal.shape {
-        Shape::Deliver { item, qty } => pile(&mut lines, item, *qty),
+    match shape {
+        Shape::Deliver { item, qty } => pile(lines, item, *qty),
         Shape::DeliverPair { a, b } => {
-            pile(&mut lines, &a.0, a.1);
-            pile(&mut lines, &b.0, b.1);
+            pile(lines, &a.0, a.1);
+            pile(lines, &b.0, b.1);
         }
         Shape::Frugal { item, qty, cap_item, cap_qty } => {
-            pile(&mut lines, item, *qty);
+            pile(lines, item, *qty);
             let used = acct.used(cap_item) as f64;
             lines.push(Line {
                 what: format!("{} drawn", item_title(cap_item)),
@@ -893,7 +1041,7 @@ pub fn evaluate(goal: &Goal, acct: &Acct) -> Progress {
         }
         Shape::Sustain { item, per_sec, secs: w } => {
             let got = rate(acct, item, *w);
-            warming |= got.is_none();
+            *warming |= got.is_none();
             lines.push(Line {
                 what: format!("{} a second, held for {w}s", item_title(item)),
                 have: got.unwrap_or(0.0),
@@ -905,7 +1053,7 @@ pub fn evaluate(goal: &Goal, acct: &Acct) -> Progress {
         Shape::SustainPair { a, b, secs: w } => {
             for (item, need) in [a, b] {
                 let got = rate(acct, item, *w);
-                warming |= got.is_none();
+                *warming |= got.is_none();
                 lines.push(Line {
                     what: format!("{} a second, held for {w}s", item_title(item)),
                     have: got.unwrap_or(0.0),
@@ -917,7 +1065,7 @@ pub fn evaluate(goal: &Goal, acct: &Acct) -> Progress {
         }
         Shape::Compact { item, per_sec, secs: w, tiles } => {
             let got = rate(acct, item, *w);
-            warming |= got.is_none();
+            *warming |= got.is_none();
             lines.push(Line {
                 what: format!("{} a second, held for {w}s", item_title(item)),
                 have: got.unwrap_or(0.0),
@@ -936,7 +1084,7 @@ pub fn evaluate(goal: &Goal, acct: &Acct) -> Progress {
         }
         Shape::CleanPower { mw, secs: w, max_waste_pct } => {
             let got = rate(acct, "Power", *w);
-            warming |= got.is_none();
+            *warming |= got.is_none();
             lines.push(Line {
                 what: format!("megawatts, held for {w}s"),
                 have: got.unwrap_or(0.0),
@@ -953,9 +1101,90 @@ pub fn evaluate(goal: &Goal, acct: &Acct) -> Progress {
                 met: pct <= *max_waste_pct as f64,
             });
         }
+        Shape::Peak { base, peak, spill, hold, every, secs: w } => {
+            // Every second in the window, as a delivery rather than a total:
+            // a peak is a fact about one second, and a cumulative counter has
+            // no opinion about seconds at all.
+            match deliveries(acct, "Power", *w) {
+                None => {
+                    *warming = true;
+                    lines.push(Line {
+                        what: format!("the load, second by second, over {w}s"),
+                        have: 0.0,
+                        need: *base as f64,
+                        unit: "MW",
+                        met: false,
+                    });
+                }
+                Some(mw) => {
+                    let span = (*every as usize).max(1).min(mw.len());
+                    let floor = mw.iter().copied().min().unwrap_or(0);
+                    // The worst window, twice over: the quietest `every`
+                    // seconds anywhere in the run, and the busiest. A surge
+                    // that happened once is not a surge, and a plant that
+                    // spilled once is not a spiller.
+                    let surge = mw
+                        .windows(span)
+                        .map(|w| w.iter().copied().max().unwrap_or(0))
+                        .min()
+                        .unwrap_or(0);
+                    let over = mw
+                        .windows(span)
+                        .map(|w| w.iter().filter(|&&v| v > *spill).count() as u64)
+                        .max()
+                        .unwrap_or(0);
+                    lines.push(Line {
+                        what: "the floor, at its worst second".into(),
+                        have: floor as f64,
+                        need: *base as f64,
+                        unit: "MW",
+                        met: floor >= *base,
+                    });
+                    lines.push(Line {
+                        what: format!("a surge, in every {every}s"),
+                        have: surge as f64,
+                        need: *peak as f64,
+                        unit: "MW",
+                        met: surge >= *peak,
+                    });
+                    lines.push(Line {
+                        what: format!("seconds over {} MW, in any {every}s", commas(*spill)),
+                        have: over as f64,
+                        need: *hold as f64,
+                        unit: "at most",
+                        met: over <= *hold,
+                    });
+                }
+            }
+        }
+        Shape::Both(a, b) => {
+            judge(a, acct, lines, warming);
+            judge(b, acct, lines, warming);
+        }
     }
-    let met = !lines.is_empty() && lines.iter().all(|l| l.met);
-    Progress { lines, met, done_at: acct.done_at, done: acct.done.clone(), warming }
+}
+
+/// What was delivered in each of the last `w` seconds, or `None` if the room
+/// has not been running that long.
+///
+/// The books hold cumulative totals at one sample a second, so a second's
+/// delivery is a difference between neighbours -- and the neighbours are on
+/// the lattice, which is what makes two replicas agree about a spike.
+fn deliveries(acct: &Acct, item: &str, w: u64) -> Option<Vec<u64>> {
+    let now = acct.samples.last()?;
+    if now.at < secs(w) {
+        return None;
+    }
+    let from = now.at - secs(w);
+    let mut out = Vec::with_capacity(w as usize);
+    let mut prev: Option<&Sample> = None;
+    for s in acct.samples.iter().filter(|s| s.at >= from) {
+        if let Some(p) = prev {
+            out.push(s.got(item).saturating_sub(p.got(item)));
+        }
+        prev = Some(s);
+    }
+    (out.len() as u64 >= w).then_some(out)
 }
 
 /// The next lattice point at or after `t`.

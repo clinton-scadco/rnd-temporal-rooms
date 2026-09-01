@@ -523,7 +523,8 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
                         name: inst_name(&nodename, k, mult),
                         shared: body.shared || shared_decl,
                         capacity: body.capacity,
-                        slots: Vec::new(),
+                        // Declared slots go in first; derivation adds the rest.
+                        slots: body.holds.clone(),
                         initial: body.initial.clone(),
                         qty_offset: 0,
                         clients: Vec::new(),
@@ -832,6 +833,24 @@ fn parse_blueprint(p: &mut Parser, items: &mut Items, name: String) -> Result<Bl
 struct StorageBody {
     capacity: Qty,
     initial: Vec<Stack>,
+    /// Slots declared rather than derived.
+    ///
+    /// A bay normally holds exactly what is put into it, and the producing
+    /// side is the only side allowed to say what that is -- see the derivation
+    /// below, and the reason it refuses to look at consumers. That rule has
+    /// one honest exception: a bay filled from *outside* this plant, by a
+    /// channel from another region. Nothing in the document delivers to it, so
+    /// nothing in the document can declare its slot, and without a declaration
+    /// every machine drawing from it is refused for being fed by nobody.
+    ///
+    /// ```text
+    ///   storage Yard5 { capacity 240000 holds Coal policy round_robin }
+    /// ```
+    ///
+    /// `initial` cannot say it: a bay that is supplied from elsewhere starts
+    /// *empty*, and `initial 0 Coal` is refused two lines further down for the
+    /// good reason that it usually means somebody mistyped a quantity.
+    holds: Vec<ItemId>,
     policy: Policy,
     priority: Vec<String>,
     shared: bool,
@@ -845,6 +864,7 @@ fn parse_storage_body(
     p.expect(Tok::LBrace)?;
     let mut capacity: Option<Qty> = None;
     let mut initial: Vec<Stack> = Vec::new();
+    let mut holds: Vec<ItemId> = Vec::new();
     let mut policy = Policy::Index;
     let mut priority: Vec<String> = Vec::new();
     let mut shared = false;
@@ -859,11 +879,20 @@ fn parse_storage_body(
             shared = true;
         } else if p.eat_word("capacity") {
             capacity = Some(p.expect_num()?);
+        } else if p.eat_word("holds") {
+            let item = p.expect_ident()?;
+            let id = items.intern(&item, line)?;
+            if !holds.contains(&id) {
+                holds.push(id);
+            }
         } else if p.eat_word("initial") {
             let qty = p.expect_num()?;
             let item = p.expect_ident()?;
             if qty == 0 {
-                bail!(line, "`{nodename}` declares zero initial {item}");
+                bail!(
+                    line,
+                    "`{nodename}` declares zero initial {item} --                      a bay that is filled from outside says `holds {item}`"
+                );
             }
             initial.push(Stack { item: items.intern(&item, line)?, qty });
         } else if p.eat_word("policy") {
@@ -911,7 +940,7 @@ fn parse_storage_body(
             "storage `{nodename}` starts with {seeded} units but holds only {capacity}"
         );
     }
-    Ok(StorageBody { capacity, initial, policy, priority, shared })
+    Ok(StorageBody { capacity, initial, holds, policy, priority, shared })
 }
 
 /// Everything a machine declaration can carry, gathered before it is resolved

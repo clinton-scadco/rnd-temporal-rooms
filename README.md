@@ -95,11 +95,25 @@ Yes — and the solver did not change by one line. What changed is what a comman
 *is*: an intention rather than a document diff, validated and stamped by one
 authority, with the diff derived deterministically on the other side.
 
+**Prototype 3** asks the only question Prototype 2 left standing. Two people can
+build one deterministic factory together while it runs — fine. But a Room was
+still a disposable challenge: meet the objective, read the screen, and there is
+nothing the finished factory is *for*.
+
+> **Does finishing one factory make me want to start the next one?**
+
+So the twelfth experiment is five hand-authored Rooms in a fixed graph, on one
+clock, with trains between them, twelve unlockable *components* rather than a
+research tree of percentages, and a design library that remembers where every
+machine came from. A Room becomes a supplier rather than a scoreboard, and it
+keeps supplying while you are somewhere else — which is the first time this
+project has spent the promise it has been making since Prototype 1.
+
 ## Quick start
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 130 cross-validation tests
+.\run.ps1 -Test    # 211 cross-validation tests
 .\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
 
@@ -2597,6 +2611,303 @@ The central proof was:
 It survived. The clock never stopped, the browser never guessed, and the three
 copies of the room agreed to the bit.
 
+## Prototype 3: the five rooms
+
+Prototype 2 answered a technical question and left a design one standing. Two
+people can build one deterministic factory together while it runs — proved,
+hashed, and not in doubt. But a Room was still a disposable challenge. You met
+the objective, the screen said so, and the factory you had just spent an hour
+on had nothing further to do.
+
+> **Does finishing one factory make me want to start the next one?**
+
+Answering that needed four things to stop being hypothetical.
+
+```text
+   Coal Basin ─── coal ───┬──────────────► Power Station
+    (basin)               │                  (station)
+        │                 │                      │
+        ├──── coal ──► Iron Valley               │ power
+        │              (valley)                  ▼
+        │                 │              Manufacturing
+        │                 │ concentrate    (works)
+        │                 │                      │ gears
+        └──── coal ──►  Final Works ◄────────────┘
+                         (final)
+```
+
+```powershell
+.\run.ps1 -Camp              # the campaign, at http://127.0.0.1:8795
+.\run.ps1 -Camp play         # all five rooms, played headlessly
+.\run.ps1 -Camp map          # five rooms, seven lanes, three fleets
+.\run.ps1 -Camp tech         # the twelve components, and what each one opens
+.\run.ps1 -Camp refuse       # everything the campaign will not allow
+```
+
+### 1. A room is still a Room
+
+Nothing in `camp` reimplements Prototype 2. A site **is** an `mp::room::Room`:
+its own goal, its own command log, its own `(tick, sequence)` ordering, its own
+host reconstruction and one replica per player, compared by canonical hash
+every simulated second. Five of them is five of that.
+
+The campaign adds a clock they share, a ledger between them, a shelf of designs
+and a set of unlocks — and nothing else. The whole of `web/room/` is served
+here unchanged and unforked, the same way Prototype 2 served experiment 10's
+renderer; the campaign front end is a *shell* around it with a map, a library,
+a component list and a shipping board.
+
+That also settles the question the brief asks sideways. *Does a room keep
+running while nobody is there?* It does, because the campaign advances all five
+on every pump regardless of who is looking at which. There is no active room.
+There are five factories and one clock.
+
+### 2. An arrival is a command
+
+The obvious way to move thirty thousand coal between rooms is to reach into the
+destination's simulation and add it to a bay. That works exactly once, on the
+host, and then every replica is a different factory.
+
+So an arrival is an `Act::Deliver` — stamped, ordered and logged like a player
+putting down a bay:
+
+```text
+depot ships 240 coal/s at Coal Basin
+     │ ledger, every five simulated seconds, on a lattice
+train leaves with 30,000
+     │ 57 seconds
+Deliver { to: Yard14, item: Coal, qty: 30,000 }  →  Power Station's log
+     │
+carry.qty[(Yard14, Coal)] += 30,000    at a rendezvous, on every replica
+```
+
+The last line is the interesting one. `Carry` is Prototype 1's mechanism for
+*editing* a running plant: bring the region to the tick, harvest, pour the
+state back in. Used unchanged, it is also the mechanism for *supplying* one.
+The canonical hash covers it because the carry is part of the canonical hash,
+and nothing about the multiplayer proof had to be weakened to move a train
+between rooms.
+
+The settlement is on a lattice for the same reason the accounting is. What a
+route dispatches is a *difference* — how much the origin has shipped since the
+last look — and if "the last look" meant "whenever a browser polled", two
+clients polling at different rates would batch the same coal into different
+trains and the two rooms would diverge from opposite ends. So the ledger only
+ever settles at multiples of five simulated seconds, whatever the clock is
+doing, and a departure is a function of the clock rather than of the network.
+
+Conservation is not assumed. What leaves is what the origin's depot actually
+swallowed; what arrives is what left, minus whatever the destination yard was
+too small to hold — and the spill is reported, because a yard is a decision
+about how long a room can be left alone and undersizing one should cost
+something.
+
+### 3. Progression is a component, never a percentage
+
+The brief was blunt about this and it was right:
+
+```text
+avoid:   Research: Smelting +10%
+instead: Unlock: counterflow heat exchanger
+```
+
+A percentage is a number that moves. A component is a *topology that did not
+exist before*, and the difference is that the second one sends you back to a
+machine you finished an hour ago. Twelve of the thirty-eight components are
+held back:
+
+```text
+motor gearbox shaft      a drive train: something to turn a crusher with
+separator                a split, and therefore a byproduct
+preheater condenser      heat and vapour that come back rather than leave
+furnace rollmill press   hot metal, and a shape to put it in
+crank                    rotary becomes strokes
+lathe                    one machine where three were, and swarf
+column                   the crude chain, which nobody has touched yet
+```
+
+There is no second list of unlocked *machines*. A prototype in the catalogue is
+placeable exactly when every component in its stock design has been unlocked,
+which is computed rather than authored — so the Steam Crusher appears the
+moment the separator does, and nobody has to remember to write that down twice.
+A locked prototype is shown rather than hidden, greyed, with the missing
+component named: a progression nobody can look forward to is a progression
+nobody notices.
+
+The ladder is checked by a test rather than by hope. Walking the rooms in
+dependency order, every room's intended answer must be buildable from the
+components handed over *before* it — which is the property that makes a
+progression a progression rather than a lock with its own key inside.
+
+### 4. Five problems, not one problem five times
+
+This was the single most important instruction in the brief: do not turn
+"produce 100 gears" into "produce 500 gears" and call it a second room.
+
+| room | the problem | the objective |
+|---|---|---|
+| **Coal Basin** | a platform too small for the plant it needs | 400 MW held for 45 s, inside 480 tiles |
+| **Iron Valley** | all the land in the world, and a seam worth 35 coal/s | deliver 24,000 ore powder |
+| **Power Station** | every lump of fuel is a minute away, in trainloads | 320 MW held for 45 s |
+| **Manufacturing** | no coal, no water, no grid: two live supply chains | 45 gears/s held for 45 s |
+| **Final Works** | a load that will not sit still | see below |
+
+Final Works is the one that could not have been asked before experiment 06. Its
+demand is:
+
+```text
+never below 110 MW
+over 380 MW at least once in every 10 seconds
+above 240 MW for no more than 2 seconds in any 10
+```
+
+Four steam plants held wide open satisfy the first two requirements and fail the
+third every second of the run. The answer is a plant that idles and then
+surges — which is a fact about a machine's *orbit* rather than about its
+average, and keeping the orbit instead of the average is the one thing
+experiment 06 refused to give up. The stock Pulse Plant makes 362 MW every
+seven seconds and nothing in between; two flat plants under it give the floor.
+Six experiments later, that refusal finally bought something a player has to
+care about.
+
+### What was tried and thrown away
+
+The brief asks for a room whose problem is scarce water, answered by recycling
+steam through a condenser. It is not here, and the reason is worth writing down
+rather than quietly dropping.
+
+In this machine model the water cost of a megawatt is fixed. Every stock plant
+lands within two percent of `1.48 water/MW`, because the chain from exchanger to
+turbine to generator has no slack in it — and a turbine *consumes* its steam
+rather than exhausting it, so there is nothing downstream for a condenser to
+catch. A room whose problem was water would have been a room with exactly one
+answer, arrived at by arithmetic rather than by design.
+
+So the water room became a fuel-logistics room, and the condenser earns its
+place as an unlock that pays off inside the refinery chain, where the light
+fraction really does come off as vapour. Measuring the candidate constraints
+before authoring the rooms — footprint, waste, latency, yield — cost an
+afternoon and saved shipping a room that cannot be solved.
+
+### What had to change below the campaign
+
+Four things, all small, all in Prototype 2 or below, and each one a gap the
+single-room version could not have found:
+
+**A world has a plot size.** Prototype 2 had one room and one `PLOT`. "Very
+constrained footprint" is a sentence a room can only say by being smaller than
+the others.
+
+**An installation can be rated.** A coal seam that yields 35 a second rather
+than 100 is how a room states scarcity. Nothing a player places ever carries
+one; it exists so that a room can be *furnished*.
+
+**A bay can be filled from outside.** This one was a genuine hole. A bay holds
+exactly what is put into it, and the producing side is the only side allowed to
+say what that is — a rule `dsl` enforces for a good reason. An import yard is
+filled by a channel from another region, so nothing in the document can declare
+its slot, and every machine drawing from one was refused for being fed by
+nobody. The fix is one keyword:
+
+```text
+storage Yard14 { capacity 240000 holds Coal policy round_robin }
+```
+
+`initial 0 Coal` could not have said it, and is still refused, for the good
+reason that it usually means somebody mistyped a quantity.
+
+**A submitted command can report its effects.** A train that arrived at a yard
+too small for it spilled, and the shipping office is entitled to know how much
+before the next one leaves.
+
+### The playthrough
+
+`camp play` is this experiment's acceptance command. It plays all five rooms end
+to end with the clock in a vice — building, opening supply lines, keeping a
+design on the shelf, going back to Iron Valley once the separator arrives — and
+then asks the three questions the prototype exists to answer.
+
+```text
+Coal Basin met at 0:53      unlocked: motor, gearbox, shaft
+  a stamping line is refused: the press has not been unlocked
+  Iron Valley is shut: Coal Basin has to be producing first
+Iron Valley met at 7:31     unlocked: separator, preheater, condenser
+  a train starts running coal, Basin to Valley: 50 seconds, 30,000 a load
+Power Station met at 10:21  unlocked: furnace, rollmill, press, crank
+Manufacturing met at 14:24  unlocked: lathe
+  a stamping line -- the press arrived with the Power Station
+Iron Valley, again: a steam crusher, which was not placeable an hour ago
+Final Works met at 18:51    unlocked: column
+
+what moved between the rooms
+  basin   -> valley  Coal        train     200,000 in 21 trips, 0 spilled
+  basin   -> station Coal        train      84,000 in 11 trips, 0 spilled
+  basin   -> works   Coal        convoy     11,550 in  5 trips, 0 spilled
+  station -> works   Power       convoy     90,000 in 16 trips, 0 spilled
+  basin   -> final   Coal        train      11,400 in  2 trips, 0 spilled
+  works   -> final   Gear        convoy      7,500 in  5 trips, 0 spilled
+  valley  -> final   Concentrate convoy      3,000 in  3 trips, 0 spilled
+
+the proof
+  rooms finished        5 of 5
+  hash comparisons      219
+  basin     agree  host 03ea7da8…  Ada 03ea7da8…  Bruno 03ea7da8…
+  valley    agree  host 3d2fd37f…  Ada 3d2fd37f…  Bruno 3d2fd37f…
+  station   agree  host 185d8192…  Ada 185d8192…  Bruno 185d8192…
+  works     agree  host 73885438…  Ada 73885438…  Bruno 73885438…
+  final     agree  host ecffed22…  Ada ecffed22…  Bruno ecffed22…
+```
+
+Nineteen minutes of simulated time for a run that already knows the answers; a
+player spends the rest of the hour designing. Two players hold ten replicas
+between them — five rooms each — and every one of them is fed the command
+stream of a room they may not have looked at for ten minutes.
+
+`camp refuse` does for the campaign what `room fail` does for the room:
+
+```text
+walking into a room that is not open      Final Works is not open yet: Iron
+                                          Valley and Manufacturing have to be
+                                          producing first
+placing a machine whose parts are locked  Furnace Chamber has not been unlocked
+                                          yet -- metal hot enough to be shaped,
+                                          and past melting, poured
+bulldozing the seam it came with          Coal Pit came with Coal Basin and
+                                          cannot be removed
+issuing an arrival by hand                an arrival is not something a player
+                                          does
+opening a lane the map does not have      there is no coal line from basin to
+                                          basin
+saving two designs under one name         `Mk1` is already on the shelf -- copy
+                                          it instead
+```
+
+### What it answered, and what it did not
+
+| the question | the answer |
+|---|---|
+| Does a room keep running while nobody is there? | Yes, and it is tested rather than asserted: the same script run polling every second and polling every sixty produces the same canonical hash and the same deliveries. That is the whole promise of `state(log, T)`, finally spent on something a player would notice. |
+| Did the solver have to change? | No. Not one line of `pop`, `rooms`, `domains`, `sim` or `analytic`. `dsl` gained one keyword, and it gained it because an import yard is a real thing the language could not say. |
+| Was `Carry` really the mechanism for supply as well as for edits? | Yes, unchanged. An arrival is a rendezvous with a quantity added at it, which is what an edit already was. |
+| Is an unlockable component better than an unlockable number? | Much better, and the reason is legible in the playthrough: "a steam crusher, which was not placeable an hour ago" is a line about going *back*, and no percentage produces one. Deriving machine unlocks from component unlocks rather than authoring both was the decision that made it cheap. |
+| Are five problems really different? | Four of them are, and the fifth is honest about being a logistics problem rather than a design one. Measuring first is what stopped it being five sizes of one problem: one of the constraints the brief suggested turned out not to exist in this machine model, and finding that out before authoring was worth more than the room it cost. |
+| Does the design library earn "major mechanic"? | Not yet. Save, copy, lineage and place-from-shelf all work and are tested, but nothing in the five rooms *forces* a derived design — the stock catalogue answers every objective. The mechanic is built; the content that would make it necessary is not. |
+| What is the campaign authoritative about? | Which rooms are open, what may be built, what leaves on a train, and what is on the shelf. Every one of those refusals is structural in exactly Prototype 2's sense — it depends on campaign state and not on who asked or when the packet arrived — so it is the same refusal on every machine, and a refused command never enters a room's log. |
+| Is the whole thing 60–120 minutes? | The scripted run is nineteen minutes of simulated time and knows every answer in advance. A player who has to *design* the powder line rather than place it, and who wants Iron Valley shipping concentrate rather than powder, is in the right band. Whether they *want* to is a play session, not a test suite. |
+| What is deliberately not here? | Procedural rooms, blueprint propagation, maintenance and wear, recursive machines, and any attempt at making the shelf propagate into placed machines. The brief asked for none of them, and the first one in particular is the thing you do *after* you know what a good problem looks like. |
+
+The central question was:
+
+> **Does the player develop attachment to their factory network and machine
+> designs, and does gaining new capabilities make them voluntarily go back and
+> improve old systems?**
+
+The second half now has a mechanism and a demonstration: the separator arrives
+in Iron Valley's completion screen, Final Works asks for concentrate, and the
+only place to make it is a room that has been quietly shipping powder for ten
+minutes. The first half is a question about an evening with two people and a
+browser, and no test suite is going to answer it.
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -2812,6 +3123,24 @@ These are real, and worth stating plainly.
     standing in, grade A on the twelve behind it — needs the grade to be per
     piece and per distance, which is the same machinery as the LOD prefix and
     has not been wired to it.
+26. **The campaign is one process and one save.** `camp serve` holds a single
+    campaign in memory. There is no persistence, so closing the window closes
+    the world — which is fine for a prototype whose question is about an hour
+    and wrong for anything else.
+27. **The design library is available, not necessary.** The five rooms can all
+    be answered out of the stock catalogue. Save, copy, lineage and
+    place-from-shelf work and are tested, but no room yet poses a constraint
+    that *requires* a derived design, so the mechanic the brief called major is
+    on probation until a room forces it.
+28. **A route is filled in the order it was opened.** Three rooms wanting coal
+    from one yard are served first-come, each up to the cap the player set. It
+    is deterministic and legible, and it is not the priority system a real
+    shortage wants — a room that opened its lane late starves quietly rather
+    than negotiating.
+29. **Rooms are authored, and there are five.** Deliberately: the brief was
+    explicit that procedural generation should wait until somebody knows what a
+    good problem looks like. What that means today is that the campaign's whole
+    content is one table, and it ends.
 
 ## Layout
 
@@ -2832,7 +3161,7 @@ src/why.rs        Prototype 1: why a thing is not running, and what binds
 src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
 src/main.rs       experiment harness, `serve`, `export` and `play`
 web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            143 cross-validation tests
+tests/            211 cross-validation tests
 configs/          the fifteen configurations, plus the first scenario plant
 scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
@@ -2878,6 +3207,18 @@ src/bin/room.rs      P2: serve, test, fail, goals, parts
 web/room/            P2: the lobby, the plot, the inspector, the machine window
 tests/mp.rs          P2: twenty-five properties, with the clock held still
 tests/room_web.mjs   P2: two players and a whole session, without a browser
+
+src/camp/mod.rs      P3: five rooms, one clock, and what had to become real
+src/camp/site.rs     P3: the five rooms, hand-authored and deliberately nasty
+src/camp/tech.rs     P3: twelve components, never a percentage
+src/camp/shelf.rs    P3: My Machines, and the lineage a copy remembers
+src/camp/ship.rs     P3: lanes, fleets, and a ledger that settles on a lattice
+src/camp/run.rs      P3: the campaign -- five Rooms, a pump, and the refusals
+src/camp/net.rs      P3: the same client, one campaign, five room codes
+src/bin/camp.rs      P3: serve, play, map, tech, refuse
+web/camp/            P3: the map, the shelf, the components, the shipping board
+tests/camp.rs        P3: eighteen properties, including the one about leaving
+tests/camp_web.mjs   P3: the campaign half of the client, without a browser
 ```
 
 Zero dependencies outside `std`. The workbench added a JSON codec and an HTTP
@@ -2896,16 +3237,19 @@ server rather than a dependency tree larger than the crate they serve.
 > **Experiment 10:** and then let somebody move it.
 > **Prototype 2:** and then let two people build one together, without stopping
 > the clock.
+> **Prototype 3:** and then give them somewhere to go next, and make the thing
+> they leave behind keep working.
 
-The thing this file asked for last — *a second client joining at tick 80,000,
-loading a snapshot, replaying the commands, and hashing identically, while
-someone is actively building* — now runs on every `cargo test`. The `Carry` it
-loads is Prototype 1's, unchanged, which is the part worth noticing: the
-snapshot the networking proof needed turned out to be the object an edit
-already produced.
+The thing this file asked for last — *a reason to keep a room open* — is what
+Prototype 3 is. A finished room becomes a supplier, keeps supplying while
+nobody is there, and hands over a component that makes an hour-old machine
+worth reopening. The `Carry` that carries it is still Prototype 1's, unchanged:
+the snapshot the networking proof needed, and then the object an arrival lands
+in, turned out to be the object an edit already produced.
 
-Next is content rather than architecture — more machines, more goals, a reason
-to keep a room open — and one piece of engineering that was deliberately left
-whole-room: a hash mismatch resends the entire snapshot, where the region
-structure underneath it could resend one deterministic region and replay the
-rest.
+What is left is content rather than architecture — more machines, more rooms, a
+constraint the stock catalogue cannot answer so that the design library becomes
+necessary rather than merely available — and the one piece of engineering
+deliberately left whole-room: a hash mismatch resends the entire snapshot,
+where the region structure underneath it could resend one deterministic region
+and replay the rest.

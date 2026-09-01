@@ -143,6 +143,26 @@ pub enum Act {
         id: Id,
         design: Design,
     },
+    /// A train arrived from another room, and this is what was on it.
+    ///
+    /// Prototype 3's one new intention, and the only one no player ever
+    /// issues: the authority stamps it when a vehicle that left some other
+    /// room reaches this one. It is a command rather than a poke at the
+    /// simulation because every replica has to see the same arrival at the
+    /// same tick, and the command log is the only thing every replica sees.
+    ///
+    /// It changes no part of the document -- the bay was already there, and
+    /// is exactly as wired as it was a tick ago. What it changes is what is
+    /// *in* the bay, which is why [`Act::structural`] says no and the plant is
+    /// not recompiled for it. See `room::Sim::apply`, where the quantity is
+    /// poured into the carry at a rendezvous.
+    Deliver {
+        to: Id,
+        item: String,
+        qty: crate::model::Qty,
+        /// Which room it came from, for the event log and the inspector.
+        from: String,
+    },
 }
 
 impl Act {
@@ -164,6 +184,7 @@ impl Act {
             Act::ConnectComponent { .. } => "ConnectComponent",
             Act::DisconnectComponent { .. } => "DisconnectComponent",
             Act::CommitMachineDesign { .. } => "CommitMachineDesign",
+            Act::Deliver { .. } => "Deliver",
         }
     }
 
@@ -181,6 +202,7 @@ impl Act {
             | Act::ConnectComponent { id, .. }
             | Act::DisconnectComponent { id, .. }
             | Act::CommitMachineDesign { id, .. } => Some(id),
+            Act::Deliver { to, .. } => Some(to),
             Act::CreateConnection { from, .. } | Act::DeleteConnection { from, .. } => Some(from),
             Act::CreateWorldLink { from, .. } => Some(from),
             _ => None,
@@ -204,6 +226,10 @@ impl Act {
                 | Act::TuneComponent { .. }
                 | Act::ConnectComponent { .. }
                 | Act::DisconnectComponent { .. }
+                // An arrival puts material in a bay that was already there.
+                // Recompiling the plant for it would throw away and rebuild an
+                // identical graph sixty times a minute.
+                | Act::Deliver { .. }
         )
     }
 }
@@ -311,6 +337,11 @@ fn payload(a: &Act) -> Json {
         Act::CommitMachineDesign { id, design } => {
             o.set("id", Json::big(*id as u128)).set("design", design.to_json())
         }
+        Act::Deliver { to, item, qty, from } => o
+            .set("to", Json::big(*to as u128))
+            .set("item", item.clone())
+            .set("qty", Json::big(*qty as u128))
+            .set("from", from.clone()),
     }
 }
 
@@ -387,6 +418,14 @@ fn act_from_json(kind: &str, p: &Json) -> Result<Act, String> {
             id: id(),
             design: Design::from_json(p.at("design"))?,
         },
+        "Deliver" => Act::Deliver {
+            to: to(),
+            item: s("item"),
+            qty: p.at("qty").as_u64().unwrap_or(0),
+            // A room code, not an id: the sender is a different simulation
+            // and its identities mean nothing here.
+            from: s("from"),
+        },
         other => return Err(format!("unknown command `{other}`")),
     })
 }
@@ -401,6 +440,17 @@ pub enum Effect {
     Unlinked { name: String },
     /// A machine's design was replaced, and this is what it cost.
     Recommitted { id: Id, name: String, from: String, to: String },
+    /// A load from another room reached a bay. `spilled` is what would not fit
+    /// -- a yard too small for the train it ordered is an engineering
+    /// consequence, and a visible one.
+    Arrived {
+        to: Id,
+        name: String,
+        item: String,
+        qty: crate::model::Qty,
+        spilled: crate::model::Qty,
+        from: String,
+    },
 }
 
 /// Apply one command to the document, or say why it cannot be applied.
@@ -574,6 +624,23 @@ pub fn apply(w: &mut World, c: &Cmd) -> Result<Vec<Effect>, String> {
                 from: old.map(|m| summary(&m)).unwrap_or_default(),
                 to: summary(&m),
             });
+        }
+        // The document does not change when a train arrives; the bay does.
+        // All that happens here is the check that there is still a bay to
+        // arrive at -- a player may have deleted the yard while the train was
+        // in the air, and a load with nowhere to go is a refusal rather than a
+        // quiet disappearance. `room::Sim::apply` does the pouring.
+        Act::Deliver { to, item, qty, .. } => {
+            let bay = w.get(*to).ok_or("that arrival has nowhere to land")?;
+            if !bay.is_storage() {
+                return Err(format!("{} is not a bay", bay.name));
+            }
+            if !super::lower::ITEMS.contains(&item.as_str()) {
+                return Err(format!("`{item}` is not an item"));
+            }
+            if *qty == 0 {
+                return Err("an empty train is not an arrival".into());
+            }
         }
     }
     Ok(out)

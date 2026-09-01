@@ -69,7 +69,23 @@ pub struct Install {
     pub y: i32,
     pub face: u8,
     /// A delivery depot ships one item, chosen when it is placed.
+    ///
+    /// A *bay* may carry one too, and it means something different: this yard
+    /// is supplied from outside the room. Nothing inside delivers to it -- a
+    /// train does, from somewhere the compiler below has never heard of -- so
+    /// the commissioning check has to be told, or every machine drawing from
+    /// an import yard would be refused for being fed by nobody. Prototype 3's
+    /// rooms are the only things that set it, when they furnish themselves.
     pub item: Option<String>,
+    /// What *this* one is rated at, when the catalogue's number is not the
+    /// right one: a source's items a second, or a bay's capacity.
+    ///
+    /// Nothing a player places ever carries one. It exists so that a room can
+    /// be *furnished* -- a coal seam that yields forty-five a second rather
+    /// than a hundred, a water table that yields sixty -- because a room whose
+    /// problem is scarcity cannot state it any other way. Prototype 3's five
+    /// rooms are the whole reason this field is here.
+    pub rated: Option<Qty>,
     /// A machine owns its design outright. Duplicating a machine copies the
     /// design; editing one copy does not touch the other.
     pub design: Option<Design>,
@@ -122,9 +138,11 @@ impl Install {
     pub fn recipe(&self) -> (Vec<Amount>, Vec<Amount>, Tick) {
         let amount = |i: &str, q: Qty| Amount { item: i.to_string(), qty: q };
         match self.proto.spec {
-            Spec::Source { item, per_second } => {
-                (Vec::new(), vec![amount(item, per_second)], SIM_TICK_RATE)
-            }
+            Spec::Source { item, per_second } => (
+                Vec::new(),
+                vec![amount(item, self.rated.unwrap_or(per_second))],
+                SIM_TICK_RATE,
+            ),
             Spec::Sink { .. } => {
                 let item = self.item.clone().unwrap_or_default();
                 (vec![amount(&item, 1)], Vec::new(), 1)
@@ -151,6 +169,15 @@ impl Install {
 
     pub fn is_storage(&self) -> bool {
         self.proto.role == Role::Storage
+    }
+
+    /// How much this bay holds. The catalogue's number unless the room said
+    /// otherwise when it was furnished.
+    pub fn capacity(&self) -> Qty {
+        match self.proto.spec {
+            Spec::Storage { capacity } => self.rated.unwrap_or(capacity),
+            _ => 0,
+        }
     }
 }
 
@@ -188,11 +215,26 @@ pub struct World {
     /// The next identity to hand out. Part of the document, because ids are
     /// assigned by replaying the log and must be the same on every replica.
     pub next_id: Id,
+    /// The side of this plot, in tiles. Zero means the default.
+    ///
+    /// Prototype 2 had one plot size because it had one room. A campaign of
+    /// five has five, and "very constrained footprint" is a sentence a room
+    /// can only say by being small.
+    pub plot: i32,
 }
 
 impl World {
     pub fn new(name: &str) -> World {
-        World { name: name.to_string(), next_id: 1, ..World::default() }
+        World { name: name.to_string(), next_id: 1, plot: PLOT, ..World::default() }
+    }
+
+    /// The side of this plot, defaulted for a document that predates the field.
+    pub fn plot(&self) -> i32 {
+        if self.plot > 0 {
+            self.plot
+        } else {
+            PLOT
+        }
     }
 
     pub fn get(&self, id: Id) -> Option<&Install> {
@@ -238,7 +280,8 @@ impl World {
     /// having two different opinions about how close is too close is how a
     /// player learns not to trust either of them.
     pub fn free(&self, x: i32, y: i32, w: i32, h: i32, ignore: Option<Id>) -> Result<(), String> {
-        if x < 0 || y < 0 || x + w > PLOT || y + h > PLOT {
+        let plot = self.plot();
+        if x < 0 || y < 0 || x + w > plot || y + h > plot {
             return Err(format!("{w}x{h} at {x},{y} is off the plot"));
         }
         for i in &self.installs {
@@ -293,9 +336,10 @@ impl World {
             face,
             item: match proto.spec {
                 Spec::Sink { item: Some(fixed), .. } => Some(fixed.to_string()),
-                Spec::Sink { item: None, .. } => item,
+                Spec::Sink { item: None, .. } | Spec::Storage { .. } => item,
                 _ => None,
             },
+            rated: None,
             design,
             lowered,
             draft: None,
@@ -309,6 +353,17 @@ impl World {
         self.installs.push(inst);
         self.next_id += 1;
         Ok(id)
+    }
+
+    /// Rate one installation differently from its catalogue entry.
+    ///
+    /// Only a room furnishing itself calls this, and only before anybody has
+    /// joined: it is part of what the room *is*, not part of what was done to
+    /// it, so it arrives with the starting document rather than as a command.
+    pub fn rate(&mut self, id: Id, rated: Option<Qty>) {
+        if let Some(i) = self.get_mut(id) {
+            i.rated = rated;
+        }
     }
 
     /// Take something out, along with every wire and every transport that
@@ -489,11 +544,25 @@ impl World {
         }
         actors.sort_unstable();
 
+        // Bays that are filled from outside the room. Nothing in this document
+        // delivers to them and nothing ever will: a train does, and the train
+        // is in another simulation. They are seeded into the commissioning
+        // check as though they had a supplier, because they have one.
+        let outside: BTreeMap<Id, String> = self
+            .installs
+            .iter()
+            .filter(|i| i.is_storage())
+            .filter_map(|i| i.item.clone().map(|item| (i.id, item)))
+            .collect();
+
         // The fixpoint. Dropping a machine can empty the bay that fed the next
         // one, so this runs until nobody else has to go.
         let mut live: BTreeSet<Id> = actors.iter().copied().collect();
         loop {
             let mut slots: BTreeMap<Id, BTreeSet<String>> = BTreeMap::new();
+            for (bay, item) in &outside {
+                slots.entry(*bay).or_default().insert(item.clone());
+            }
             for &a in &live {
                 for (bay, item) in deposits.get(&a).into_iter().flatten() {
                     slots.entry(*bay).or_default().insert(item.clone());
@@ -561,10 +630,20 @@ impl World {
             if !i.is_storage() {
                 continue;
             }
-            let Spec::Storage { capacity } = i.proto.spec else { continue };
+            if i.proto.role != Role::Storage {
+                continue;
+            }
             let mut n = Node::new(&i.name, Kind::Storage);
-            n.capacity = capacity;
+            n.capacity = i.capacity();
             n.policy = Policy::RoundRobin;
+            // A bay holds exactly what is put into it, and what is put into an
+            // import yard comes from another room -- so the slot has to be
+            // declared rather than derived. An empty declaration is the honest
+            // one: the yard starts empty, because the first train has not
+            // arrived yet.
+            if let Some(item) = &i.item {
+                n.holds.push(item.clone());
+            }
             g.nodes.push(n);
         }
         for i in &self.installs {
@@ -642,6 +721,10 @@ impl World {
             for a in n.inputs.iter().chain(n.outputs.iter()) {
                 used.insert(a.item.clone());
             }
+            // An import yard's item is mentioned by nothing else in the plant
+            // until somebody wires a machine to it, and a `holds` clause naming
+            // an item the file never declared is a parse error.
+            used.extend(n.holds.iter().cloned());
         }
         g.items.retain(|i| used.contains(i));
         b.runnable = g.nodes.iter().any(|n| n.kind.is_machine());
@@ -659,6 +742,7 @@ impl World {
         let mut v = Vec::new();
         v.extend_from_slice(self.name.as_bytes());
         v.extend_from_slice(&self.next_id.to_le_bytes());
+        v.extend_from_slice(&self.plot().to_le_bytes());
         let mut installs: Vec<&Install> = self.installs.iter().collect();
         installs.sort_by_key(|i| i.id);
         for i in installs {
@@ -669,6 +753,7 @@ impl World {
                 v.extend_from_slice(&n.to_le_bytes());
             }
             v.extend_from_slice(i.item.as_deref().unwrap_or("-").as_bytes());
+            v.extend_from_slice(&i.rated.unwrap_or(0).to_le_bytes());
             if let Some(d) = &i.design {
                 v.extend_from_slice(d.emit().as_bytes());
             }
@@ -716,6 +801,7 @@ impl World {
         Json::obj()
             .set("name", self.name.clone())
             .set("nextId", Json::big(self.next_id as u128))
+            .set("plot", self.plot() as i64)
             .set(
                 "installs",
                 Json::Arr(
@@ -735,6 +821,12 @@ impl World {
                                 .set("h", h as i64)
                                 .set("face", i.face as i64)
                                 .set("item", i.item.clone())
+                                .set("rated", i.rated.map(|q| Json::big(q as u128)))
+                                .set(
+                                    "capacity",
+                                    (i.proto.role == Role::Storage)
+                                        .then(|| Json::big(i.capacity() as u128)),
+                                )
                                 .set("placedAt", i.placed)
                                 .set("placedBy", i.by as i64)
                                 .set("editor", i.editor.map(|p| Json::Int(p as i128)))
@@ -836,6 +928,7 @@ impl World {
         let mut w = World {
             name: j.at("name").as_str().unwrap_or("Room").to_string(),
             next_id: j.at("nextId").as_u64().unwrap_or(1).max(1),
+            plot: j.at("plot").as_i128().unwrap_or(PLOT as i128) as i32,
             ..World::default()
         };
         for e in j.at("installs").as_arr() {
@@ -870,6 +963,7 @@ impl World {
                 y: e.at("y").as_i128().unwrap_or(0) as i32,
                 face: e.at("face").as_u64().unwrap_or(0) as u8,
                 item: e.at("item").as_str().map(str::to_string),
+                rated: e.at("rated").as_u64(),
                 design,
                 lowered,
                 draft: match e.at("draft") {

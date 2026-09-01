@@ -263,6 +263,16 @@ fn goal_numbers_stay_inside_their_ranges() {
                 Shape::CleanPower { mw, max_waste_pct, .. } => {
                     assert!(sane(*mw) && *max_waste_pct <= 100)
                 }
+                // Prototype 3's authored rooms take no numbers from the seed
+                // at all, so there is nothing here to be outside a range --
+                // only an ordering to be sensible about.
+                Shape::Peak { base, peak, spill, hold, every, secs: s } => {
+                    assert!(sane(*base) && sane(*peak) && sane(*spill));
+                    assert!(base <= spill && spill < peak, "{}: a peak below its spill", t.id);
+                    assert!(*hold >= 1 && *hold < *every);
+                    assert!(*every > 0 && *every <= *s && *s <= 120);
+                }
+                Shape::Both(..) => {}
             }
         }
     }

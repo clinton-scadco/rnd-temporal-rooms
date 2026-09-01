@@ -44,6 +44,19 @@ param(
     #   -Room parts                    the catalogue, and the recipes it compiles to
     #   -Room check                    the front end, against a live server
     [switch]$Room,
+    # Prototype 3: the campaign. Five hand-authored rooms on one clock, with
+    # trains between them, a design library and twelve unlockable components.
+    # Everything after the switch is passed straight to it:
+    #   -Camp                          the game, at http://127.0.0.1:8795
+    #   -Camp play [--seed N]          the whole campaign, played headlessly
+    #   -Camp map                      the rooms, the lanes and the fleets
+    #   -Camp tech                     the twelve components, and what they open
+    #   -Camp refuse                   everything the campaign will not allow
+    #   -Camp check                    the front end, against a live server
+    # -Bind 0.0.0.0 serves it on every interface, so another machine on the
+    # LAN can join at http://<this pc's ip>:8795/. Named -Bind rather than
+    # -Host because $Host is one of PowerShell's automatic variables.
+    [switch]$Camp,
     [string]$Play,
     # PowerShell binds anything starting with `-` to a parameter, so the
     # scenario's own options get first-class ones rather than being smuggled
@@ -51,6 +64,7 @@ param(
     [string[]]$Buy,
     [long]$At = 0,
     [int]$Port = 8787,
+    [string]$Bind = "127.0.0.1",
     [Parameter(ValueFromRemainingArguments)]$Configs
 )
 
@@ -133,6 +147,31 @@ if ($Machine) {
     if ($Configs) { $cli += $Configs } else { $cli += "serve" }
     if ($cli -contains "serve") {
         $cli += @("--port", $(if ($Port -eq 8787) { 8790 } else { $Port }))
+    }
+    & $exe @cli
+    exit $LASTEXITCODE
+} elseif ($Camp) {
+    cargo build --release --bin camp
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $exe = Join-Path $PSScriptRoot "target/release/camp.exe"
+    # `check` is the front end's own test, and it needs something to talk to.
+    if ($Configs -and $Configs[0] -eq "check") {
+        $port = if ($Port -eq 8787) { 8796 } else { $Port }
+        $srv = Start-Process -FilePath $exe -ArgumentList "serve", "--port", $port `
+            -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 700
+            node (Join-Path $PSScriptRoot "tests/camp_web.mjs") $port
+            exit $LASTEXITCODE
+        } finally {
+            if (-not $srv.HasExited) { Stop-Process -Id $srv.Id -Force }
+        }
+    }
+    $cli = @()
+    if ($Configs) { $cli += $Configs } else { $cli += "serve" }
+    if ($cli -contains "serve") {
+        $cli += @("--port", $(if ($Port -eq 8787) { 8795 } else { $Port }))
+        $cli += @("--host", $Bind)
     }
     & $exe @cli
     exit $LASTEXITCODE

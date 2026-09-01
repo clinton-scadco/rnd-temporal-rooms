@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>prototype 3 &middot; five rooms, one clock</title>
+<!--
+  Prototype 2's stylesheet and Prototype 2's client, unchanged. The ids below
+  are the ids `world.js`, `bench.js` and `panels.js` already look for, so the
+  room view here is not a copy of that one -- it *is* that one, with a campaign
+  built around it.
+-->
+<link rel="stylesheet" href="/room/room.css">
+<link rel="stylesheet" href="/camp.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+
+<header id="bar">
+  <div class="brand">
+    <b>prototype&nbsp;3</b><span>five rooms, one clock</span>
+  </div>
+
+  <div class="group room" id="roombox" hidden>
+    <label>campaign</label><output id="code">------</output>
+    <button id="copy" title="copy the code">copy</button>
+  </div>
+
+  <div class="clock" id="clockbox" hidden>
+    <label>running</label><output id="clock">0:00</output>
+  </div>
+
+  <div class="group" id="views" hidden>
+    <button id="viewmap" class="on">map</button>
+    <button id="viewworld">room</button>
+    <button id="viewbench" disabled>machine</button>
+  </div>
+
+  <div class="group where" id="wherebox" hidden></div>
+
+  <div class="who" id="who"></div>
+
+  <div class="sync" id="sync" title="canonical hashes, compared every simulated second"></div>
+</header>
+
+<!-- ------------------------------------------------------------- entering -->
+<div id="lobby">
+  <div class="card">
+    <h1>Five factories, one clock, and none of them stop.</h1>
+    <p class="lede">
+      Coal Basin has more fuel than it can burn on a platform too small for the
+      plant it needs. Iron Valley has all the land in the world and no fuel.
+      Manufacturing has neither, and a minute of railway between it and both.
+      Finish one and it starts supplying the others &mdash; and keeps doing it
+      while you are somewhere else.
+    </p>
+    <div class="two">
+      <section>
+        <h2>Join the campaign</h2>
+        <label class="field"><span>your name</span><input id="whoami" maxlength="16" value="engineer"></label>
+        <label class="field"><span>seed</span><input id="seed" maxlength="18" placeholder="only used if nobody has joined yet"></label>
+        <button id="enter" class="primary">Enter</button>
+      </section>
+      <section>
+        <h2>What is different</h2>
+        <p class="muted">
+          Twelve <b>components</b> unlock as rooms come online &mdash; a
+          separator, a press, a condenser &mdash; never a percentage. Machines
+          you design go on a shelf and can be copied into the next room and
+          changed there. Trains between rooms are real, take real time, and
+          arrive whether anybody is watching or not.
+        </p>
+      </section>
+    </div>
+    <p class="err" id="lobbyerr"></p>
+  </div>
+</div>
+
+<!-- ---------------------------------------------------------- the campaign -->
+<main id="game" hidden>
+  <aside id="left">
+    <!-- world view -->
+    <div class="onlyworld">
+      <div id="goalcard">
+        <h2>objective</h2>
+        <div class="goaltitle" id="goaltitle"></div>
+        <p class="brief" id="goalbrief"></p>
+        <div id="goallines"></div>
+        <p class="note" id="goalnote"></p>
+      </div>
+
+      <div id="palettebox">
+        <h2>build</h2>
+        <p class="hint" id="tool">pick something, then click the plot &middot; <b>R</b> turns it &middot; <b>Esc</b> puts it down</p>
+        <div class="palette" id="palette"></div>
+        <h2>from the shelf</h2>
+        <div class="palette" id="shelfpalette"></div>
+        <h2>wire</h2>
+        <div class="tools">
+          <button data-mode="connect" title="a wire between a bay and a machine">connect</button>
+          <button data-mode="belt" title="500 a trip, six vehicles, over short distances">belt</button>
+          <button data-mode="rail" title="5,000 a trip, two vehicles">rail</button>
+          <button data-mode="delete" title="a building, a wire, or a transport">delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- map view -->
+    <div class="onlymap">
+      <h2>components</h2>
+      <p class="hint" id="techcount"></p>
+      <div id="tech"></div>
+      <h2>my machines</h2>
+      <div id="shelf"></div>
+    </div>
+  </aside>
+
+  <section id="stage">
+    <canvas id="world"></canvas>
+    <div id="ghosts"></div>
+    <div id="bench" hidden>
+      <canvas id="plant3d"></canvas>
+      <div id="benchbar">
+        <span id="benchname"></span>
+        <span class="rule"></span>
+        <button id="benchedit">open a draft</button>
+        <button id="benchcommit" disabled>commit design</button>
+        <button id="benchdiscard" disabled>discard</button>
+        <span class="rule"></span>
+        <button id="benchkeep">keep on the shelf</button>
+        <span class="rule"></span>
+        <label>level <output id="benchlevel">0</output></label>
+        <button id="benchup">+</button>
+        <button id="benchdown">&minus;</button>
+        <span class="rule"></span>
+        <span class="lock" id="benchlock"></span>
+        <button id="benchclose">back to the room</button>
+      </div>
+      <aside id="benchside">
+        <h2>components</h2>
+        <select id="family"></select>
+        <div class="palette small" id="parts"></div>
+        <h2>this design</h2>
+        <div id="benchinfo"></div>
+      </aside>
+    </div>
+    <div id="atlas" hidden>
+      <canvas id="atlascanvas"></canvas>
+    </div>
+  </section>
+
+  <aside id="right">
+    <!-- world view -->
+    <div class="onlyworld">
+      <h2>inspector</h2>
+      <div id="inspect"><p class="muted">click anything.</p></div>
+      <h2>recently</h2>
+      <div id="feed"></div>
+    </div>
+    <!-- map view -->
+    <div class="onlymap">
+      <h2 id="roomtitle">the map</h2>
+      <div id="roomcard"><p class="muted">click a room.</p></div>
+      <h2>shipping</h2>
+      <div id="lanes"></div>
+      <h2>the campaign</h2>
+      <div id="news"></div>
+    </div>
+  </aside>
+</main>
+
+<div id="briefing" hidden>
+  <div class="card">
+    <h1 id="brieftitle">The Five Rooms</h1>
+    <p class="lede" id="briefbrief"></p>
+    <p class="note" id="briefnote"></p>
+    <p class="muted">
+      The clock starts when you do, and there is no pause &mdash; in any of the
+      five. Everything you build after this you build inside factories that are
+      already running.
+    </p>
+    <button id="briefstart" class="primary">Start the campaign</button>
+    <p class="muted" id="briefwait" hidden>waiting for somebody to start the campaign&hellip;</p>
+  </div>
+</div>
+
+<div id="won" hidden>
+  <div class="card">
+    <h1 id="wontitle">Room complete</h1>
+    <div id="wondetail"></div>
+    <p class="muted">Nothing stops. It is a supplier now.</p>
+    <button id="wonclose">carry on</button>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

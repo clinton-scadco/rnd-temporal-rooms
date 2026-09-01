@@ -1,0 +1,241 @@
+/* Prototype 3, on top of Prototype 2's stylesheet.
+ *
+ * Everything the room view needs is already in `room.css` and is not repeated
+ * here. This file is the campaign around it: the map, the shelf, the component
+ * list, the shipping board, and the three-way view switch that puts one of
+ * them on the screen at a time.
+ */
+
+body[data-view='map'] .onlyworld,
+body[data-view='world'] .onlymap,
+body[data-view='bench'] .onlymap {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ header */
+
+.where {
+  gap: 2px;
+}
+.where button {
+  font: inherit;
+  border: 1px solid var(--line, #2c3440);
+  background: transparent;
+  color: inherit;
+  padding: 3px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.72;
+}
+.where button.on {
+  background: #1d2733;
+  border-color: #3d5570;
+  opacity: 1;
+}
+.where button.done::after {
+  content: ' \2713';
+  color: #8ef0a0;
+}
+.where button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+/* --------------------------------------------------------------------- map */
+
+#atlas {
+  position: absolute;
+  inset: 0;
+  background: #0d1117;
+}
+#atlascanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- the room */
+
+#roomcard .line {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 12px;
+}
+#roomcard .line b {
+  font-weight: 500;
+  opacity: 0.75;
+}
+#roomcard .problem {
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 4px 0 8px;
+}
+#roomcard .note {
+  font-size: 11.5px;
+  line-height: 1.5;
+  opacity: 0.62;
+  margin: 8px 0;
+}
+#roomcard .shut {
+  color: #ffb457;
+  font-size: 12px;
+}
+#roomcard button {
+  font: inherit;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid #3d5570;
+  background: #1d2733;
+  color: inherit;
+  cursor: pointer;
+}
+#roomcard button[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ------------------------------------------------------------- the shelf */
+
+#shelf .saved,
+#tech .part {
+  border: 1px solid #222a35;
+  border-radius: 5px;
+  padding: 5px 7px;
+  margin-bottom: 5px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+#shelf .saved b,
+#tech .part b {
+  font-weight: 600;
+}
+#shelf .saved .note,
+#tech .part .opens {
+  opacity: 0.6;
+  display: block;
+}
+#shelf .saved .from {
+  color: #c9a0ff;
+  font-size: 11px;
+}
+#shelf .row {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+#shelf .row button {
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid #2c3440;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+#tech .part.locked {
+  opacity: 0.4;
+}
+#tech .part.got b::after {
+  content: ' \2713';
+  color: #8ef0a0;
+}
+
+#shelfpalette button .from {
+  display: block;
+  font-size: 10px;
+  opacity: 0.55;
+}
+
+/* A locked prototype is shown rather than hidden: a progression nobody can
+ * look forward to is a progression nobody notices. */
+#palette button.locked {
+  opacity: 0.34;
+  cursor: not-allowed;
+}
+#palette button.locked::after {
+  content: attr(data-needs);
+  display: block;
+  font-size: 10px;
+  color: #ffb457;
+  opacity: 0.9;
+}
+
+/* ---------------------------------------------------------------- lanes */
+
+#lanes .lane {
+  font-size: 11.5px;
+  line-height: 1.45;
+  padding: 4px 0;
+  border-bottom: 1px solid #1a212b;
+}
+#lanes .lane .head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+#lanes .lane .bar {
+  height: 3px;
+  border-radius: 2px;
+  background: #1d2733;
+  margin: 3px 0 2px;
+  overflow: hidden;
+}
+#lanes .lane .bar i {
+  display: block;
+  height: 100%;
+  background: #7cc4ff;
+}
+#lanes .lane .why {
+  opacity: 0.5;
+}
+#lanes .lane .spill {
+  color: #ff8fa3;
+}
+#lanes .open {
+  display: flex;
+  gap: 4px;
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+#lanes .open button {
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid #2c3440;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- news */
+
+#news .item {
+  font-size: 11.5px;
+  line-height: 1.45;
+  padding: 2px 0;
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 6px;
+}
+#news .item .at {
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+}
+#news .item.unlock .what {
+  color: #8ef0a0;
+}
+#news .item.done .what {
+  color: #7cc4ff;
+}
+#news .item.spill .what,
+#news .item.lost .what {
+  color: #ff8fa3;
+}
+#news .item.route .what {
+  color: #ffe066;
+}
