@@ -1,0 +1,27 @@
+# A head, and the point is that it *is* a machine.
+#
+# Experiment 13, note 1: a mine that produced ore because the catalogue said so
+# was the last magical object left in the world. Now the room has a coal seam in
+# the ground and this is what stands on it. It lifts 400 a second because
+# a material inlet moves a hundred and there are four, not because anybody typed a number.
+#
+# The ground has the last word: a head on a thinner seam turns slower, and a
+# richer one takes more than one head -- or one better head, which is the same
+# question asked of the floor instead. Everything here abuts everything else on
+# purpose, because in a room whose problem is space the size of this is the
+# first thing worth arguing with.
+
+machine "Coal Head"
+
+inlet  I1 at 0,0  draws coal
+inlet  I2 at 0,2  draws coal
+inlet  I3 at 2,0  draws coal
+inlet  I4 at 2,2  draws coal
+
+outlet O1 at 4,0
+outlet O2 at 4,2
+
+wire I1.out -> O1.solid
+wire I2.out -> O1.solid
+wire I3.out -> O2.solid
+wire I4.out -> O2.solid

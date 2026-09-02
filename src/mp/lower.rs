@@ -42,7 +42,7 @@ use crate::machine::design::Design;
 use crate::machine::eval::{self, Report};
 use crate::machine::orbit;
 use crate::machine::stuff::{
-    Stuff, Subst, FORM_BILLET, FORM_GEAR, FORM_SCRAP, FORM_STRIP, SIZE_POWDER,
+    Domain, Stuff, Subst, FORM_BILLET, FORM_GEAR, FORM_SCRAP, FORM_STRIP, SIZE_POWDER,
 };
 use crate::model::{Qty, Tick};
 
@@ -81,6 +81,32 @@ pub fn item_of(s: &Stuff) -> &'static str {
             FORM_SCRAP => "Scrap",
             _ => "Iron",
         },
+    }
+}
+
+/// Which domain an item belongs to.
+///
+/// The inverse of [`item_of`], at the granularity the outer game actually has.
+/// Every item name is produced by exactly one substance, and a substance has
+/// exactly one home domain, so this is a total function rather than a lookup
+/// that can fail -- which matters, because it is what decides whether two
+/// things in a room may be connected at all.
+///
+/// It is deliberately the *item's* domain and not the stuff's. Water boiled by
+/// an exchanger leaves in `gas` and comes back through [`item_of`] as `Water`,
+/// because the outer game has one item called water and does not want
+/// `Steam` in a chest. Inside the machine the phase change is visible and is
+/// the whole point; outside it, a pipe carries water.
+pub fn domain_of(item: &str) -> Domain {
+    match item {
+        "Power" => Domain::Electrical,
+        "Heat" => Domain::Heat,
+        "Torque" => Domain::Rotary,
+        "Stroke" => Domain::Mech,
+        "Water" | "Crude" | "LightFraction" | "MiddleFraction" | "HeavyFraction" => Domain::Fluid,
+        // Everything left is something you could drop on your foot: coal, ore
+        // in each of its grades, iron in each of its forms, and slag.
+        _ => Domain::Material,
     }
 }
 
@@ -181,6 +207,7 @@ impl Macro {
                     .map(|(i, q)| {
                         Json::obj()
                             .set("item", i.clone())
+                            .set("domain", domain_of(i).tag())
                             .set("qty", Json::big(*q as u128))
                             .set("perSecond", *q as f64 / super::as_secs(self.cycle).max(1e-9))
                     })

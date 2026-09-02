@@ -43,7 +43,7 @@ use super::cmd::{self, Act, Cmd, Effect};
 use super::goal::{self, Acct, Goal, Progress};
 use super::kit::Role;
 use super::world::{Build, Id, Install, PlayerId, World};
-use super::{as_secs, hash64, room_code, Rng, CHECK, GHOST_LIFE, PLOT, SIM_TICK_RATE};
+use super::{as_secs, hash64, room_code, Rng, CHECK, GHOST_LIFE, HEARTBEAT, PLOT, SIM_TICK_RATE};
 use crate::graph::Graph;
 use crate::json::{self, Json};
 use crate::live::{self, At, Carry, Fault, Log};
@@ -64,6 +64,8 @@ use std::time::Instant;
 pub struct Ghost {
     pub at: Tick,
     pub by: PlayerId,
+    /// The identity it had. The captured wiring is written in terms of it.
+    pub was: Id,
     pub name: String,
     pub title: String,
     pub proto: &'static str,
@@ -78,14 +80,30 @@ pub struct Ghost {
     pub face: u8,
     pub item: Option<String>,
     pub design: Option<Design>,
+    /// What it was joined to when it died.
+    ///
+    /// Note 12 from the play session: restoring a building that had been
+    /// deleted brought back the building and none of its wiring, which is
+    /// technically consistent and experientially obnoxious. A ghost is a
+    /// tombstone now -- it carries the connections, and Restore puts back as
+    /// many of them as the room still has room for.
+    pub conns: Vec<(Id, Id, String)>,
+    pub hauls: Vec<(String, Id, Id, String)>,
 }
 
 impl Ghost {
-    fn of(i: &Install, by: PlayerId, at: Tick) -> Ghost {
+    fn of(
+        i: &Install,
+        by: PlayerId,
+        at: Tick,
+        conns: Vec<(Id, Id, String)>,
+        hauls: Vec<(String, Id, Id, String)>,
+    ) -> Ghost {
         let (w, h) = i.size();
         Ghost {
             at,
             by,
+            was: i.id,
             name: i.name.clone(),
             title: i.proto.title.to_string(),
             proto: i.proto.tag,
@@ -97,27 +115,29 @@ impl Ghost {
             face: i.face,
             item: i.item.clone(),
             design: i.design.clone(),
+            conns,
+            hauls,
         }
     }
 
-    /// The command that would put it back.
+    /// The command that would put it back, wiring and all.
+    ///
+    /// One command rather than a placement followed by a handful of
+    /// connections, because a restore that was several commands would be
+    /// several commands that could interleave with somebody else's -- and
+    /// because "the building came back and two of its three wires did not" has
+    /// to be one answer that every replica computes the same way.
     pub fn restore(&self) -> Act {
-        if self.role == Role::Storage {
-            Act::PlaceStorage {
-                proto: self.proto.to_string(),
-                x: self.x,
-                y: self.y,
-                face: self.face,
-            }
-        } else {
-            Act::PlaceMachine {
-                proto: self.proto.to_string(),
-                x: self.x,
-                y: self.y,
-                face: self.face,
-                item: self.item.clone(),
-                design: self.design.clone(),
-            }
+        Act::Restore {
+            was: self.was,
+            proto: self.proto.to_string(),
+            x: self.x,
+            y: self.y,
+            face: self.face,
+            item: self.item.clone(),
+            design: self.design.clone(),
+            conns: self.conns.clone(),
+            hauls: self.hauls.clone(),
         }
     }
 
@@ -135,6 +155,12 @@ impl Ghost {
             .set("item", self.item.clone())
             .set("by", self.by as i64)
             .set("at", self.at)
+            // How much comes back with it, so the button can say so before it
+            // is pressed rather than after.
+            .set("conns", (self.conns.len() + self.hauls.len()) as i64)
+            // The command that puts it back, stated by the room. The browser
+            // used to assemble this itself and left the design out of it.
+            .set("restore", self.restore().to_json())
             .set("fades", as_secs((self.at + GHOST_LIFE).saturating_sub(now)))
     }
 }
@@ -355,15 +381,38 @@ impl Sim {
     /// Fold one canonical command in.
     pub fn apply(&mut self, c: &Cmd) -> Result<Vec<Effect>, Fault> {
         self.advance(c.tick)?;
-        self.seq = self.seq.max(c.seq);
         match cmd::apply(&mut self.world, c) {
             Ok(mut effects) => {
+                // Only a command that was actually applied moves the sequence.
+                //
+                // This used to be one line higher, before the `match`, and
+                // that was a silent desynchronisation with a fuse in it. The
+                // host is a `Sim` like any other, and `Room::submit_for`
+                // refuses a command by rolling the *room's* counter back --
+                // but the host's had already moved, so the two disagreed by
+                // one from the first refusal onwards. The next command reused
+                // the number, and every replica built from a snapshot after
+                // that skipped it: `c.seq > sim.seq` was false for a command
+                // the replica had never seen.
+                //
+                // What it looked like was a player who joined, built something,
+                // and could not see it -- with no fault, no mismatch and no
+                // resynchronisation, because as far as the room was concerned
+                // that replica was up to date. It cost an afternoon, and it was
+                // found by a test that refuses two connections on purpose.
+                self.seq = self.seq.max(c.seq);
                 if let Act::Deliver { to, item, qty, from } = &c.act {
                     effects.push(self.land(*to, item, *qty, from));
                 }
                 for e in &effects {
-                    if let Effect::Removed { install, by, at } = e {
-                        self.ghosts.push(Ghost::of(install, *by, *at));
+                    if let Effect::Removed { install, by, at, conns, hauls } = e {
+                        self.ghosts.push(Ghost::of(
+                            install,
+                            *by,
+                            *at,
+                            conns.clone(),
+                            hauls.clone(),
+                        ));
                     }
                 }
                 self.ghosts.retain(|g| g.at + GHOST_LIFE > c.tick);
@@ -528,6 +577,14 @@ fn burnt(a: &At, waste: &BTreeMap<String, (u128, u128)>) -> (u128, u128) {
 pub struct Player {
     pub id: PlayerId,
     pub name: String,
+    /// The browser's own token, minted in `localStorage` and never shown to
+    /// anybody else. A seat is found by this and not by `id`, because `id` is
+    /// a small integer that any client could type.
+    ///
+    /// It is deliberately not part of the world, the command stream, or any
+    /// hash: two rooms reconstructed from the same log are identical whether
+    /// the people playing them refreshed their browsers or not.
+    pub key: String,
     pub colour: &'static str,
     /// This player's own reconstruction. Fed by the command stream, compared
     /// by hash, and never copied from the host's.
@@ -541,9 +598,23 @@ pub struct Player {
     pub selection: Option<Id>,
     pub editing: Option<Id>,
     pub view: String,
-    pub last_seen: u64,
+    /// The tick this player's browser last asked for a frame.
+    ///
+    /// The room beats on its own now, so a replica is at the current tick
+    /// whether anybody is watching it or not -- which means "behind" has
+    /// stopped being the answer to "is this person still here?". This is that
+    /// answer: not where their copy of the room is, but when their screen last
+    /// collected one. It is measured in ticks rather than wall time on
+    /// purpose, so a test with a hand-driven clock measures the same thing a
+    /// play session does.
+    pub last_seen: Tick,
     pub mismatches: u64,
+    /// Corrections after a disagreement. Counted apart from [`Self::rejoins`]
+    /// on purpose: this number is the experiment's, and a browser that was
+    /// refreshed is not evidence of divergence.
     pub resyncs: u64,
+    /// Times this seat was picked up again by the same browser.
+    pub rejoins: u64,
     pub agreed: u64,
 }
 
@@ -570,10 +641,20 @@ impl Player {
             .set("view", self.view.clone())
             .set("tick", self.sim.now)
             .set("behind", now.saturating_sub(self.sim.now))
+            // How long since this browser collected a frame. Somebody who
+            // alt-tabbed is not somebody who diverged, and the room should say
+            // which one it is looking at.
+            .set("away", now.saturating_sub(self.last_seen))
+            .set("awaySeconds", as_secs(now.saturating_sub(self.last_seen)))
             .set("agreed", Json::big(self.agreed as u128))
             .set("mismatches", Json::big(self.mismatches as u128))
             .set("resyncs", Json::big(self.resyncs as u128))
+            .set("rejoins", Json::big(self.rejoins as u128))
             .set("fault", self.sim.fault.clone())
+            // The last command this reconstruction folded in. Worth sending:
+            // a replica whose sequence has run ahead of the log is the one
+            // shape of desynchronisation that reports itself as healthy.
+            .set("seq", Json::big(self.sim.seq as u128))
     }
 }
 
@@ -621,6 +702,14 @@ pub struct Room {
     /// screen and the factory is not running, which is the only pause the game
     /// has.
     pub started: bool,
+    /// Why the room stopped beating, if it has.
+    ///
+    /// Only ever set by [`Room::heartbeat`], and only when the host's own
+    /// simulation refuses to advance -- which is a room that cannot be played
+    /// rather than one that is behind. It exists so that the beat gives up
+    /// once instead of failing four times a second forever; a poll still gets
+    /// the same error it always did, from its own call.
+    pub stalled: Option<String>,
 }
 
 const EVENTS_KEPT: usize = 60;
@@ -642,6 +731,7 @@ impl Room {
             events: Vec::new(),
             next_player: 1,
             started: false,
+            stalled: None,
         }
     }
 
@@ -683,23 +773,61 @@ impl Room {
         self.players.iter().find(|p| p.id == id)
     }
 
+    /// Whether this browser already has a seat here. Asked before a rejoin, so
+    /// that coming back to a room that has moved on is a refusal rather than a
+    /// quiet new arrival.
+    pub fn seated(&self, key: &str) -> bool {
+        !key.is_empty() && self.players.iter().any(|p| p.key == key)
+    }
+
     /// Somebody arrives, at whatever tick the room happens to be at.
     ///
     /// The host is not stopped, not paused, and not asked. It hands over a
     /// snapshot of where it is, and the joiner catches up on its own.
     pub fn join(&mut self, name: &str) -> Result<PlayerId, String> {
+        self.join_as(name, "").map(|(id, _)| id)
+    }
+
+    /// The same arrival, carrying the browser's own token.
+    ///
+    /// A token already in the room is the same person coming back, and coming
+    /// back is not the same as arriving: they keep their seat, their id, and
+    /// therefore everything their id owns and every command they have already
+    /// sent. Only the replica is new, rebuilt from the host's snapshot the way
+    /// a correction is -- because a browser that was refreshed has no replica
+    /// at all, which is a worse thing to be than wrong.
+    ///
+    /// An empty token is anonymous and matches nobody, so the CLI harness and
+    /// the tests go on getting a fresh seat every time they ask.
+    ///
+    /// Returns the seat, and whether it was already there.
+    pub fn join_as(&mut self, name: &str, key: &str) -> Result<(PlayerId, bool), String> {
+        if !key.is_empty() {
+            if let Some(k) = self.players.iter().position(|p| p.key == key) {
+                if !name.is_empty() {
+                    self.players[k].name = name.to_string();
+                }
+                // Presence is ephemeral and the old one is a lie the moment
+                // the browser went away: a cursor from before the refresh
+                // would sit on the plot until the first poll moved it.
+                self.players[k].cursor = None;
+                self.players[k].selection = None;
+                self.players[k].editing = None;
+                self.players[k].sim = self.fresh_sim()?;
+                self.players[k].rejoins += 1;
+                let now = self.now();
+                self.players[k].last_seen = now;
+                return Ok((self.players[k].id, true));
+            }
+        }
+        let sim = self.fresh_sim()?;
         let now = self.now();
-        self.host.advance(now).map_err(|f| f.msg.clone())?;
         let id = self.next_player;
         self.next_player += 1;
-        let snap = self.host.snapshot().to_string();
-        // Through JSON, deliberately: a snapshot that is really a clone proves
-        // nothing about a snapshot that is really a socket.
-        let parsed = json::parse(&snap).map_err(|e| format!("the snapshot did not survive: {e}"))?;
-        let sim = Sim::of_snapshot(&parsed)?;
         self.players.push(Player {
             id,
             name: if name.is_empty() { format!("player {id}") } else { name.to_string() },
+            key: key.to_string(),
             colour: COLOURS[(id as usize - 1) % COLOURS.len()],
             sim,
             joined: now,
@@ -708,12 +836,36 @@ impl Room {
             selection: None,
             editing: None,
             view: "world".into(),
-            last_seen: 0,
+            last_seen: now,
             mismatches: 0,
             resyncs: 0,
+            rejoins: 0,
             agreed: 0,
         });
-        Ok(id)
+        Ok((id, false))
+    }
+
+    /// An authoritative replica: the host's snapshot, and every command it did
+    /// not already contain.
+    ///
+    /// Shared by the correction path and the arrival path because they want
+    /// exactly the same object -- the only difference between a client that
+    /// diverged and a client that has never existed is which of them we are
+    /// embarrassed about.
+    fn fresh_sim(&mut self) -> Result<Sim, String> {
+        let now = self.now();
+        self.host.advance(now).map_err(|f| f.msg.clone())?;
+        // Through JSON, deliberately: a snapshot that is really a clone proves
+        // nothing about a snapshot that is really a socket.
+        let snap = self.host.snapshot().to_string();
+        let parsed = json::parse(&snap).map_err(|e| format!("the snapshot did not survive: {e}"))?;
+        let mut sim = Sim::of_snapshot(&parsed)?;
+        let pending: Vec<Cmd> = self.log.iter().filter(|c| c.seq > sim.seq).cloned().collect();
+        for c in &pending {
+            let _ = sim.apply(c);
+        }
+        let _ = sim.advance(now);
+        Ok(sim)
     }
 
     /// A player's intention, validated, stamped and applied.
@@ -756,6 +908,25 @@ impl Room {
             match e {
                 Effect::Recommitted { name, to, .. } => {
                     self.note(tick, player, "redesign", format!("{name} is now {to}"));
+                }
+                // Half a restore is news. The old behaviour was to put the
+                // building back with none of its wiring and say nothing at
+                // all, which left the player to work out from a machine that
+                // would not start that anything had been lost.
+                Effect::Restored { name, wanted, made, failed, .. } if *wanted > 0 => {
+                    self.note(
+                        tick,
+                        player,
+                        "restore",
+                        if failed.is_empty() {
+                            format!("{name} is back, with all {made} of its connections")
+                        } else {
+                            format!(
+                                "{name} is back, with {made} of {wanted} connections -- {}",
+                                failed.join("; ")
+                            )
+                        },
+                    );
                 }
                 Effect::Arrived { name, spilled, .. } if *spilled > 0 => {
                     self.note(
@@ -824,6 +995,70 @@ impl Room {
         Ok(())
     }
 
+    /// One beat of the room's own clock.
+    ///
+    /// The clock was always the room's. The *replicas* were the browsers': a
+    /// replica moved only when the browser that owned it polled, which is a
+    /// fine arrangement right up until a browser stops polling. A tab in the
+    /// background gets a `setTimeout` once a minute rather than five times a
+    /// second; a laptop that was shut gets none at all; and a click on a link
+    /// in the left-hand menu got none ever again. So the replica stopped where
+    /// it was, and then the poll came back and *one call* had to carry it
+    /// three thousand six hundred ticks -- holding, for as long as that took,
+    /// the one lock the other player's poll was waiting on.
+    ///
+    /// That is the freeze the play session kept hitting, and the important
+    /// half of it is the wrong half: it was not the browser that went away
+    /// that froze, it was the one that stayed.
+    ///
+    /// So the room beats on its own. Every replica is carried on the same
+    /// cadence whether or not anybody is looking at it, the work per beat is
+    /// bounded by the beat rather than by how long somebody was gone, and a
+    /// poll becomes what it always claimed to be -- a read of a frame that is
+    /// already there.
+    ///
+    /// Nothing about the proof changes. A beat is `sync`, which is the same
+    /// commands in the same order followed by the same comparison; the only
+    /// difference is who asked for it. Returns the tick the room reached.
+    pub fn heartbeat(&mut self) -> Tick {
+        let now = self.now();
+        if !self.started {
+            return now;
+        }
+        // A host that cannot run is a dead room, not a slow one, and beating at
+        // it four times a second would be a hot loop that says nothing new.
+        // The reason is recorded once, here, and the room is then left alone
+        // for the next poll to report it.
+        //
+        // Deliberately not `host.fault`, which was the first thing this
+        // reached for and was wrong: on a replica that field means "the host
+        // did something I could not", but the host is also a `Sim`, and a
+        // command refused during its own apply sets it too. One player opening
+        // a design somebody else already had open is enough -- an ordinary
+        // refusal, in an ordinary game -- and the room would have stopped
+        // beating for the rest of the session. Whether the solver will run is
+        // a different question from whether a command was allowed, and it
+        // needs a different flag.
+        if self.stalled.is_some() {
+            return now;
+        }
+        if let Err(f) = self.host.advance(now) {
+            self.stalled = Some(f.msg);
+            return now;
+        }
+        // The authority ran first, above, so every replica below is compared
+        // against a host that has already been where it is going.
+        let ids: Vec<PlayerId> = self.players.iter().map(|p| p.id).collect();
+        for id in ids {
+            // A replica that could not be carried is corrected inside `sync`.
+            // A room does not stop beating because one browser's copy of it
+            // went wrong -- that is precisely the case the correction exists
+            // for.
+            let _ = self.sync(id);
+        }
+        now
+    }
+
     /// The correction: an authoritative snapshot, and the commands since.
     ///
     /// Whole-room for now, and the architecture is the thing that matters --
@@ -831,17 +1066,7 @@ impl Room {
     /// resending one deterministic region rather than all of them is a change
     /// to what is put in the envelope, not to who sends it.
     fn resync(&mut self, k: usize) -> Result<(), String> {
-        let now = self.now();
-        self.host.advance(now).map_err(|f| f.msg)?;
-        let snap = self.host.snapshot().to_string();
-        let parsed = json::parse(&snap).map_err(|e| e.to_string())?;
-        let mut sim = Sim::of_snapshot(&parsed)?;
-        let pending: Vec<Cmd> = self.log.iter().filter(|c| c.seq > sim.seq).cloned().collect();
-        for c in &pending {
-            let _ = sim.apply(c);
-        }
-        let _ = sim.advance(now);
-        self.players[k].sim = sim;
+        self.players[k].sim = self.fresh_sim()?;
         self.players[k].resyncs += 1;
         Ok(())
     }
@@ -852,7 +1077,15 @@ impl Room {
         if id == 0 {
             self.host.advance(now).map_err(|f| f.msg)?;
         } else {
+            // Still a sync, and it is nearly always a no-op now: the beat got
+            // here first. What it costs is the handful of ticks since the last
+            // beat, which is the whole point -- the catch-up that used to be
+            // measured in minutes is measured in one beat, and it happens on
+            // the room's thread rather than in the middle of somebody's poll.
             self.sync(id)?;
+            if let Some(p) = self.players.iter_mut().find(|p| p.id == id) {
+                p.last_seen = now;
+            }
         }
         let host_probe = self.host.probe();
         let host_hash = self.host.check(host_probe);
@@ -890,6 +1123,7 @@ impl Room {
             .map(|g| g.to_json(now))
             .collect();
         let world = sim.world.to_json(&sim.build, false);
+        let sim_now = sim.now;
         let probe = sim.probe();
         let hash = sim.check(probe);
         let acct = sim.acct.to_json();
@@ -916,6 +1150,15 @@ impl Room {
                 Json::obj()
                     .set("probe", probe)
                     .set("probeSeconds", as_secs(probe))
+                    // How far this reconstruction trails the room's clock at
+                    // the moment the frame was cut. With the beat running it
+                    // is a beat's worth of ticks or none; a number that grows
+                    // is the room failing to keep up with itself, which is a
+                    // different problem from a browser failing to keep up with
+                    // the room, and the screen should be able to tell them
+                    // apart.
+                    .set("behind", now.saturating_sub(sim_now))
+                    .set("beat", HEARTBEAT)
                     .set("hash", hash.map(|h| Json::Str(format!("{h:016x}"))))
                     .set("hostProbe", host_probe)
                     .set(
@@ -957,6 +1200,15 @@ fn describe(a: &Act, w: &World) -> String {
             format!("{title} at {x},{y}")
         }
         Act::DeleteMachine { id } | Act::DeleteStorage { id } => format!("deleted {}", name(*id)),
+        Act::Restore { proto, x, y, conns, hauls, .. } => {
+            let title = super::kit::proto(proto).map(|p| p.title).unwrap_or(proto);
+            let n = conns.len() + hauls.len();
+            format!("restored {title} at {x},{y}{}", match n {
+                0 => String::new(),
+                1 => " and its connection".to_string(),
+                n => format!(" and its {n} connections"),
+            })
+        }
         Act::CreateConnection { from, to, item } => {
             format!("{} -> {} ({item})", name(*from), name(*to))
         }
@@ -996,6 +1248,20 @@ fn describe(a: &Act, w: &World) -> String {
 /// Laid out from the seed, so both players see the same yard, and spread out
 /// enough that the first thing anybody does is decide where the factory
 /// actually goes.
+/// What a patch of ground of this kind is worth, in the standalone rooms.
+///
+/// Prototype 3's five rooms each write their own numbers, because scarcity is
+/// what makes them different from each other. A room rolled from a seed has no
+/// such opinion, so the ground is worth what the catalogue's head can lift and
+/// the constraint lives in the goal instead.
+fn per_second(p: &'static super::kit::Proto) -> crate::model::Qty {
+    match p.tag {
+        "waterpump" => 400,
+        "crudewell" => 200,
+        _ => 100,
+    }
+}
+
 pub fn starting_world(goal: &Goal, seed: u64) -> World {
     let mut w = World::new("Room");
     let mut r = Rng(seed ^ 0x51ed_2701);
@@ -1004,12 +1270,15 @@ pub fn starting_world(goal: &Goal, seed: u64) -> World {
     for (tag, item) in goal.starting_kit() {
         let Some(p) = super::kit::proto(tag) else { continue };
         match p.role {
-            // Raw materials down the western edge, each with a bay beside it,
-            // and the delivery points down the eastern one. Everything in
-            // between is the game.
+            // Ground down the western edge, each with a bay beside it, and the
+            // delivery points down the eastern one. Everything in between is
+            // the game -- including, since experiment 13, the heads that work
+            // the ground: a room hands out an opportunity and never an output.
             Role::Source => {
                 let jitter = r.between(0, 1) as i32;
-                let _ = w.place(p, 4, y + jitter, 0, None, None, 0, 0);
+                if let Some(item) = p.extracts() {
+                    w.seam(item, 3, y + jitter, 8, 6, per_second(p));
+                }
             }
             Role::Storage => {
                 let _ = w.place(p, 14, y, 0, None, None, 0, 0);

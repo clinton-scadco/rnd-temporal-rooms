@@ -887,6 +887,38 @@ fn bump(
 
 // ================================================================== progress
 
+/// What kind of question a requirement is asking.
+///
+/// The play session completed a room, disconnected one of the power stations
+/// that had completed it, watched the number fall, and could not tell from the
+/// screen whether the room was still passed. Both answers were true and the
+/// panel only had room for one of them: the *room* stays finished, because
+/// that is the campaign's rule, and the *requirement* is false right now.
+///
+/// So a requirement says which sort it is, and the panel can stop pretending
+/// they are the same sort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// A pile that only grows: ship ten thousand gears. Once true, true
+    /// forever, because nothing in the game un-ships anything.
+    Achievement,
+    /// A fact about the factory as it is now -- a rate over a trailing window,
+    /// a footprint, a share of heat wasted. It became true and it can stop
+    /// being true, and a player whose factory has quietly collapsed is
+    /// entitled to find that out from the objective panel rather than from the
+    /// next room.
+    State,
+}
+
+impl Kind {
+    pub fn word(self) -> &'static str {
+        match self {
+            Kind::Achievement => "achievement",
+            Kind::State => "state",
+        }
+    }
+}
+
 /// One requirement, and how it is going.
 #[derive(Clone, Debug)]
 pub struct Line {
@@ -895,6 +927,7 @@ pub struct Line {
     pub need: f64,
     pub unit: &'static str,
     pub met: bool,
+    pub kind: Kind,
 }
 
 #[derive(Clone, Debug)]
@@ -907,6 +940,24 @@ pub struct Progress {
     /// True while the room has not been running long enough to answer a
     /// windowed question at all.
     pub warming: bool,
+}
+
+impl Progress {
+    /// Whether every *live* requirement is satisfied at this instant.
+    ///
+    /// [`Progress::met`] answers "is the whole objective true", which for a
+    /// finished room is a question about history. This answers "is the factory
+    /// doing it *now*", which is the question a player standing in a room that
+    /// used to work is actually asking. They differ exactly when something has
+    /// been unplugged since.
+    pub fn holding(&self) -> bool {
+        self.lines.iter().filter(|l| l.kind == Kind::State).all(|l| l.met)
+    }
+
+    /// The live requirements that are not being met.
+    pub fn slipped(&self) -> Vec<&Line> {
+        self.lines.iter().filter(|l| l.kind == Kind::State && !l.met).collect()
+    }
 }
 
 /// What the run looked like at the moment it was won.
@@ -968,6 +1019,16 @@ impl Progress {
         Json::obj()
             .set("met", self.met)
             .set("warming", self.warming)
+            // Whether the factory is doing it *now*, as opposed to whether it
+            // ever did. A finished room whose power station has been unplugged
+            // is `met` and not `holding`, and the panel says both.
+            .set("holding", self.holding())
+            .set(
+                "slipped",
+                Json::Arr(
+                    self.slipped().iter().map(|l| Json::Str(l.what.clone())).collect(),
+                ),
+            )
             .set("doneAt", self.done_at.map(|t| Json::Int(t as i128)))
             .set("doneSeconds", self.done_at.map(|t| Json::Real(as_secs(t))))
             .set(
@@ -989,6 +1050,7 @@ impl Progress {
                                 .set("need", l.need)
                                 .set("unit", l.unit)
                                 .set("met", l.met)
+                                .set("kind", l.kind.word())
                         })
                         .collect(),
                 ),
@@ -1020,6 +1082,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
             need: qty as f64,
             unit: "",
             met: have >= qty as f64,
+            kind: Kind::Achievement,
         });
     };
     match shape {
@@ -1036,7 +1099,10 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                 have: used,
                 need: *cap_qty as f64,
                 unit: "at most",
+                // A budget is spent, never refunded, so it is history like the
+                // pile above it rather than a fact about this second.
                 met: used <= *cap_qty as f64,
+                kind: Kind::Achievement,
             });
         }
         Shape::Sustain { item, per_sec, secs: w } => {
@@ -1048,6 +1114,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                 need: *per_sec as f64,
                 unit: if item == "Power" { "MW" } else { "/s" },
                 met: got.unwrap_or(0.0) >= *per_sec as f64,
+                kind: Kind::State,
             });
         }
         Shape::SustainPair { a, b, secs: w } => {
@@ -1060,6 +1127,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                     need: *need as f64,
                     unit: if item == "Power" { "MW" } else { "/s" },
                     met: got.unwrap_or(0.0) >= *need as f64,
+                    kind: Kind::State,
                 });
             }
         }
@@ -1072,6 +1140,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                 need: *per_sec as f64,
                 unit: if item == "Power" { "MW" } else { "/s" },
                 met: got.unwrap_or(0.0) >= *per_sec as f64,
+                kind: Kind::State,
             });
             let foot = acct.samples.last().map(|s| s.footprint).unwrap_or(0) as f64;
             lines.push(Line {
@@ -1080,6 +1149,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                 need: *tiles as f64,
                 unit: "tiles at most",
                 met: foot <= *tiles as f64,
+                kind: Kind::State,
             });
         }
         Shape::CleanPower { mw, secs: w, max_waste_pct } => {
@@ -1091,6 +1161,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                 need: *mw as f64,
                 unit: "MW",
                 met: got.unwrap_or(0.0) >= *mw as f64,
+                kind: Kind::State,
             });
             let pct = acct.samples.last().map(|s| s.waste_pct()).unwrap_or(0) as f64;
             lines.push(Line {
@@ -1099,6 +1170,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                 need: *max_waste_pct as f64,
                 unit: "% at most",
                 met: pct <= *max_waste_pct as f64,
+                kind: Kind::State,
             });
         }
         Shape::Peak { base, peak, spill, hold, every, secs: w } => {
@@ -1114,6 +1186,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                         need: *base as f64,
                         unit: "MW",
                         met: false,
+                        kind: Kind::State,
                     });
                 }
                 Some(mw) => {
@@ -1139,6 +1212,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                         need: *base as f64,
                         unit: "MW",
                         met: floor >= *base,
+                        kind: Kind::State,
                     });
                     lines.push(Line {
                         what: format!("a surge, in every {every}s"),
@@ -1146,6 +1220,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                         need: *peak as f64,
                         unit: "MW",
                         met: surge >= *peak,
+                        kind: Kind::State,
                     });
                     lines.push(Line {
                         what: format!("seconds over {} MW, in any {every}s", commas(*spill)),
@@ -1153,6 +1228,7 @@ fn judge(shape: &Shape, acct: &Acct, lines: &mut Vec<Line>, warming: &mut bool) 
                         need: *hold as f64,
                         unit: "at most",
                         met: over <= *hold,
+                        kind: Kind::State,
                     });
                 }
             }

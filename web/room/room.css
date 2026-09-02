@@ -15,6 +15,20 @@
   --bad:     #E06C6C;
   --good:    #7ED9A0;
 
+  /* One colour per domain, and the same seven the machine designer uses --
+     `web/machine/machine.css` has these exact values. A pipe in a room and a
+     fluid port inside a machine are the same blue on purpose: experiment 13
+     made a connection a physical thing with a domain, and a player who has
+     learned the palette in one window should not have to learn it again in
+     the other. */
+  --heat:       #E0703C;
+  --fluid:      #56A8E8;
+  --gas:        #BFD6DE;
+  --material:   #8FB07A;
+  --rotary:     #C98BD6;
+  --mech:       #D68B8B;
+  --electrical: #E8C860;
+
   --source:  #8FB07A;
   --storage: #56A8E8;
   --machine: #C98BD6;
@@ -84,6 +98,9 @@ h2 {
 #code { font: 600 15px/1 var(--mono); letter-spacing: .22em; color: var(--accent); }
 .clock { display: flex; align-items: center; gap: 8px; }
 #clock { font: 15px/1 var(--mono); }
+.link { font: 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.link.slow { color: var(--signal); }
+.link.out { color: var(--bad); }
 .who { display: flex; gap: 10px; margin-left: auto; align-items: center; }
 .who .p { display: flex; align-items: center; gap: 5px; font-size: 12px; }
 .who .dot { width: 9px; height: 9px; border-radius: 50%; }
@@ -173,6 +190,52 @@ h2 {
 #inspect dd { margin: 0; font-family: var(--mono); font-size: 11px; text-align: right; }
 #inspect .row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; }
 #inspect .row.short { color: var(--bad); }
+
+/* The objective panel's two verdicts: a room is finished, and the factory is
+   or is not still doing what finished it. */
+.verdict {
+  display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline;
+  border: 1px solid var(--good); border-radius: 3px; padding: 6px 8px; margin: 0 0 10px;
+  font-size: 11px; color: var(--good);
+}
+.verdict b { font-weight: 600; }
+.verdict span { color: var(--muted); }
+.verdict em { flex-basis: 100%; font-style: normal; color: var(--muted); line-height: 1.5; }
+.verdict.slipped { border-color: var(--signal); color: var(--signal); }
+.verdict.slipped em { color: var(--signal); }
+.line .kind {
+  display: inline-block; margin-right: 6px; padding: 0 4px; border-radius: 2px;
+  background: var(--rule); color: var(--muted);
+  font: 9px/1.5 var(--mono); text-transform: uppercase; letter-spacing: .06em;
+}
+
+/* One row per port in the inspector's taking/giving tables. */
+#inspect .row .pip {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--d, var(--muted)); margin-right: 6px; vertical-align: middle;
+}
+#inspect .row em { font-style: normal; color: var(--muted); font-family: var(--mono); font-size: 10px; }
+
+/* The contextual connect panel: one row per port, clickable, colour-coded by
+   domain. Note 6 asked for the wire tools to stop living in a scrolling side
+   menu and start living on the thing being wired. */
+.ports { display: flex; flex-direction: column; gap: 3px; margin: 0 0 8px; }
+.ports .lbl {
+  color: var(--muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+}
+.port {
+  display: flex; align-items: center; gap: 7px; width: 100%; text-align: left;
+  background: transparent; border: 1px solid var(--rule); border-radius: 3px;
+  color: var(--ink); font: 11px var(--ui), sans-serif; padding: 4px 7px; cursor: pointer;
+}
+.port:hover { border-color: var(--accent); background: var(--accent-2); }
+.port .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  border: 1px solid var(--d, var(--muted)); background: transparent;
+}
+.port.on .dot { background: var(--d, var(--muted)); }
+.port .what { flex: 1; }
+.port .n { color: var(--muted); font-family: var(--mono); font-size: 10px; }
 #inspect .acts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
 #feed { font: 11px/1.5 var(--mono); color: var(--muted); }
 #feed div { padding: 2px 0; border-bottom: 1px solid var(--rule); }
@@ -219,3 +282,19 @@ h2 {
 #wondetail { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-family: var(--mono); font-size: 12px; margin: 14px 0; }
 #wondetail b { color: var(--muted); font-weight: 400; }
 .muted { color: var(--muted); }
+
+/* ------------------------------------------------- a chassis, and an example */
+/* Note 7: prebuilt machines take the fun out of the game entirely. The palette
+   places an empty one; the book's answer is a second, smaller button that says
+   what it is. */
+.pal { display: flex; gap: 4px; align-items: stretch; }
+.pal > button:first-child { flex: 1; }
+.palette .pal em {
+  font-style: normal; color: var(--muted); font-size: 10px; margin-left: 4px;
+}
+.palette button.eg {
+  flex: none; padding: 0 6px; font-size: 10px; color: var(--muted);
+  border-style: dashed;
+}
+.palette button.eg:hover { color: var(--signal); border-color: var(--signal); }
+.palette button.eg.on { color: var(--signal); border-color: var(--signal); border-style: solid; }

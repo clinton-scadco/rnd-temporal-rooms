@@ -17,10 +17,15 @@
   <div class="group room" id="roombox" hidden>
     <label>room</label><output id="code">------</output>
     <button id="copy" title="copy the code">copy</button>
+    <button id="leave" title="go back to the lobby. The seat stays where it is, and the room keeps running">leave</button>
   </div>
 
   <div class="clock" id="clockbox" hidden>
     <label>running</label><output id="clock">0:00</output>
+    <!-- The room keeps its own time now, so a clock that has stopped moving is
+         a statement about this browser and not about the factory. This says
+         which. -->
+    <output id="link" class="link" title="how current the picture on this screen is"></output>
   </div>
 
   <div class="group" id="views" hidden>

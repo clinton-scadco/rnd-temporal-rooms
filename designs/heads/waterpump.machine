@@ -1,0 +1,29 @@
+# A head, and the point is that it *is* a machine.
+#
+# Experiment 13, note 1: a mine that produced ore because the catalogue said so
+# was the last magical object left in the world. Now the room has a water table in
+# the ground and this is what stands on it. It lifts 800 a second because
+# a fluid inlet moves two hundred, an outlet takes two hundred, and they pair off, not because anybody typed a number.
+#
+# The ground has the last word: a head on a thinner seam turns slower, and a
+# richer one takes more than one head -- or one better head, which is the same
+# question asked of the floor instead. Everything here abuts everything else on
+# purpose, because in a room whose problem is space the size of this is the
+# first thing worth arguing with.
+
+machine "Intake"
+
+pump   W1 at 0,0
+pump   W2 at 0,2
+pump   W3 at 2,0
+pump   W4 at 2,2
+
+outlet O1 at 4,0
+outlet O2 at 4,2
+outlet O3 at 6,0
+outlet O4 at 6,2
+
+wire W1.water -> O1.liquid
+wire W2.water -> O2.liquid
+wire W3.water -> O3.liquid
+wire W4.water -> O4.liquid

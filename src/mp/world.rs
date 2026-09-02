@@ -51,6 +51,7 @@ use super::{PLOT, SIM_TICK_RATE};
 use crate::graph::{Amount, Edge, Graph, Kind, Node};
 use crate::json::Json;
 use crate::machine::design::Design;
+use crate::machine::stuff::Domain;
 use crate::model::{Geometry, Policy, Qty, Tick};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -104,8 +105,13 @@ impl Install {
     /// Footprint as placed. A machine's comes from the design inside it, which
     /// is what makes the space goals a question about engineering.
     pub fn size(&self) -> (i32, i32) {
-        let (w, h) = match (&self.lowered, self.proto.role) {
-            (Some(m), Role::Machine) => (m.w, m.h),
+        // Whatever is designed takes the size of what was designed into it --
+        // and since experiment 13 that includes an extraction head, whose
+        // footprint is the first thing anybody standing in Coal Basin has to
+        // argue with. Keying this off `Role::Machine` left the heads wearing
+        // the catalogue's box, so two of them on one seam overlapped.
+        let (w, h) = match (&self.lowered, self.proto.role.designed()) {
+            (Some(m), true) => (m.w, m.h),
             _ => (self.proto.w, self.proto.h),
         };
         if self.face & 1 == 1 {
@@ -138,11 +144,61 @@ impl Install {
     pub fn recipe(&self) -> (Vec<Amount>, Vec<Amount>, Tick) {
         let amount = |i: &str, q: Qty| Amount { item: i.to_string(), qty: q };
         match self.proto.spec {
-            Spec::Source { item, per_second } => (
-                Vec::new(),
-                vec![amount(item, self.rated.unwrap_or(per_second))],
-                SIM_TICK_RATE,
-            ),
+            // An extraction head runs its design like any other machine, and
+            // then the ground has the last word.
+            Spec::Extract { item, .. } => match &self.lowered {
+                Some(m) => {
+                    let cycle = m.cycle.max(1);
+                    let give = m.gives_of(item);
+                    // What the ground allows over one turn of this design.
+                    //
+                    // The first version of this stretched the *cycle* until
+                    // the average came out right, which is arithmetically
+                    // identical and plays quite differently: a head capped to
+                    // a third of its design delivered three times as much,
+                    // three times less often, and every machine downstream sat
+                    // idle between the lumps. The campaign lost eleven percent
+                    // of its gears to it.
+                    //
+                    // So the cycle is the design's and the *amounts* are
+                    // scaled. Exact, because a head's cycle is a whole number
+                    // of seconds and the cap is written in seconds.
+                    let allowed = match self.rated {
+                        Some(cap) => {
+                            (cap as u128 * cycle as u128 / SIM_TICK_RATE as u128) as Qty
+                        }
+                        None => give,
+                    };
+                    let keep = allowed.min(give);
+                    let scale = |q: Qty| match give {
+                        0 => 0,
+                        g => (q as u128 * keep as u128 / g as u128) as Qty,
+                    };
+                    (
+                        // Whatever the head draws of the substance it is
+                        // standing on comes out of the *ground*, and must not
+                        // also be asked of a bay. Inside the machine an inlet
+                        // is a boundary flow like any other -- it has to be, or
+                        // the design would not balance -- and out here the
+                        // boundary it crosses is the deposit.
+                        //
+                        // Anything else it draws is a real input: a head that
+                        // washes its ore wants water delivered like everything
+                        // else in the room.
+                        m.takes
+                            .iter()
+                            .filter(|(i, _)| i != item)
+                            .map(|(i, q)| amount(i, scale(*q)))
+                            .collect(),
+                        m.gives
+                            .iter()
+                            .map(|(i, q)| amount(i, if i == item { keep } else { scale(*q) }))
+                            .collect(),
+                        cycle,
+                    )
+                }
+                None => (Vec::new(), Vec::new(), SIM_TICK_RATE),
+            },
             Spec::Sink { .. } => {
                 let item = self.item.clone().unwrap_or_default();
                 (vec![amount(&item, 1)], Vec::new(), 1)
@@ -171,6 +227,39 @@ impl Install {
         self.proto.role == Role::Storage
     }
 
+    /// The connection points this installation actually has.
+    ///
+    /// Derived, never authored. A machine's ports are the boundary flows of
+    /// the design inside it -- the hopper that has to be fed, the chute that
+    /// has to go somewhere, the terminal the motor draws through -- read
+    /// straight off the orbit `lower` compiled. That is the whole of the first
+    /// change experiment 13 asks for: the outside of a machine is a fact about
+    /// its inside, rather than a socket the catalogue declared.
+    ///
+    /// A *bay* answers with nothing, and that is not an oversight. A bay holds
+    /// what is put into it and offers what it holds, so its ports are a
+    /// question about the room rather than about the bay -- which is why
+    /// [`World::ports_of`] exists and this does not try.
+    pub fn ports(&self) -> Vec<Port> {
+        if self.is_storage() {
+            return Vec::new();
+        }
+        let (takes, gives, cycle) = self.recipe();
+        let secs = super::as_secs(cycle).max(1e-9);
+        let port = |a: &Amount, out: bool| Port {
+            item: a.item.clone(),
+            domain: lower::domain_of(&a.item),
+            out,
+            qty: a.qty,
+            per_second: a.qty as f64 / secs,
+        };
+        takes
+            .iter()
+            .map(|a| port(a, false))
+            .chain(gives.iter().map(|a| port(a, true)))
+            .collect()
+    }
+
     /// How much this bay holds. The catalogue's number unless the room said
     /// otherwise when it was furnished.
     pub fn capacity(&self) -> Qty {
@@ -194,7 +283,38 @@ pub struct Haul {
     pub by: PlayerId,
 }
 
-/// A wire between a bay and a machine, in the direction material moves.
+/// One connection point on the outside of an installation.
+///
+/// The unit the connect UI offers and the unit [`World::connect`] validates
+/// against. Two of them mate when they name the same item, which -- because an
+/// item belongs to exactly one domain -- also means they are in the same
+/// domain. Electricity therefore cannot arrive down a pipe, and does not have
+/// to be routed through a bay to arrive at all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Port {
+    pub item: String,
+    pub domain: Domain,
+    /// Out of the installation rather than into it.
+    pub out: bool,
+    /// Per cycle, and the same number per second, as the recipe states them.
+    pub qty: Qty,
+    pub per_second: f64,
+}
+
+impl Port {
+    pub fn to_json(&self) -> Json {
+        Json::obj()
+            .set("item", self.item.clone())
+            .set("title", lower::item_title(&self.item))
+            .set("domain", self.domain.tag())
+            .set("unit", self.domain.unit())
+            .set("out", self.out)
+            .set("qty", Json::big(self.qty as u128))
+            .set("perSecond", self.per_second)
+    }
+}
+
+/// A connection between two installations, in the direction stuff moves.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Conn {
     pub from: Id,
@@ -206,10 +326,126 @@ pub struct Conn {
     pub item: String,
 }
 
+/// Something in the ground.
+///
+/// The world's answer to note 1 of the play session: an ore mine that produced
+/// ore because the catalogue said so was the last magical object left in the
+/// game, and a room that handed out free output was a room that had already
+/// answered its own question.
+///
+/// A deposit is *terrain*. Nobody places one, nobody deletes one, and no
+/// command names one -- it arrives with the room, the way a plot size does. It
+/// offers an opportunity: this much of this, per second, to whatever machine
+/// is standing on it. What you actually get is the smaller of that and what
+/// the head you designed can lift, and which of the two is binding is the
+/// decision the room is asking you about.
+///
+/// # One number, on purpose
+///
+/// Experiment 13 sketches quality, capacity and extraction properties. There
+/// is one number here, and it is a rate. Depletion would make a room's answer
+/// depend on how long you took, which is a different game; a quality that fed
+/// the stuff model would be a good idea and is a whole pass of its own. A
+/// field nothing reads is worse than a field that is not there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Deposit {
+    pub id: Id,
+    /// What comes out of it.
+    pub item: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    /// The most that can be drawn out of it in a second, however good the
+    /// machine standing on it happens to be.
+    pub yields: Qty,
+}
+
+impl Deposit {
+    /// What this is called, in a sentence a player reads. Ground has names.
+    pub fn title(&self) -> &'static str {
+        match self.item.as_str() {
+            "IronOre" => "ore body",
+            "Coal" => "coal seam",
+            "Water" => "water table",
+            "Crude" => "crude field",
+            "IronBillet" => "billet stock",
+            _ => "deposit",
+        }
+    }
+
+    pub fn bounds(&self) -> (i32, i32, i32, i32) {
+        (self.x, self.y, self.x + self.w, self.y + self.h)
+    }
+
+    /// Whether a footprint touches this ground at all.
+    ///
+    /// Overlap rather than containment: experiment 13 says "on or beside it",
+    /// and a head that has to be centred on a seam to the tile would be a
+    /// placement puzzle rather than an engineering one.
+    pub fn touches(&self, x: i32, y: i32, w: i32, h: i32) -> bool {
+        let (ax0, ay0, ax1, ay1) = self.bounds();
+        x < ax1 && ax0 < x + w && y < ay1 && ay0 < y + h
+    }
+
+    pub fn to_json(&self) -> Json {
+        Json::obj()
+            .set("id", Json::big(self.id as u128))
+            .set("item", self.item.clone())
+            .set("itemTitle", lower::item_title(&self.item))
+            .set("title", self.title())
+            .set("domain", lower::domain_of(&self.item).tag())
+            .set("x", self.x as i64)
+            .set("y", self.y as i64)
+            .set("w", self.w as i64)
+            .set("h", self.h as i64)
+            .set("yields", Json::big(self.yields as u128))
+    }
+}
+
+/// The buffer a direct connection implies.
+///
+/// When two machines are wired to each other there is still something between
+/// them -- a chute, a hopper, a length of pipe -- and the solver has always had
+/// a word for that: a storage node. What changed is who has to put it there.
+/// The player used to; now the compiler does, sized from what actually passes
+/// through it and named after the connection that made it.
+///
+/// It is not in the document, and it is not addressable: no command names one,
+/// nothing can be built on one, and deleting the connection deletes it. It is
+/// what the room *means*, derived the same way a machine's footprint is
+/// derived from the design inside it.
+#[derive(Clone, Debug)]
+pub struct Bridge {
+    /// A synthetic identity, taken from the top of the range so that it can
+    /// never collide with one the document handed out -- ids are assigned by
+    /// replaying the log from 1, and a room would need eighteen quintillion
+    /// buildings in it to meet these coming the other way.
+    pub id: Id,
+    pub name: String,
+    pub item: String,
+    pub from: Id,
+    pub to: Id,
+    pub capacity: Qty,
+}
+
+/// How many cycles of the larger side a derived buffer holds.
+///
+/// Small on purpose. A derived buffer exists so that a direct connection has
+/// somewhere to put a cycle's worth of output while the other end is busy; it
+/// is not a stockpile, and a player who wants one of those places a bay. Four
+/// is enough that neither end stalls on granularity and few enough that
+/// nobody can use a connection as free storage.
+const BRIDGE_CYCLES: Qty = 4;
+
 #[derive(Clone, Debug, Default)]
 pub struct World {
     pub name: String,
     pub installs: Vec<Install>,
+    /// What is in the ground here. Terrain, not buildings: nothing places one
+    /// and nothing deletes one, and the whole document is a function of the
+    /// room plus the command log exactly as before.
+    pub deposits: Vec<Deposit>,
     pub hauls: Vec<Haul>,
     pub conns: Vec<Conn>,
     /// The next identity to hand out. Part of the document, because ids are
@@ -243,6 +479,111 @@ impl World {
     pub fn get_mut(&mut self, id: Id) -> Option<&mut Install> {
         self.installs.iter_mut().find(|i| i.id == id)
     }
+    /// Put something in the ground.
+    ///
+    /// Only a room furnishing itself calls this, and only before anybody has
+    /// joined: what is under the plot is part of what the room *is*, not part
+    /// of what was done to it, so it arrives with the starting document rather
+    /// than as a command. Deposits take identities from the same counter as
+    /// buildings, so nothing anywhere has to know which kind of thing an id
+    /// belongs to.
+    pub fn seam(&mut self, item: &str, x: i32, y: i32, w: i32, h: i32, yields: Qty) -> Id {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.deposits.push(Deposit {
+            id,
+            item: item.to_string(),
+            x,
+            y,
+            w,
+            h,
+            yields,
+        });
+        id
+    }
+
+    /// The n-th patch of ground of one kind, in document order.
+    ///
+    /// For a harness that wants to build a factory without a pointer. A player
+    /// finds ground by looking at it.
+    pub fn nth_ground(&self, item: &str, n: usize) -> Option<&Deposit> {
+        self.deposits.iter().filter(|d| d.item == item).nth(n)
+    }
+
+    /// The ground under a footprint, if any of it is worth standing on.
+    pub fn ground(&self, item: &str, x: i32, y: i32, w: i32, h: i32) -> Option<&Deposit> {
+        self.deposits.iter().find(|d| d.item == item && d.touches(x, y, w, h))
+    }
+
+    /// The deposit one installation is standing on.
+    pub fn under(&self, id: Id) -> Option<&Deposit> {
+        let i = self.get(id)?;
+        let item = i.proto.extracts()?;
+        let (w, h) = i.size();
+        self.ground(item, i.x, i.y, w, h)
+    }
+
+    /// The heads standing on one patch of ground, in placement order.
+    pub fn worked(&self, d: &Deposit) -> Vec<&Install> {
+        let mut on: Vec<&Install> = self
+            .installs
+            .iter()
+            .filter(|i| {
+                i.proto.extracts() == Some(d.item.as_str()) && {
+                    let (w, h) = i.size();
+                    d.touches(i.x, i.y, w, h)
+                }
+            })
+            .collect();
+        on.sort_by_key(|i| i.id);
+        on
+    }
+
+    /// What one head's design could lift in a second, before the ground has
+    /// its say. Integer throughout, because a rate that accumulates in a float
+    /// is a desynchronisation with a delay fuse in it.
+    fn appetite(i: &Install) -> Qty {
+        let Some(item) = i.proto.extracts() else { return 0 };
+        let Some(m) = &i.lowered else { return 0 };
+        let give = m.gives_of(item);
+        if m.cycle == 0 {
+            return 0;
+        }
+        (give as u128 * SIM_TICK_RATE as u128 / m.cycle as u128) as Qty
+    }
+
+    /// Share every patch of ground out among the heads standing on it.
+    ///
+    /// First come, first served, in the order the heads were placed: each
+    /// takes what its design can lift until the seam is spent, and one that
+    /// arrives after the ground is spoken for turns at nothing until something
+    /// in front of it is taken down.
+    ///
+    /// Equal shares were the other option and are worse to play against: a new
+    /// head would quietly slow every head already standing there, and a player
+    /// would watch a factory they had not touched get worse. This way the only
+    /// thing a new head can do is take what is left.
+    ///
+    /// Deterministic, because ids are handed out by replaying the log and
+    /// every replica replays the same one. Called from the two places that can
+    /// change the answer -- a placement and a removal -- and nowhere else.
+    fn reprice(&mut self) {
+        let ground: Vec<(Id, Qty)> =
+            self.deposits.iter().map(|d| (d.id, d.yields)).collect();
+        for (did, yields) in ground {
+            let Some(d) = self.deposits.iter().find(|d| d.id == did) else { continue };
+            let ids: Vec<Id> = self.worked(d).iter().map(|i| i.id).collect();
+            let mut left = yields;
+            for id in ids {
+                let Some(k) = self.installs.iter().position(|i| i.id == id) else { continue };
+                let want = Self::appetite(&self.installs[k]);
+                let share = want.min(left);
+                left -= share;
+                self.installs[k].rated = Some(share);
+            }
+        }
+    }
+
     pub fn haul(&self, id: Id) -> Option<&Haul> {
         self.hauls.iter().find(|h| h.id == id)
     }
@@ -314,9 +655,18 @@ impl World {
         if proto.role == Role::Transport {
             return Err("a transport is created between two bays, not placed".into());
         }
-        let lowered = match (proto.role, &design) {
-            (Role::Machine, Some(d)) => Some(lower::lower(d)?),
-            (Role::Machine, None) => return Err("a machine is placed with a design".into()),
+        // `designed()` rather than `Role::Machine`, because an extraction head
+        // is a designed thing too: it is a machine that happens to stand on a
+        // deposit, and how much of the seam it lifts is a fact about the
+        // design inside it.
+        //
+        // No design is a *chassis*: a footprint with nothing inside it,
+        // standing there not running until somebody designs it. It used to be
+        // a refusal, and one level up it used to be quietly filled in with the
+        // catalogue's answer -- which is what note 7 of the play session meant
+        // by prebuilt machines taking the fun out of the game entirely.
+        let lowered = match (proto.role.designed(), &design) {
+            (true, Some(d)) => Some(lower::lower(d)?),
             _ => None,
         };
         if let Spec::Sink { item: fixed, .. } = proto.spec {
@@ -349,9 +699,49 @@ impl World {
         };
         let (w, h) = inst.size();
         self.free(x, y, w, h, None)?;
+        // An extraction head has to stand on something worth extracting. This
+        // is the whole of note 1: the world offers an opportunity and the
+        // machine is how well you take it, so a head in the middle of an empty
+        // field is a refusal with a reason on it rather than a building that
+        // quietly produces nothing.
+        if let Some(item) = proto.extracts() {
+            let Some(d) = self.ground(item, x, y, w, h) else {
+                return Err(format!(
+                    "a {} has to stand on {}, and there is none here",
+                    proto.title,
+                    match item {
+                        "IronOre" => "an ore body",
+                        "Coal" => "a coal seam",
+                        "Water" => "a water table",
+                        "Crude" => "a crude field",
+                        "IronBillet" => "billet stock",
+                        other => other,
+                    }
+                ));
+            };
+            // What is left of it, so that a head placed on ground somebody has
+            // already drained is refused where the player can see it rather
+            // than standing there turning at nothing.
+            let taken: Qty = self.worked(d).iter().map(|i| Self::appetite(i)).sum();
+            if taken >= d.yields {
+                return Err(format!(
+                    "this {} is already spoken for: {} of {} a second",
+                    d.title(),
+                    taken.min(d.yields),
+                    d.yields
+                ));
+            }
+            // A placeholder. `reprice` below hands out the real share once the
+            // building is actually standing there.
+            inst.rated = Some(0);
+        }
         inst.name = format!("{}{}", proto.short, id);
+        let extracts = inst.proto.extracts().is_some();
         self.installs.push(inst);
         self.next_id += 1;
+        if extracts {
+            self.reprice();
+        }
         Ok(id)
     }
 
@@ -375,46 +765,148 @@ impl World {
         let gone = self.installs.remove(k);
         self.conns.retain(|c| c.from != id && c.to != id);
         self.hauls.retain(|h| h.from != id && h.to != id);
+        // Taking a head down gives its share of the seam back to whatever is
+        // still standing on it.
+        if gone.proto.extracts().is_some() {
+            self.reprice();
+        }
         Ok(gone)
     }
 
     // ----------------------------------------------------------- wiring
 
     /// Wire a bay to a machine, or a machine to a bay.
+    /// The ports a bay has, which is a question about the room rather than
+    /// about the bay.
+    ///
+    /// A bay holds what is put into it and offers what it holds, so it has no
+    /// ports of its own: it has the ones the room has given it. An import yard
+    /// declares its item because a train fills it from a simulation this
+    /// document has never heard of; everything else a bay can offer is
+    /// something already wired into it.
+    ///
+    /// This is what makes "never ask a question whose answer is already
+    /// determined" possible: a bay with one item in it has one port, and
+    /// connecting to it needs no menu.
+    pub fn ports_of(&self, id: Id) -> Vec<Port> {
+        let Some(i) = self.get(id) else { return Vec::new() };
+        if !i.is_storage() {
+            return i.ports();
+        }
+        let mut items: Vec<String> = Vec::new();
+        let mut note = |item: &str| {
+            if !items.iter().any(|i| i == item) {
+                items.push(item.to_string());
+            }
+        };
+        if let Some(item) = &i.item {
+            note(item);
+        }
+        for c in self.conns.iter().filter(|c| c.to == id || c.from == id) {
+            note(&c.item);
+        }
+        for h in self.hauls.iter().filter(|h| h.to == id || h.from == id) {
+            note(&h.item);
+        }
+        // Both ways round, and with no rate: what a bay can pass through is
+        // decided by what fills it and what draws on it, and neither of those
+        // is the bay's own number.
+        items
+            .iter()
+            .flat_map(|item| {
+                [false, true].map(|out| Port {
+                    item: item.clone(),
+                    domain: lower::domain_of(item),
+                    out,
+                    qty: 0,
+                    per_second: 0.0,
+                })
+            })
+            .collect()
+    }
+
+    /// Join two installations, in the direction stuff moves.
+    ///
+    /// # What used to be here, and why it is not
+    ///
+    /// This function used to open with a rule:
+    ///
+    /// ```text
+    ///   two machines cannot be wired together -- route them through a bay
+    /// ```
+    ///
+    /// It was logically immaculate. Every flow in the room passed through a
+    /// declared buffer, every buffer was a node the solver already understood,
+    /// and the whole factory was one alternating chain of machine and bay. It
+    /// was also, in the words of the play session that found it, *work*: the
+    /// player did not want a warehouse between a crusher and a smelter, and
+    /// they very much did not want one between a generator and the thing it
+    /// was powering. Electricity does not queue in a shed.
+    ///
+    /// So the rule is gone, and what replaces it is the ports the two ends
+    /// actually have. A connection is legal when the producer really produces
+    /// that item and the consumer really consumes it -- facts derived from the
+    /// designs inside them, not from the catalogue -- and since an item
+    /// belongs to exactly one domain, matching the item matches the domain.
+    ///
+    /// The buffer has not disappeared; it has stopped being the player's
+    /// problem. [`World::compile`] puts a small one in wherever two machines
+    /// are joined directly, sized from what passes through it. A bay is now
+    /// something you place because you *want* storage -- a stockpile, a surge
+    /// tank, something for a train to load from -- rather than punctuation the
+    /// parser demanded.
     pub fn connect(&mut self, from: Id, to: Id, item: &str) -> Result<(), String> {
-        let a = self.get(from).ok_or("one end of that wire is not there")?;
-        let b = self.get(to).ok_or("one end of that wire is not there")?;
-        if a.is_storage() == b.is_storage() {
-            return Err(if a.is_storage() {
-                "two bays cannot be wired together -- put a transport between them".into()
-            } else {
-                "two machines cannot be wired together -- route them through a bay".into()
-            });
+        if from == to {
+            return Err("a connection has to go somewhere".into());
+        }
+        let a = self.get(from).ok_or("one end of that connection is not there")?;
+        let b = self.get(to).ok_or("one end of that connection is not there")?;
+        // The one pairing that is still refused, and for a reason that has
+        // nothing to do with buffering: two bays are joined by a *transport*,
+        // which has a length, a fleet and a latency. A wire between them would
+        // be a belt with none of those.
+        if a.is_storage() && b.is_storage() {
+            return Err("two bays are joined by a transport, not a wire".into());
+        }
+        if !lower::ITEMS.contains(&item) {
+            return Err(format!("`{item}` is not an item"));
         }
         if self.conns.iter().any(|c| c.from == from && c.to == to && c.item == item) {
-            return Err("that wire is already there".into());
+            return Err("that connection is already there".into());
         }
-        // The machine end is the one with an opinion about items.
-        let (machine, wants) = if a.is_storage() { (b, b.wants()) } else { (a, a.makes()) };
-        if !wants.contains(&item.to_string()) {
-            return Err(if a.is_storage() {
-                format!("{} does not consume {}", machine.name, lower::item_title(item))
-            } else {
-                format!("{} does not produce {}", machine.name, lower::item_title(item))
-            });
-        }
-        // One bay per item, per direction. The language below would refuse a
-        // machine that could draw its ore from two places -- arbitration
-        // between bays is a thing nobody declared -- so the refusal happens
-        // here, where it can name the wire the player just drew.
-        let clash = self.conns.iter().any(|c| {
-            c.item == item
-                && if a.is_storage() { c.to == to } else { c.from == from }
-        });
-        if clash {
+        // The ports. A bay is exempt at both ends because it has no opinion
+        // about items until the room gives it one.
+        if !a.is_storage() && !a.makes().iter().any(|i| i == item) {
             return Err(format!(
-                "{} already has a bay for {}; delete that wire first",
-                machine.name,
+                "{} has no {} output",
+                a.name,
+                lower::item_title(item)
+            ));
+        }
+        if !b.is_storage() && !b.wants().iter().any(|i| i == item) {
+            return Err(format!(
+                "{} has no {} input",
+                b.name,
+                lower::item_title(item)
+            ));
+        }
+        // Arbitration, unchanged in meaning and now stated about ports rather
+        // than about bays. A machine that could draw one item from two places
+        // needs a rule nobody has declared, and a machine whose output went two
+        // ways would need a split nobody has sized -- so both are refused here,
+        // where the refusal can name the connection somebody just drew, rather
+        // than by a factory that quietly does not start.
+        if !b.is_storage() && self.conns.iter().any(|c| c.to == to && c.item == item) {
+            return Err(format!(
+                "{} already has somewhere to draw {} from",
+                b.name,
+                lower::item_title(item)
+            ));
+        }
+        if !a.is_storage() && self.conns.iter().any(|c| c.from == from && c.item == item) {
+            return Err(format!(
+                "{}'s {} already goes somewhere",
+                a.name,
                 lower::item_title(item)
             ));
         }
@@ -491,6 +983,39 @@ impl World {
         Ok(self.hauls.remove(k))
     }
 
+    /// Every buffer this document implies, in document order.
+    ///
+    /// One per connection that joins two machines directly. Deterministic in
+    /// both its order and its names, because every replica compiles the same
+    /// document and the simulator carries state by name: a buffer that was
+    /// called something else on one client would be a different factory.
+    pub fn bridges(&self) -> Vec<Bridge> {
+        let mut out = Vec::new();
+        for (k, c) in self.conns.iter().enumerate() {
+            let (Some(a), Some(z)) = (self.get(c.from), self.get(c.to)) else { continue };
+            if a.is_storage() || z.is_storage() {
+                continue;
+            }
+            // Enough for a few cycles of whichever end moves more at a time,
+            // so that granularity alone never stalls the pair.
+            let per = |i: &Install, out: bool| -> Qty {
+                let (takes, gives, _) = i.recipe();
+                let side = if out { gives } else { takes };
+                side.iter().find(|a| a.item == c.item).map(|a| a.qty).unwrap_or(0)
+            };
+            let capacity = per(a, true).max(per(z, false)).saturating_mul(BRIDGE_CYCLES).max(1);
+            out.push(Bridge {
+                id: Id::MAX - k as Id,
+                name: format!("{}_{}_{}", a.name, z.name, c.item),
+                item: c.item.clone(),
+                from: c.from,
+                to: c.to,
+                capacity,
+            });
+        }
+        out
+    }
+
     /// Distance between the two ends of a transport, in the units the language
     /// derives latency from. Tenths of a tile, taxicab, because a belt goes
     /// round corners.
@@ -509,15 +1034,34 @@ impl World {
         let mut g = Graph { name: self.name.clone(), ..Graph::default() };
         g.items = lower::ITEMS.iter().map(|s| s.to_string()).collect();
 
+        // Every buffer the document implies but does not contain: one per
+        // connection that joins two machines directly. From here down they are
+        // storages like any other, which is the point -- the commissioning
+        // check, the wiring and the solver never learn that the player did not
+        // place them.
+        let bridges = self.bridges();
+        let bridge_of: BTreeMap<(Id, Id, String), &Bridge> =
+            bridges.iter().map(|b| ((b.from, b.to, b.item.clone()), b)).collect();
+        let bridge = |c: &Conn| bridge_of.get(&(c.from, c.to, c.item.clone())).copied();
+
         // Every actor's wiring, before anything is dropped.
         let mut feeds: BTreeMap<Id, Vec<(Id, String)>> = BTreeMap::new();
         let mut deposits: BTreeMap<Id, Vec<(Id, String)>> = BTreeMap::new();
         for c in &self.conns {
             let Some(a) = self.get(c.from) else { continue };
-            if a.is_storage() {
-                feeds.entry(c.to).or_default().push((c.from, c.item.clone()));
-            } else {
-                deposits.entry(c.from).or_default().push((c.to, c.item.clone()));
+            match bridge(c) {
+                // Machine to machine: the producer deposits into the derived
+                // buffer and the consumer draws from it, so the fixpoint below
+                // sees exactly what it would have seen had somebody placed a
+                // bay there by hand.
+                Some(b) => {
+                    deposits.entry(c.from).or_default().push((b.id, c.item.clone()));
+                    feeds.entry(c.to).or_default().push((b.id, c.item.clone()));
+                }
+                None if a.is_storage() => {
+                    feeds.entry(c.to).or_default().push((c.from, c.item.clone()))
+                }
+                None => deposits.entry(c.from).or_default().push((c.to, c.item.clone())),
             }
         }
         for h in &self.hauls {
@@ -612,7 +1156,21 @@ impl World {
                     break;
                 }
                 if wants[&a].is_empty() && makes[&a].is_empty() {
-                    cut = Some((a, "it neither consumes nor produces anything".into()));
+                    cut = Some((
+                        a,
+                        match self.get(a) {
+                            // A head standing on ground that is already fully
+                            // worked. Saying so is the difference between a
+                            // puzzle and a bug.
+                            Some(i) if i.proto.extracts().is_some() => {
+                                "the ground under it is already spoken for".to_string()
+                            }
+                            Some(i) if i.proto.role.designed() && i.design.is_none() => {
+                                "nothing has been designed inside it yet".to_string()
+                            }
+                            _ => "it neither consumes nor produces anything".to_string(),
+                        },
+                    ));
                     break;
                 }
             }
@@ -646,13 +1204,32 @@ impl World {
             }
             g.nodes.push(n);
         }
+        // The derived ones, emitted here because that is what they are: a
+        // storage between two machines, which is the shape the player used to
+        // have to build. Only where both ends are running -- a buffer between
+        // two machines that are not turning is a node with nothing to say.
+        for b in &bridges {
+            if !live.contains(&b.from) || !live.contains(&b.to) {
+                continue;
+            }
+            let mut n = Node::new(&b.name, Kind::Storage);
+            n.capacity = b.capacity;
+            n.policy = Policy::RoundRobin;
+            n.holds.push(b.item.clone());
+            g.nodes.push(n);
+        }
         for i in &self.installs {
             if i.is_storage() || !live.contains(&i.id) {
                 continue;
             }
             let (inputs, outputs, duration) = i.recipe();
+            // A head that needs nothing is a source; one whose design draws
+            // power -- an electric mining head, which is exactly the thing
+            // experiment 13 wants somebody to build -- is a process like any
+            // other. The role says where it sits in the room; the recipe says
+            // what kind of node it is.
             let kind = match i.proto.role {
-                Role::Source => Kind::Source,
+                Role::Source if inputs.is_empty() => Kind::Source,
                 Role::Sink => Kind::Sink,
                 _ => Kind::Process,
             };
@@ -692,6 +1269,19 @@ impl World {
         // error rather than a filter.
         for c in &self.conns {
             let (Some(a), Some(z)) = (self.get(c.from), self.get(c.to)) else { continue };
+            if let Some(b) = bridge(c) {
+                // Two edges and a buffer, where the document has one line.
+                if !live.contains(&b.from) || !live.contains(&b.to) {
+                    continue;
+                }
+                g.edges.push(Edge {
+                    from: a.name.clone(),
+                    to: b.name.clone(),
+                    item: Some(c.item.clone()),
+                });
+                g.edges.push(Edge { from: b.name.clone(), to: z.name.clone(), item: None });
+                continue;
+            }
             let actor = if a.is_storage() { z.id } else { a.id };
             if !live.contains(&actor) {
                 continue;
@@ -743,6 +1333,21 @@ impl World {
         v.extend_from_slice(self.name.as_bytes());
         v.extend_from_slice(&self.next_id.to_le_bytes());
         v.extend_from_slice(&self.plot().to_le_bytes());
+        // Terrain first. Nothing a command can do changes it, and that is
+        // exactly why it belongs in here: two replicas that disagreed about
+        // what was in the ground would agree about every command and build
+        // different factories.
+        let mut ground: Vec<&Deposit> = self.deposits.iter().collect();
+        ground.sort_by_key(|d| d.id);
+        for d in ground {
+            v.extend_from_slice(&d.id.to_le_bytes());
+            v.extend_from_slice(d.item.as_bytes());
+            for n in [d.x, d.y, d.w, d.h] {
+                v.extend_from_slice(&n.to_le_bytes());
+            }
+            v.extend_from_slice(&d.yields.to_le_bytes());
+            v.push(0xf4);
+        }
         let mut installs: Vec<&Install> = self.installs.iter().collect();
         installs.sort_by_key(|i| i.id);
         for i in installs {
@@ -847,6 +1452,17 @@ impl World {
                                 )
                                 .set("wants", Json::arr(i.wants()))
                                 .set("makes", Json::arr(i.makes()))
+                                // The connection points this thing actually
+                                // has, which is what the connect UI offers and
+                                // what a wire is drawn between. A bay's are a
+                                // question about the room, so they come from
+                                // the world rather than from the building.
+                                .set(
+                                    "ports",
+                                    Json::Arr(
+                                        self.ports_of(i.id).iter().map(|p| p.to_json()).collect(),
+                                    ),
+                                )
                                 .set("running", build.running.contains(&i.id))
                                 .set("idle", idle.get(&i.id).map(|s| s.to_string()))
                                 .set(
@@ -895,14 +1511,55 @@ impl World {
             )
             .set(
                 "conns",
-                Json::Arr(
+                Json::Arr({
+                    // The derived buffer, named on the connection that made
+                    // it, so a panel can ask the plant what is sitting in one
+                    // without knowing that the compiler invented it.
+                    let bridges = self.bridges();
                     self.conns
                         .iter()
                         .map(|c| {
+                            let b = bridges.iter().find(|b| {
+                                b.from == c.from && b.to == c.to && b.item == c.item
+                            });
                             Json::obj()
                                 .set("from", Json::big(c.from as u128))
                                 .set("to", Json::big(c.to as u128))
                                 .set("item", c.item.clone())
+                                .set("title", lower::item_title(&c.item))
+                                .set("domain", lower::domain_of(&c.item).tag())
+                                .set("unit", lower::domain_of(&c.item).unit())
+                                // A connection with a buffer is one the player
+                                // did not have to put a bay in the middle of.
+                                .set("buffer", b.map(|b| Json::Str(b.name.clone())))
+                                .set("capacity", b.map(|b| Json::Int(b.capacity as i128)))
+                        })
+                        .collect()
+                }),
+            )
+            .set(
+                "deposits",
+                Json::Arr(
+                    self.deposits
+                        .iter()
+                        .map(|d| {
+                            // Who is working it and how much is left, so the
+                            // panel can say "nothing is" or "all of it is"
+                            // rather than leaving the player to work it out.
+                            let on = self.worked(d);
+                            let taken: Qty =
+                                on.iter().map(|i| i.rated.unwrap_or(0)).sum();
+                            d.to_json()
+                                .set(
+                                    "worked",
+                                    Json::Arr(
+                                        on.iter()
+                                            .map(|i| Json::Str(i.name.clone()))
+                                            .collect(),
+                                    ),
+                                )
+                                .set("taken", Json::big(taken as u128))
+                                .set("spare", Json::big(d.yields.saturating_sub(taken) as u128))
                         })
                         .collect(),
                 ),
@@ -931,6 +1588,21 @@ impl World {
             plot: j.at("plot").as_i128().unwrap_or(PLOT as i128) as i32,
             ..World::default()
         };
+        for e in j.at("deposits").as_arr() {
+            let (Some(id), Some(item)) = (e.at("id").as_u64(), e.at("item").as_str()) else {
+                continue;
+            };
+            let n = |k: &str| e.at(k).as_i128().unwrap_or(0) as i32;
+            w.deposits.push(Deposit {
+                id,
+                item: item.to_string(),
+                x: n("x"),
+                y: n("y"),
+                w: n("w"),
+                h: n("h"),
+                yields: e.at("yields").as_u64().unwrap_or(0),
+            });
+        }
         for e in j.at("installs").as_arr() {
             let tag = e.at("proto").as_str().ok_or("an installation has no prototype")?;
             let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
@@ -940,14 +1612,19 @@ impl World {
                 // be the worst kind of desynchronisation: one that looks
                 // right. Frames leave the designs out on purpose; snapshots
                 // never do, and this is what tells them apart.
-                Json::Null if p.role == Role::Machine => {
+                Json::Null if p.role.designed() => {
                     return Err(format!("`{tag}` arrived without its design"))
                 }
                 Json::Null => None,
                 d => Some(Design::from_json(d)?),
             };
-            let lowered = match (&design, p.role) {
-                (Some(d), Role::Machine) => Some(lower::lower(d)?),
+            // `designed()` rather than `Role::Machine`: an extraction head
+            // owns a design too, and a replica that rebuilt one without
+            // lowering it would have a head with no recipe -- which the plant
+            // then drops, along with everything downstream of it. That is a
+            // snapshot that looks like a world and is a different factory.
+            let lowered = match (&design, p.role.designed()) {
+                (Some(d), true) => Some(lower::lower(d)?),
                 _ => None,
             };
             let id = e.at("id").as_u64().ok_or("an installation has no id")?;

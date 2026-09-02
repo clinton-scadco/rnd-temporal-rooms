@@ -28,6 +28,10 @@
 
   <div class="clock" id="clockbox" hidden>
     <label>running</label><output id="clock">0:00</output>
+    <!-- Five rooms keep their own time now, so a clock that has stopped moving
+         is a statement about this browser and not about the campaign. This
+         says which. -->
+    <output id="link" class="link" title="how current the picture on this screen is"></output>
   </div>
 
   <div class="group" id="views" hidden>
@@ -152,6 +156,12 @@
   <aside id="right">
     <!-- world view -->
     <div class="onlyworld">
+      <!-- What crosses this room's boundary, permanently on screen. The play
+           session could not tell whether power was arriving in Iron Valley
+           from Coal Basin, and eventually worked it out by noticing that a
+           yard had been pre-placed. -->
+      <h2>this room's supply</h2>
+      <div id="roomio"><p class="muted">nothing crosses the boundary yet.</p></div>
       <h2>inspector</h2>
       <div id="inspect"><p class="muted">click anything.</p></div>
       <h2>recently</h2>

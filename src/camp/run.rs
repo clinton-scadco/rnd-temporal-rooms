@@ -93,10 +93,21 @@ impl Yard {
 pub struct Cast {
     pub id: PlayerId,
     pub name: String,
+    /// The browser's own token, minted in `localStorage`.
+    ///
+    /// A campaign seat is worth more than a Prototype 2 seat: it owns five
+    /// rooms' worth of building, a position on the map, and everything the
+    /// tech tree was unlocked with. Losing it to a refresh was the worst
+    /// version of the bug the play session found, and it is found by this and
+    /// never by `id` -- which is a small integer any client could type.
+    pub key: String,
     pub colour: &'static str,
     /// Index into [`SITES`].
     pub at: usize,
     pub joined: Tick,
+    /// Times this seat was picked up again by the same browser. Counted apart
+    /// from the rooms' own resynchronisations: coming back is not diverging.
+    pub rejoins: u64,
 }
 
 /// Something the campaign wants to tell everybody about.
@@ -112,6 +123,11 @@ pub struct Camp {
     pub seed: u64,
     pub clock: Clock,
     pub started: bool,
+    /// Why the campaign stopped beating, if it has: a room whose solver will
+    /// not advance. Only [`Camp::heartbeat`] sets it, and only so that the
+    /// beat gives up once rather than failing four times a second forever; a
+    /// request still gets the same error from its own call to `advance`.
+    pub stalled: Option<String>,
     pub yards: Vec<Yard>,
     pub tech: Tech,
     pub shelf: Shelf,
@@ -136,6 +152,7 @@ impl Camp {
             seed,
             clock: Clock::Manual(0),
             started: false,
+            stalled: None,
             yards: SITES.iter().map(|s| Yard::open(s, seed)).collect(),
             tech: Tech::new(),
             shelf: Shelf::default(),
@@ -362,10 +379,52 @@ impl Camp {
     /// somewhere else, and having something to say about exactly that is the
     /// whole experiment.
     pub fn join(&mut self, name: &str) -> Result<PlayerId, String> {
+        self.join_as(name, "").map(|(id, _)| id)
+    }
+
+    /// The same arrival, carrying the browser's own token.
+    ///
+    /// A token already in the cast is the same person coming back, and coming
+    /// back is not the same as arriving. In Prototype 2 that mattered because
+    /// a seat owned a factory; here it owns *five*, plus a position on the map
+    /// and everything the tech tree has been opened with, and a refresh that
+    /// took a fresh seat left all of it standing in a chair nobody was sitting
+    /// in any more.
+    ///
+    /// The rooms are told the token too, so each of them recognises the seat
+    /// on its own terms -- their ids were handed out in lockstep and stay in
+    /// lockstep. Their replicas are rebuilt from the host's snapshot, because
+    /// a browser that was refreshed has no replica at all, which is a worse
+    /// thing to be than wrong.
+    ///
+    /// An empty token is anonymous and matches nobody, so the headless
+    /// campaign and the tests go on getting a fresh seat every time they ask.
+    ///
+    /// Returns the seat, and whether it was already there.
+    pub fn join_as(&mut self, name: &str, key: &str) -> Result<(PlayerId, bool), String> {
         self.advance()?;
+        if !key.is_empty() {
+            if let Some(k) = self.cast.iter().position(|c| c.key == key) {
+                let id = self.cast[k].id;
+                if !name.is_empty() {
+                    self.cast[k].name = name.to_string();
+                }
+                let known = self.cast[k].name.clone();
+                for y in &mut self.yards {
+                    let (got, _) = y.room.join_as(&known, key)?;
+                    if got != id {
+                        return Err("the rooms disagree about who just came back".into());
+                    }
+                }
+                self.cast[k].rejoins += 1;
+                let now = self.now();
+                self.tell(now, "join", format!("{known} is back."));
+                return Ok((id, true));
+            }
+        }
         let id = self.next_player;
         for y in &mut self.yards {
-            let got = y.room.join(name)?;
+            let (got, _) = y.room.join_as(name, key)?;
             if got != id {
                 return Err("the rooms disagree about who just joined".into());
             }
@@ -375,12 +434,21 @@ impl Camp {
         self.cast.push(Cast {
             id,
             name: if name.is_empty() { format!("player {id}") } else { name.to_string() },
+            key: key.to_string(),
             colour: COLOURS[(id as usize - 1) % COLOURS.len()],
             at: 0,
             joined: now,
+            rejoins: 0,
         });
         self.tell(now, "join", format!("{} joined.", name));
-        Ok(id)
+        Ok((id, false))
+    }
+
+    /// Whether this browser already has a seat here. Asked before a rejoin, so
+    /// that a token left in storage from a campaign that has been thrown away
+    /// is a refusal rather than a quiet new arrival.
+    pub fn seated(&self, key: &str) -> bool {
+        !key.is_empty() && self.cast.iter().any(|c| c.key == key)
     }
 
     pub fn who(&self, id: PlayerId) -> Option<&Cast> {
@@ -589,7 +657,15 @@ impl Camp {
         self.submit(
             player,
             tag,
-            Act::PlaceMachine { proto, x, y, face, item: None, design: Some(design) },
+            Act::PlaceMachine {
+                proto,
+                x,
+                y,
+                face,
+                item: None,
+                design: Some(design),
+                example: false,
+            },
         )
     }
 
@@ -622,6 +698,174 @@ impl Camp {
         Ok(())
     }
 
+    /// One beat of the campaign's own clock.
+    ///
+    /// [`Camp::advance`] has always carried the *hosts* -- five rooms, the
+    /// ledger, and every train between them, on one clock, whether anybody was
+    /// looking or not. What it never carried was the replicas: those moved
+    /// only when the browser that owned them polled `/api/state`, and a
+    /// browser stops polling constantly. A background tab is throttled to a
+    /// `setTimeout` a minute; a laptop that was shut sends nothing at all.
+    ///
+    /// So the replica stopped where it was, and the poll that eventually came
+    /// back had to carry a minute of five rooms in one call, holding the
+    /// campaign's single lock, with the other player's poll queued behind it.
+    /// The player who froze was never the one who walked away.
+    ///
+    /// Prototype 2 fixed this with a thread; the campaign has its own server
+    /// and did not get it, which is why the play session went on reporting a
+    /// freeze that had supposedly been dealt with. This is that thread's other
+    /// half. It advances the campaign and then lets every room carry every
+    /// replica in it, which is [`Room::heartbeat`] -- the same commands, in
+    /// the same order, with the same hash comparison. The only thing that
+    /// changes is who asked.
+    pub fn heartbeat(&mut self) {
+        if !self.started || self.stalled.is_some() {
+            return;
+        }
+        if let Err(e) = self.advance() {
+            self.stalled = Some(e);
+            return;
+        }
+        for y in &mut self.yards {
+            y.room.heartbeat();
+        }
+    }
+
+    /// What crosses one room's boundary, in both directions.
+    ///
+    /// Notes 7, 10 and 16 of the play session are one problem: nobody could
+    /// tell what a room was being *sent*. Power arrived in Iron Valley from
+    /// Coal Basin and the only evidence was a yard somebody had to notice was
+    /// pre-placed; coal could not be delivered and the message said so without
+    /// saying where the coal had gone.
+    ///
+    /// So a room states its own imports and exports, with the three places
+    /// something can be -- waiting at the source, in the air, or waiting at the
+    /// destination -- named separately. Nothing disappears; if it is not
+    /// moving, this says which of the three it is sitting in.
+    ///
+    /// Derived entirely from the ledger and the room's ports, so it costs a
+    /// walk over a handful of routes and cannot disagree with the simulation.
+    fn io(&self, k: usize) -> Json {
+        let y = &self.yards[k];
+        let now = self.now();
+        let tag = y.site.tag;
+
+        // Where a load ends up, and whether there is room for it. An import
+        // with no yard is the case that used to lose material silently.
+        let landing = |item: &str| -> (Option<String>, Option<f64>) {
+            match y.ports.incoming.get(item) {
+                None => (None, None),
+                Some(&bay) => {
+                    let name = y.room.host.world.get(bay).map(|i| i.name.clone());
+                    let cap = y.room.host.world.get(bay).map(|i| i.capacity()).unwrap_or(0);
+                    let held = name
+                        .as_ref()
+                        .and_then(|n| y.room.host.carry.qty.get(&(n.clone(), item.to_string())))
+                        .copied()
+                        .unwrap_or(0);
+                    let full = if cap > 0 { Some(held as f64 * 100.0 / cap as f64) } else { None };
+                    (name, full)
+                }
+            }
+        };
+
+        let line = |r: &super::ship::Route, importing: bool| -> Json {
+            let l = r.lane();
+            let flight: u64 = self
+                .ledger
+                .flight
+                .iter()
+                .filter(|f| f.route == r.id)
+                .map(|f| f.qty)
+                .sum();
+            let next = self
+                .ledger
+                .flight
+                .iter()
+                .filter(|f| f.route == r.id)
+                .map(|f| f.at)
+                .min();
+            let (bay, full) = if importing { landing(l.item) } else { (None, None) };
+            // The three places a load can be, so that "it is not arriving" is
+            // always answerable with "it is here instead".
+            let blocked = if importing {
+                if y.ports.incoming.get(l.item).is_none() {
+                    Some(format!(
+                        "{} has nowhere to unload {}",
+                        y.site.title,
+                        item_title(l.item)
+                    ))
+                } else if full.is_some_and(|f| f >= 99.0) {
+                    Some(format!("the yard it lands in is full"))
+                } else {
+                    None
+                }
+            } else if r.hold > 0 && r.last_left.is_none_or(|t| now.saturating_sub(t) > secs(90)) {
+                Some(format!("{} waiting, and nothing has left for a while", commas(r.hold)))
+            } else {
+                None
+            };
+            Json::obj()
+                .set("route", r.id as i64)
+                .set("item", l.item)
+                .set("itemTitle", item_title(l.item))
+                .set("domain", crate::mp::lower::domain_of(l.item).tag())
+                .set("from", l.from)
+                .set("to", l.to)
+                .set("fleet", r.fleet.title)
+                .set("cap", Json::big(r.cap as u128))
+                .set("rate", r.moved as f64 / as_secs(now.saturating_sub(r.opened)).max(1.0))
+                // The three places, named.
+                .set("atSource", Json::big(r.hold as u128))
+                .set("inTransit", Json::big(flight as u128))
+                .set("bay", bay)
+                .set("bayFull", full)
+                .set("moved", Json::big(r.moved as u128))
+                .set("spilled", Json::big(r.spilled as u128))
+                .set("nextIn", next.map(|t| Json::Real(as_secs(t.saturating_sub(now)))))
+                .set("tripSeconds", as_secs(r.trip()))
+                .set("blocked", blocked)
+        };
+
+        let imports: Vec<Json> = self
+            .ledger
+            .routes
+            .iter()
+            .filter(|r| r.lane().to == tag)
+            .map(|r| line(r, true))
+            .collect();
+        let exports: Vec<Json> = self
+            .ledger
+            .routes
+            .iter()
+            .filter(|r| r.lane().from == tag)
+            .map(|r| line(r, false))
+            .collect();
+
+        // What the room is *able* to take and send, whether or not anybody has
+        // opened a route for it. A room that needs coal and has no coal route
+        // is the thing note 10 could not see.
+        let ports = |m: &BTreeMap<String, Id>| -> Vec<Json> {
+            m.iter()
+                .map(|(item, id)| {
+                    Json::obj()
+                        .set("item", item.clone())
+                        .set("itemTitle", item_title(item))
+                        .set("domain", crate::mp::lower::domain_of(item).tag())
+                        .set("at", y.room.host.world.get(*id).map(|i| Json::Str(i.name.clone())))
+                })
+                .collect()
+        };
+
+        Json::obj()
+            .set("imports", Json::Arr(imports))
+            .set("exports", Json::Arr(exports))
+            .set("takes", Json::Arr(ports(&y.ports.incoming)))
+            .set("gives", Json::Arr(ports(&y.ports.outgoing)))
+    }
+
     /// The campaign, as a browser sees it.
     pub fn to_json(&mut self, player: PlayerId) -> Result<Json, String> {
         self.advance()?;
@@ -634,6 +878,7 @@ impl Camp {
                 let p = y.room.host.progress();
                 y.site
                     .to_json()
+                    .set("io", self.io(k))
                     .set("open", open)
                     .set("gate", (!open).then(|| self.gate(y.site)))
                     .set("done", y.done_at().is_some())

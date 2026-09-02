@@ -54,16 +54,34 @@ impl Role {
     }
 
     /// Whether an installation of this role owns an editable design.
+    ///
+    /// Extraction heads do, since experiment 13: they are machines that happen
+    /// to stand on a deposit, and how much of the seam you get is a question
+    /// about the head you built.
     pub fn designed(self) -> bool {
-        self == Role::Machine
+        matches!(self, Role::Machine | Role::Source)
     }
 }
 
 /// What the prototype is, beyond a box with a name on it.
 #[derive(Clone, Copy, Debug)]
 pub enum Spec {
-    /// Produces this much of one item every second.
-    Source { item: &'static str, per_second: Qty },
+    /// Draws one substance out of the ground it is standing on.
+    ///
+    /// It used to be `Source { item, per_second }` -- a building that produced
+    /// because the catalogue said it did, standing anywhere, at a rate nobody
+    /// could argue with. That was the last magical object in the world, and
+    /// note 1 of the play session went straight at it.
+    ///
+    /// So the *world* now offers the opportunity -- a [`Deposit`] in the
+    /// ground, with a number on it -- and this is the machine that takes it.
+    /// It runs a design like any other machine, so how much of the seam you
+    /// actually get is a question about the head you built; and the seam caps
+    /// it, so a better head on a thin seam buys you nothing. Which of those
+    /// two is binding is the decision the room is really asking about.
+    ///
+    /// [`Deposit`]: super::world::Deposit
+    Extract { item: &'static str, design: &'static str },
     /// Holds this much.
     Storage { capacity: Qty },
     /// Runs whatever design it was placed with.
@@ -116,12 +134,15 @@ pub static PROTOS: &[Proto] = &[
     Proto {
         tag: "oremine",
         short: "Mine",
-        title: "Ore Mine",
+        title: "Ore Head",
         role: Role::Source,
         w: 4,
         h: 4,
-        spec: Spec::Source { item: "IronOre", per_second: 100 },
-        blurb: "100 iron ore a second, which is one steam crusher and a little to spare.",
+        spec: Spec::Extract {
+            item: "IronOre",
+            design: include_str!("../../designs/heads/oremine.machine"),
+        },
+        blurb: "Stands on an ore body. One inlet is 100 a second; the body decides whether it gets it.",
     },
     Proto {
         tag: "waterpump",
@@ -130,18 +151,24 @@ pub static PROTOS: &[Proto] = &[
         role: Role::Source,
         w: 3,
         h: 3,
-        spec: Spec::Source { item: "Water", per_second: 400 },
-        blurb: "400 water a second, and a compact steam plant drinks 160 of it.",
+        spec: Spec::Extract {
+            item: "Water",
+            design: include_str!("../../designs/heads/waterpump.machine"),
+        },
+        blurb: "Stands on a water table. Two inlets is 400 a second, and a compact plant drinks 160.",
     },
     Proto {
         tag: "coalpit",
         short: "Coal",
-        title: "Coal Pit",
+        title: "Coal Head",
         role: Role::Source,
         w: 4,
         h: 3,
-        spec: Spec::Source { item: "Coal", per_second: 100 },
-        blurb: "100 coal a second, which is two and a half compact steam plants.",
+        spec: Spec::Extract {
+            item: "Coal",
+            design: include_str!("../../designs/heads/coalpit.machine"),
+        },
+        blurb: "Stands on a coal seam. One inlet is 100 a second, or two and a half compact plants.",
     },
     Proto {
         tag: "billetcaster",
@@ -150,8 +177,11 @@ pub static PROTOS: &[Proto] = &[
         role: Role::Source,
         w: 4,
         h: 3,
-        spec: Spec::Source { item: "IronBillet", per_second: 80 },
-        blurb: "80 iron billet a second, ready to be pressed into something.",
+        spec: Spec::Extract {
+            item: "IronBillet",
+            design: include_str!("../../designs/heads/billetcaster.machine"),
+        },
+        blurb: "Stands on billet stock. 100 a second, ready to be pressed into something.",
     },
     Proto {
         tag: "crudewell",
@@ -160,8 +190,11 @@ pub static PROTOS: &[Proto] = &[
         role: Role::Source,
         w: 3,
         h: 3,
-        spec: Spec::Source { item: "Crude", per_second: 200 },
-        blurb: "200 crude a second, for anyone with a refinery to point it at.",
+        spec: Spec::Extract {
+            item: "Crude",
+            design: include_str!("../../designs/heads/crudewell.machine"),
+        },
+        blurb: "Stands on a crude field. One inlet is 200 a second, for anyone with a refinery.",
     },
     // ---- storage -----------------------------------------------------
     Proto {
@@ -327,8 +360,8 @@ impl Proto {
     /// say so than make the player place one to find out.
     pub fn rate_note(&self) -> String {
         match self.spec {
-            Spec::Source { item, per_second } => {
-                format!("{per_second} {}/s", super::lower::item_title(item))
+            Spec::Extract { item, .. } => {
+                format!("draws {} out of the ground", super::lower::item_title(item))
             }
             Spec::Storage { capacity } => format!("holds {capacity}"),
             Spec::Sink { count, item } => match item {
@@ -336,14 +369,24 @@ impl Proto {
                 None => format!("takes {}/s of one item", count * super::SIM_TICK_RATE),
             },
             Spec::Transport { load, vehicles, .. } => format!("{vehicles} x {load} per trip"),
-            Spec::Machine { .. } => "designed, not specified".to_string(),
+            // A chassis, until somebody designs it. What it does is not the
+            // catalogue's to say.
+            Spec::Machine { .. } => "empty until you design it".to_string(),
         }
     }
 
     /// The design a freshly placed machine owns a copy of.
     pub fn design_source(&self) -> Option<&'static str> {
         match self.spec {
-            Spec::Machine { design } => Some(design),
+            Spec::Machine { design } | Spec::Extract { design, .. } => Some(design),
+            _ => None,
+        }
+    }
+
+    /// The substance this prototype draws out of the ground, if it draws one.
+    pub fn extracts(&self) -> Option<&'static str> {
+        match self.spec {
+            Spec::Extract { item, .. } => Some(item),
             _ => None,
         }
     }
@@ -359,20 +402,29 @@ impl Proto {
             .set("blurb", self.blurb)
             .set("note", self.rate_note());
         match self.spec {
-            Spec::Source { item, per_second } => j
+            Spec::Extract { item, .. } => j
                 .set("item", item)
-                .set("perSecond", Json::big(per_second as u128)),
+                .set("example", true)
+                // The palette has to say what it needs to stand on, or the
+                // first thing a player learns about extraction is a refusal.
+                .set("extracts", item)
+                .set("needsDeposit", true),
             Spec::Storage { capacity } => j.set("capacity", Json::big(capacity as u128)),
             Spec::Sink { count, item } => j
                 .set("count", Json::big(count as u128))
                 .set("item", item.map(|s| s.to_string()))
                 .set("choosesItem", item.is_none()),
+            // Whether the book has a worked answer for this one. It is not
+            // what a placement gives you -- that is a chassis -- but it can be
+            // asked for by name, and the palette says so. Set on the existing
+            // machine arm below, which also carries the example's numbers.
             Spec::Transport { load, vehicles, speed, base } => j
                 .set("load", Json::big(load as u128))
                 .set("vehicles", Json::big(vehicles as u128))
                 .set("speed", Json::big(speed as u128))
                 .set("base", base),
             Spec::Machine { design } => {
+                let j = j.set("example", true);
                 let d = crate::machine::design::Design::parse(design).ok();
                 let m = d.as_ref().and_then(|d| super::lower::lower(d).ok());
                 let (w, h) = m

@@ -41,13 +41,13 @@
 
 use super::run::Camp;
 use super::{ship, site};
-use crate::json::{self, Json};
+use crate::http::{self, Req};
+use crate::json::Json;
 use crate::machine::design::Design;
 use crate::mp::world::PlayerId;
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
+use std::time::Duration;
 
 const ASSETS: &[(&str, &str, &str)] = &[
     ("/", "text/html; charset=utf-8", include_str!("../../web/camp/index.html")),
@@ -88,6 +88,7 @@ fn reopen(seed: u64) {
 pub fn serve(host: &str, port: u16) -> std::io::Result<()> {
     let listener = bind(host, port)?;
     let addr = listener.local_addr()?;
+    beat();
     println!("prototype 3 is at   http://{addr}/");
     if addr.ip().is_unspecified() {
         println!("bound to every interface: other machines on this network can join.");
@@ -99,7 +100,7 @@ pub fn serve(host: &str, port: u16) -> std::io::Result<()> {
             Ok(s) => {
                 std::thread::spawn(move || {
                     if let Err(e) = handle(s) {
-                        if e.kind() != std::io::ErrorKind::BrokenPipe {
+                        if !http::hung_up(e.kind()) {
                             eprintln!("request failed: {e}");
                         }
                     }
@@ -109,6 +110,26 @@ pub fn serve(host: &str, port: u16) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The campaign's own thread.
+///
+/// Prototype 2's server got one of these and this one did not, which is the
+/// whole reason the freeze survived being fixed. See [`Camp::heartbeat`] for
+/// what it is carrying and why a poll is the wrong thing to carry it.
+///
+/// It deliberately does *not* use `with_camp`, which would make a campaign on
+/// its first tick out of a seed nobody chose. A server nobody has entered yet
+/// has nothing to beat, and should still be handing the first `/api/enter`
+/// with a seed on it the campaign that seed asks for.
+fn beat() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_millis(crate::mp::HEARTBEAT_MS));
+        let mut g = CAMP.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = g.as_mut() {
+            c.heartbeat();
+        }
+    });
 }
 
 fn bind(host: &str, port: u16) -> std::io::Result<TcpListener> {
@@ -122,69 +143,10 @@ fn bind(host: &str, port: u16) -> std::io::Result<TcpListener> {
     Err(last.unwrap())
 }
 
-struct Req {
-    method: String,
-    path: String,
-    query: HashMap<String, String>,
-    body: String,
-}
-
-impl Req {
-    fn q(&self, k: &str) -> String {
-        self.query.get(k).cloned().unwrap_or_default()
-    }
-    fn json(&self) -> Json {
-        json::parse(&self.body).unwrap_or(Json::Null)
-    }
-}
-
 fn handle(stream: TcpStream) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
-        return Ok(());
-    }
-    let mut parts = line.split_whitespace();
-    let method = parts.next().unwrap_or("GET").to_string();
-    let target = parts.next().unwrap_or("/").to_string();
-
-    let mut len = 0usize;
-    loop {
-        let mut h = String::new();
-        if reader.read_line(&mut h)? == 0 || h.trim().is_empty() {
-            break;
-        }
-        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
-            len = v.trim().parse().unwrap_or(0);
-        }
-    }
-    let mut body = vec![0u8; len];
-    if len > 0 {
-        reader.read_exact(&mut body)?;
-    }
-    let (path, qs) = match target.split_once('?') {
-        Some((p, q)) => (p.to_string(), q.to_string()),
-        None => (target.clone(), String::new()),
-    };
-    let query = qs
-        .split('&')
-        .filter(|s| !s.is_empty())
-        .map(|kv| match kv.split_once('=') {
-            Some((k, v)) => (k.to_string(), percent(v)),
-            None => (kv.to_string(), String::new()),
-        })
-        .collect();
-    let req = Req { method, path, query, body: String::from_utf8_lossy(&body).into_owned() };
+    let Some(req) = http::accept(&stream)? else { return Ok(()) };
     let (status, mime, payload) = route(&req);
-    let mut out = stream;
-    let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n\
-         Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-        payload.len()
-    );
-    out.write_all(head.as_bytes())?;
-    out.write_all(payload.as_bytes())?;
-    out.flush()
+    http::reply(&stream, status, mime, &payload)
 }
 
 const MIME: &str = "application/json; charset=utf-8";
@@ -334,8 +296,31 @@ fn parts() -> Json {
     })
 }
 
+/// Arrive, or come back.
+///
+/// The same route for both, because the client cannot tell which it is doing:
+/// a browser that was refreshed knows only its own token. Whether that is a
+/// seat or a stranger is the campaign's question, and the answer comes back as
+/// `rejoined` so the screen can say so -- and so it can put the player back in
+/// the room they were standing in rather than on the doorstep of the first one.
+///
+/// `back` is a client saying it is only interested in a seat it already has.
+/// Without it a token left over from a campaign that has since been thrown
+/// away would take a *new* seat in whatever campaign is running now, which is
+/// a phantom player arriving from a tab nobody opened.
 fn enter(j: &Json) -> Result<Json, String> {
     let name = j.at("name").as_str().unwrap_or("player").to_string();
+    let key = j.at("key").as_str().unwrap_or_default().to_string();
+    let back = j.at("back").as_bool().unwrap_or(false);
+    if back {
+        return with_camp(|c| {
+            if !c.seated(&key) {
+                return Err("your seat in this campaign is not there any more".into());
+            }
+            let (id, rejoined) = c.join_as("", &key)?;
+            Ok(seat(c, id, rejoined))
+        });
+    }
     if let Some(seed) = j.at("seed").as_u64() {
         // A named seed is a request for a specific campaign, and it is only
         // honoured before anybody has joined the one that is running.
@@ -345,15 +330,27 @@ fn enter(j: &Json) -> Result<Json, String> {
         }
     }
     with_camp(|c| {
-        let id = c.join(&name)?;
-        Ok(Json::obj()
-            .set("ok", true)
-            .set("player", id as i64)
-            .set("code", c.code.clone())
-            .set("seed", Json::big(c.seed as u128))
-            .set("started", c.started)
-            .set("at", site::SITES[0].tag))
+        let (id, rejoined) = c.join_as(&name, &key)?;
+        Ok(seat(c, id, rejoined))
     })
+}
+
+/// Everything a browser needs to be in the campaign, however it got there.
+///
+/// `at` used to be `SITES[0]` unconditionally, which was fine while every
+/// arrival was a first arrival. It is not fine for somebody coming back: a
+/// refresh in Iron Valley should not put you down in Coal Basin.
+fn seat(c: &mut Camp, id: PlayerId, rejoined: bool) -> Json {
+    let here = c.who(id).map(|w| w.at).unwrap_or(0);
+    Json::obj()
+        .set("ok", true)
+        .set("player", id as i64)
+        .set("name", c.who(id).map(|w| Json::Str(w.name.clone())))
+        .set("rejoined", rejoined)
+        .set("code", c.code.clone())
+        .set("seed", Json::big(c.seed as u128))
+        .set("started", c.started)
+        .set("at", site::SITES[here].tag)
 }
 
 fn travel(j: &Json) -> Result<Json, String> {
@@ -546,36 +543,4 @@ fn fresh_seed() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     crate::mp::hash64(&t.as_nanos().to_le_bytes())
-}
-
-fn percent(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'%' if i + 2 < b.len() => {
-                let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("");
-                match u8::from_str_radix(hex, 16) {
-                    Ok(v) => {
-                        out.push(v);
-                        i += 3;
-                    }
-                    Err(_) => {
-                        out.push(b[i]);
-                        i += 1;
-                    }
-                }
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

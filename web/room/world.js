@@ -18,16 +18,23 @@ import { menu, toast } from './panels.js';
 const TILE = 7;
 
 export const view = { ox: 20, oy: 20, scale: 1, w: 0, h: 0, dpr: 1 };
-export const tool = { mode: 'pick', proto: null, face: 0, from: null, item: null, design: null };
+export const tool = {
+  mode: 'pick', proto: null, face: 0, from: null, item: null, design: null,
+  /// Place the catalogue's worked example rather than an empty chassis. Only
+  /// ever set by asking for one by name.
+  example: false,
+};
 export let selection = null;
 
 let canvas = null, ctx = null, hover = null, need = true, onSelect = () => {};
+let onHover = () => {};
 let lastCursor = 0;
 
 export function init(el, hooks) {
   canvas = el;
   ctx = el.getContext('2d');
   onSelect = hooks.onSelect || (() => {});
+  onHover = hooks.onHover || (() => {});
   addEventListener('resize', resize);
   resize();
   wire();
@@ -41,13 +48,22 @@ export function invalidate() { need = true; }
 /// duplicating one is a placement command carrying the design it had at the
 /// moment the player pressed the button. Editing either copy afterwards does
 /// nothing at all to the other.
-export function setTool(mode, proto, design) {
+export function setTool(mode, proto, design, example) {
   tool.mode = mode;
   tool.proto = proto || null;
   tool.design = design || null;
+  tool.example = !!example;
   tool.from = null;
+  // A port chosen for a connection that was never finished must not be
+  // waiting inside the next one.
+  tool.item = null;
   need = true;
 }
+
+/// What the pointer is over, which is a different thing from what is selected.
+/// Hovering shows; clicking pins.
+let hovered = null;
+export const peek = () => hovered;
 
 export function select(id) {
   selection = id;
@@ -93,6 +109,59 @@ function offSegment(px, py, ax, ay, bx, by) {
   return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
 }
 
+// ------------------------------------------------------------------ ports
+//
+// A connection now starts and ends somewhere in particular. It used to be
+// drawn centre to centre, which is what you draw when a connection is an edge
+// in a graph -- and the play session's note 13 is what it feels like when the
+// thing on screen is an edge in a graph: lines crossing buildings, no way to
+// tell what any of them carried, and no sense that the factory occupied space.
+//
+// So a machine's ports are laid out on its edges: what it takes on the left,
+// what it gives on the right, in the order the design lists them. That order
+// is derived from the design inside the machine and is stable, so a port stays
+// where it was between frames.
+
+/// Which side of a building a port sits on, and where along it.
+function portAt(i, item, out) {
+  const list = (i.ports || []).filter(p => !!p.out === out);
+  let k = list.findIndex(p => p.item === item);
+  if (k < 0) k = 0;
+  const n = Math.max(1, list.length);
+  const along = (k + 1) / (n + 1);
+  return [out ? sx(i.x + i.w) : sx(i.x), sy(i.y + i.h * along)];
+}
+
+/// The route a connection takes, as a list of points.
+///
+/// Orthogonal, because a belt goes round corners and a diagonal through three
+/// other buildings does not. Two shapes: a `Z` when the consumer is to the
+/// right of the producer, which is the common case and reads left to right;
+/// and a loop around the outside when it is not, because a line that went
+/// straight back through its own producer would be worse than a long way
+/// round.
+///
+/// Deliberately not a solver. Experiment 13 asks for routes that consume space
+/// and avoid collisions, and that is a document change -- a route would have to
+/// be part of the world, part of the hash, and part of what refuses a
+/// placement. This is the drawing, done honestly: it starts at a real port,
+/// ends at a real port, and turns square corners in between.
+const STUB = 10;
+function routeOf(a, b, item) {
+  const [ax, ay] = portAt(a, item, true);
+  const [bx, by] = portAt(b, item, false);
+  const gap = bx - ax;
+  if (gap > STUB * 2) {
+    const mx = ax + gap / 2;
+    return [[ax, ay], [mx, ay], [mx, by], [bx, by]];
+  }
+  // Round the outside: out of the producer, along a lane below both of them,
+  // and back in to the consumer.
+  const lane = Math.max(sy(a.y + a.h), sy(b.y + b.h)) + STUB * 1.6;
+  const out = ax + STUB, back = bx - STUB;
+  return [[ax, ay], [out, ay], [out, lane], [back, lane], [back, by], [bx, by]];
+}
+
 /// The transport or wire under the pointer, if any.
 ///
 /// Lines are the only thing on this canvas a player can draw but could not,
@@ -114,7 +183,18 @@ function lineUnder(x, y) {
     if (d < near) { near = d; best = what; }
   };
   for (const h of v.world.hauls) test(net.byId(h.from), net.byId(h.to), h.id);
-  for (const c of v.world.conns) test(net.byId(c.from), net.byId(c.to), net.wireKey(c));
+  // A wire is a polyline now, so every leg of it has to be clickable -- a
+  // connection you can see and cannot select is exactly the wire that turns
+  // out to be the wrong one.
+  for (const c of v.world.conns) {
+    const a = net.byId(c.from), b = net.byId(c.to);
+    if (!a || !b) continue;
+    const pts = routeOf(a, b, c.item);
+    for (let k = 1; k < pts.length; k++) {
+      const d = offSegment(px, py, pts[k - 1][0], pts[k - 1][1], pts[k][0], pts[k][1]);
+      if (d < near) { near = d; best = net.wireKey(c); }
+    }
+  }
   return best;
 }
 
@@ -134,6 +214,19 @@ function collides(x, y, w, h) {
   return net.installs().some(i => x < i.x + i.w && i.x < x + w && y < i.y + i.h && i.y < y + h);
 }
 
+/// Whether the thing being held would have ground to stand on here.
+///
+/// A head off its seam is a refusal the server will make anyway; showing it
+/// under the pointer means the player never has to earn that refusal.
+function onGround(x, y, w, h) {
+  const p = net.proto(tool.proto);
+  if (!p || !p.extracts) return true;
+  const v = net.state.view;
+  return ((v && v.world.deposits) || []).some(d =>
+    d.item === p.extracts && d.spare > 0
+    && x < d.x + d.w && d.x < x + w && y < d.y + d.h && d.y < y + h);
+}
+
 // ----------------------------------------------------------------- pointer
 
 function wire() {
@@ -141,6 +234,17 @@ function wire() {
     const [x, y] = at(e);
     hover = { x: Math.floor(x), y: Math.floor(y), raw: [x, y] };
     need = true;
+    // Note 3: the inspector should follow the pointer, not wait for a click.
+    // Reading a factory means sweeping across it, and a panel that costs a
+    // click per building is a panel nobody reads twice.
+    if (tool.mode === 'pick' || tool.mode === 'connect') {
+      const it = under(x, y);
+      const over = it ? it.id : lineUnder(x, y);
+      if (over !== hovered) {
+        hovered = over;
+        onHover(over);
+      }
+    }
     const now = performance.now();
     if (now - lastCursor > 120) {
       lastCursor = now;
@@ -203,7 +307,18 @@ function place(x, y) {
   const h = held();
   if (!h) return;
   if (collides(x, y, h.w, h.h)) return toast('that does not fit there');
-  const common = { proto: h.p.tag, x, y, face: tool.face, design: tool.design };
+  // A placement is a *chassis* unless it is carrying a design: one off the
+  // shelf, a copy of something already standing, or -- asked for by name --
+  // the catalogue's worked example. Note 7 of the play session: prebuilt
+  // machines take the fun out of the game entirely.
+  const common = {
+    proto: h.p.tag,
+    x,
+    y,
+    face: tool.face,
+    design: tool.design,
+    example: !tool.design && !!tool.example,
+  };
   if (h.p.role === 'storage') return net.send('PlaceStorage', common);
   if (h.p.choosesItem) {
     return menu('ships which item?', itemsOfInterest().map(i => ({
@@ -254,14 +369,22 @@ function join(fromId, toId, e) {
   const a = net.byId(fromId), b = net.byId(toId);
   if (!a || !b || a.id === b.id) return;
   if (tool.mode === 'connect') {
-    if ((a.role === 'storage') === (b.role === 'storage')) {
-      return toast(a.role === 'storage'
-        ? 'two bays need a transport between them'
-        : 'two machines need a bay between them');
+    // The one pairing still refused, and not for want of a buffer: two bays
+    // are joined by a transport, which has a length and a latency.
+    if (a.role === 'storage' && b.role === 'storage') {
+      return toast('two bays need a transport between them');
     }
-    const machine = a.role === 'storage' ? b : a;
-    const items = a.role === 'storage' ? machine.wants : machine.makes;
-    if (!items.length) return toast(`${machine.name} has nothing to wire there`);
+    // A connection was started from a particular port, so there is nothing
+    // left to ask.
+    if (tool.item) {
+      const item = tool.item;
+      tool.item = null;
+      return net.send('CreateConnection', { from: a.id, to: b.id, item });
+    }
+    const items = mating(a, b);
+    if (!items.length) {
+      return toast(`${a.name} has nothing ${b.name} takes`);
+    }
     return choose(items, item => net.send('CreateConnection', { from: a.id, to: b.id, item }), e);
   }
   // A transport. Both ends must be bays, and the item must be something that
@@ -270,6 +393,41 @@ function join(fromId, toId, e) {
   const items = arriving(a.id);
   if (!items.length) return toast(`nothing is delivered to ${a.name} yet`);
   choose(items, item => net.send('CreateWorldLink', { proto: tool.mode, from: a.id, to: b.id, item }), e);
+}
+
+/// What could cross from one building to another: an output port on the near
+/// end meeting an input port on the far end.
+///
+/// This is note 10 -- never ask a question whose answer is already determined.
+/// A bay holding one item wired to a machine that takes it produces a
+/// one-element list, and `choose` below sends the command without a menu.
+export function mating(a, b) {
+  const outs = portItems(a, true), ins = portItems(b, false);
+  const both = outs.filter(i => ins.includes(i));
+  if (both.length) return both;
+  // A bay has no ports of its own until the room gives it some, so an empty
+  // one falls back to what the other end can handle. Two machines with nothing
+  // in common get an empty list and are told so.
+  if (a.role === 'storage' && !outs.length) return ins;
+  if (b.role === 'storage' && !ins.length) return outs;
+  return both;
+}
+
+export function portItems(i, out) {
+  return [...new Set((i.ports || []).filter(p => !!p.out === out).map(p => p.item))];
+}
+
+/// Start a connection from one named port, so the second click finishes it.
+///
+/// The contextual palette calls this: a player who clicked `IronOre OUT` on a
+/// machine has already answered the only question a wire needs, and should be
+/// asked for a destination and nothing else.
+export function connectFrom(id, item) {
+  tool.mode = 'connect';
+  tool.proto = null;
+  tool.from = id;
+  tool.item = item;
+  need = true;
 }
 
 /// What is delivered into one bay, according to the document.
@@ -312,9 +470,13 @@ export function draw() {
 
   grid();
   const w = v.world;
+  // Terrain first, under everything: it is what the room *is*, and a head
+  // stands on top of it.
+  for (const d of w.deposits || []) ground(d);
   for (const h of w.hauls) haul(h);
   for (const c of w.conns) conn(c);
   for (const i of w.installs) box(i);
+  for (const i of w.installs) ports(i);
   ghost();
   cursors();
   ctx.restore();
@@ -336,6 +498,64 @@ function grid() {
 
 function centre(i) {
   return [sx(i.x + i.w / 2), sy(i.y + i.h / 2)];
+}
+
+/// A patch of ground worth standing on.
+///
+/// Drawn as ground rather than as a building: hatched, unbordered on three
+/// sides, sitting under whatever has been built on it. Experiment 13's note 1
+/// was that a mine which produced ore because the catalogue said so was the
+/// last magical object in the world; the answer has to *look* like an
+/// opportunity rather than like another box.
+function ground(d) {
+  const x = sx(d.x), y = sy(d.y);
+  const w = d.w * TILE * view.scale, h = d.h * TILE * view.scale;
+  const colour = css('--' + (d.domain || 'material')) || css('--muted');
+  const spent = d.spare === 0;
+  // Something is being placed that would work this ground: say so before the
+  // click rather than after it.
+  const wanted = tool.mode === 'place' && net.proto(tool.proto)
+    && net.proto(tool.proto).extracts === d.item;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.fillStyle = colour + (wanted ? '2a' : '14');
+  ctx.fillRect(x, y, w, h);
+  // Hatching, so ground never reads as a floor you could build a bay on by
+  // accident -- you can, and it is a waste, and it should look like one.
+  ctx.strokeStyle = colour + (spent ? '18' : '38');
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const step = 7 * view.scale;
+  for (let k = -h; k < w; k += step) {
+    ctx.moveTo(x + k, y + h);
+    ctx.lineTo(x + k + h, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.strokeStyle = colour + (wanted ? 'cc' : '55');
+  ctx.setLineDash(wanted ? [] : [4, 3]);
+  ctx.lineWidth = wanted ? 2 : 1;
+  ctx.strokeRect(x + .5, y + .5, w - 1, h - 1);
+  ctx.setLineDash([]);
+
+  if (view.scale > 0.5) {
+    ctx.fillStyle = colour + (spent ? '77' : 'dd');
+    ctx.font = `${Math.max(9, 10 * view.scale)}px var(--ui), sans-serif`;
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(d.title, x + 4, y + h - 5);
+    ctx.font = '9px var(--mono), monospace';
+    ctx.fillStyle = css('--muted');
+    // What is left of it, which is the only number that decides whether
+    // another head here is worth the floor.
+    ctx.fillText(
+      spent ? `${short(d.yields)}/s, all spoken for` : `${short(d.spare)} of ${short(d.yields)}/s free`,
+      x + 4, y + h + 9);
+    ctx.textBaseline = 'top';
+  }
 }
 
 function box(i) {
@@ -382,18 +602,87 @@ function box(i) {
 
 const short = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(0) + 'k' : String(n);
 
+/// One connection, drawn as the physical thing it now is: from a real port,
+/// round square corners, into a real port, in the colour of what it carries.
 function conn(c) {
   const a = net.byId(c.from), b = net.byId(c.to);
   if (!a || !b) return;
   const on = selection === net.wireKey(c);
-  const [ax, ay] = centre(a), [bx, by] = centre(b);
-  ctx.strokeStyle = on ? css('--accent') : 'rgba(125,144,137,.5)';
-  ctx.lineWidth = on ? 3 : 1;
+  const pts = routeOf(a, b, c.item);
+  const colour = css('--' + (c.domain || 'material')) || css('--belt');
+  ctx.strokeStyle = on ? css('--accent') : colour;
+  ctx.globalAlpha = on ? 1 : .75;
+  ctx.lineWidth = on ? 3 : 2;
+  ctx.lineJoin = 'round';
+  // Electricity is a cable rather than a belt, and reads better as one.
+  ctx.setLineDash(c.domain === 'electrical' ? [6, 3] : []);
   ctx.beginPath();
-  ctx.moveTo(ax, ay);
-  ctx.lineTo(bx, by);
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k][0], pts[k][1]);
   ctx.stroke();
-  arrow(ax, ay, bx, by, 'rgba(125,144,137,.7)');
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+  const [px, py] = pts[pts.length - 2], [qx, qy] = pts[pts.length - 1];
+  arrow(px, py, qx, qy, colour);
+  // What it carries, on the longest leg, so a room full of wires says what is
+  // in each of them without being clicked.
+  if (view.scale > 0.55) {
+    let best = 0, bx = 0, by = 0;
+    for (let k = 1; k < pts.length; k++) {
+      const len = Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]);
+      if (len > best) {
+        best = len;
+        bx = (pts[k][0] + pts[k - 1][0]) / 2;
+        by = (pts[k][1] + pts[k - 1][1]) / 2;
+      }
+    }
+    if (best > 26) {
+      ctx.fillStyle = on ? css('--accent') : colour;
+      ctx.font = '9px var(--mono), monospace';
+      ctx.textBaseline = 'bottom';
+      ctx.textAlign = 'center';
+      ctx.fillText(c.title || c.item, bx, by - 3);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+    }
+  }
+}
+
+/// The sockets on the outside of one building.
+///
+/// Small, and worth the pixels: they are the thing that makes a machine look
+/// like it has an inside. An unconnected port is hollow, which is how a player
+/// finds the input nobody has fed.
+function ports(i) {
+  if (view.scale < 0.5) return;
+  const v = net.state.view;
+  const wired = new Set();
+  for (const c of v.world.conns) {
+    if (c.from === i.id) wired.add('out:' + c.item);
+    if (c.to === i.id) wired.add('in:' + c.item);
+  }
+  for (const h of v.world.hauls) {
+    if (h.from === i.id) wired.add('out:' + h.item);
+    if (h.to === i.id) wired.add('in:' + h.item);
+  }
+  const seen = new Set();
+  for (const p of i.ports || []) {
+    const key = (p.out ? 'out:' : 'in:') + p.item;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const [x, y] = portAt(i, p.item, !!p.out);
+    const colour = css('--' + p.domain) || css('--muted');
+    ctx.beginPath();
+    ctx.arc(x, y, 2.6, 0, Math.PI * 2);
+    if (wired.has(key)) {
+      ctx.fillStyle = colour;
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
 }
 
 function haul(h) {
@@ -461,7 +750,7 @@ function ghost() {
   }
   const h = held();
   if (!h || !hover || tool.mode !== 'place') return;
-  const bad = collides(hover.x, hover.y, h.w, h.h);
+  const bad = collides(hover.x, hover.y, h.w, h.h) || !onGround(hover.x, hover.y, h.w, h.h);
   const x = sx(hover.x), y = sy(hover.y);
   const w = h.w * TILE * view.scale, ht = h.h * TILE * view.scale;
   ctx.fillStyle = bad ? 'rgba(224,108,108,.18)' : 'rgba(70,197,165,.16)';

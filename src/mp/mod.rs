@@ -95,6 +95,23 @@ pub fn as_secs(t: Tick) -> f64 {
 /// except at a multiple of `CHECK`.
 pub const CHECK: Tick = SIM_TICK_RATE;
 
+/// How often the room carries itself and every replica in it forward, in
+/// ticks.
+///
+/// Not a simulation rate -- the simulation has one of those and it is
+/// [`SIM_TICK_RATE`]. This is the cadence of the *service*: the interval at
+/// which the server advances a room whether or not a browser has asked it to.
+///
+/// Fifteen ticks is a quarter of a second, comfortably under the client's 180
+/// ms poll, so a frame is never more than a beat old and the arithmetic a beat
+/// has to do is always small. Making it longer saves nothing worth having --
+/// the same ticks get simulated either way -- and makes the lump each beat has
+/// to lift bigger, which is the thing the beat exists to avoid.
+pub const HEARTBEAT: Tick = SIM_TICK_RATE / 4;
+
+/// The same interval, in wall time, for the thread that turns it.
+pub const HEARTBEAT_MS: u64 = 1000 * HEARTBEAT / SIM_TICK_RATE;
+
 /// How long a deleted thing leaves a ghost behind, with a Restore on it.
 pub const GHOST_LIFE: Tick = secs(8);
 

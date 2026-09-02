@@ -1,0 +1,19 @@
+# A head, and the point is that it *is* a machine.
+#
+# Experiment 13, note 1: a mine that produced ore because the catalogue said so
+# was the last magical object left in the world. Now the room has a crude field in
+# the ground and this is what stands on it. It lifts 200 a second because
+# one fluid inlet moves two hundred, not because anybody typed a number.
+#
+# The ground has the last word: a head on a thinner seam turns slower, and a
+# richer one takes more than one head -- or one better head, which is the same
+# question asked of the floor instead. Everything here abuts everything else on
+# purpose, because in a room whose problem is space the size of this is the
+# first thing worth arguing with.
+
+machine "Well Head"
+
+pump   P1 at 0,0  draws crude
+outlet O1 at 3,0
+
+wire P1.water -> O1.liquid

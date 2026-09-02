@@ -61,10 +61,26 @@ pub enum Act {
         face: u8,
         /// A depot's item; a machine's is decided by its design.
         item: Option<String>,
-        /// Present when this placement is a restore or a duplicate: the design
-        /// the new machine owns from its first tick. Absent means the
-        /// catalogue's.
+        /// The design the new machine owns from its first tick: one off the
+        /// player's shelf, a copy of something already standing, or a restored
+        /// tombstone's.
+        ///
+        /// Absent means **empty**. That is the change experiment 13's third
+        /// section asks for, and the play session put it more bluntly: prebuilt
+        /// machines take the fun out of the game entirely. A prototype used to
+        /// hand over a finished machine -- somebody else's answer, arrived at
+        /// by somebody else -- and the tech tree handed over more of them. Now
+        /// a prototype is a *chassis*: a footprint, a name, and nothing inside
+        /// it until you put something there.
         design: Option<Design>,
+        /// Place the catalogue's worked example instead of an empty chassis.
+        ///
+        /// Kept, and kept explicit. Experiment 13 allows tutorial examples and
+        /// says they must not be the normal way to progress, so this is a
+        /// separate thing to ask for rather than what you get by not asking.
+        /// It also reads correctly in the log: a room can tell you which
+        /// machines somebody designed and which they copied out of the book.
+        example: bool,
     },
     DeleteMachine {
         id: Id,
@@ -77,6 +93,38 @@ pub enum Act {
     },
     DeleteStorage {
         id: Id,
+    },
+    /// Put back something that was deleted, and what it was joined to.
+    ///
+    /// A restore used to be an ordinary placement, which was technically
+    /// consistent and, in the words of the play session, experientially
+    /// obnoxious: the building came back with none of its wiring, and the
+    /// player had to remember what it had been joined to and draw all of it
+    /// again. A tombstone is the fix -- the connections are captured at the
+    /// moment of the delete and travel with the ghost.
+    ///
+    /// It is still a *new* placement at the tick the button was pressed, not a
+    /// rollback: the seconds the thing was missing really happened and the
+    /// factory really did run without it. What comes back is the wiring, not
+    /// the time.
+    ///
+    /// The connections are written in terms of `was`, the identity the
+    /// building had before it died, because they were captured before it had a
+    /// new one. Substituting it is the first thing the apply does, which is
+    /// what keeps this one deterministic command rather than a placement
+    /// followed by a handful of racing ones.
+    Restore {
+        was: Id,
+        proto: String,
+        x: i32,
+        y: i32,
+        face: u8,
+        item: Option<String>,
+        design: Option<Design>,
+        /// The wires that died with it, in the direction stuff moved.
+        conns: Vec<(Id, Id, String)>,
+        /// The transports that died with it: prototype, from, to, item.
+        hauls: Vec<(String, Id, Id, String)>,
     },
     CreateConnection {
         from: Id,
@@ -172,6 +220,7 @@ impl Act {
             Act::DeleteMachine { .. } => "DeleteMachine",
             Act::PlaceStorage { .. } => "PlaceStorage",
             Act::DeleteStorage { .. } => "DeleteStorage",
+            Act::Restore { .. } => "Restore",
             Act::CreateConnection { .. } => "CreateConnection",
             Act::DeleteConnection { .. } => "DeleteConnection",
             Act::CreateWorldLink { .. } => "CreateWorldLink",
@@ -203,10 +252,22 @@ impl Act {
             | Act::DisconnectComponent { id, .. }
             | Act::CommitMachineDesign { id, .. } => Some(id),
             Act::Deliver { to, .. } => Some(to),
+            Act::Restore { was, .. } => Some(was),
             Act::CreateConnection { from, .. } | Act::DeleteConnection { from, .. } => Some(from),
             Act::CreateWorldLink { from, .. } => Some(from),
             _ => None,
         }
+    }
+
+    /// This intention, in the shape a client posts it.
+    ///
+    /// Worth having as one object: the ghost panel used to rebuild a restore's
+    /// payload by hand from the fields it happened to be shown, and quietly
+    /// left the *design* out -- so restoring a machine somebody had spent
+    /// twenty minutes designing gave them back the catalogue's. The command a
+    /// ghost would issue is the room's to state, not the browser's to guess.
+    pub fn to_json(&self) -> Json {
+        Json::obj().set("type", self.verb()).set("payload", payload(self))
     }
 
     /// Whether this command changes what the simulator is running.
@@ -280,12 +341,13 @@ impl Cmd {
 fn payload(a: &Act) -> Json {
     let o = Json::obj();
     match a {
-        Act::PlaceMachine { proto, x, y, face, item, design } => o
+        Act::PlaceMachine { proto, x, y, face, item, design, example } => o
             .set("proto", proto.clone())
             .set("x", *x as i64)
             .set("y", *y as i64)
             .set("face", *face as i64)
             .set("item", item.clone())
+            .set("example", *example)
             .set(
                 "design",
                 match design {
@@ -298,6 +360,49 @@ fn payload(a: &Act) -> Json {
             .set("x", *x as i64)
             .set("y", *y as i64)
             .set("face", *face as i64),
+        Act::Restore { was, proto, x, y, face, item, design, conns, hauls } => o
+            .set("was", Json::big(*was as u128))
+            .set("proto", proto.clone())
+            .set("x", *x as i64)
+            .set("y", *y as i64)
+            .set("face", *face as i64)
+            .set("item", item.clone())
+            .set(
+                "design",
+                match design {
+                    Some(d) => d.to_json(),
+                    None => Json::Null,
+                },
+            )
+            .set(
+                "conns",
+                Json::Arr(
+                    conns
+                        .iter()
+                        .map(|(f, t, i)| {
+                            Json::obj()
+                                .set("from", Json::big(*f as u128))
+                                .set("to", Json::big(*t as u128))
+                                .set("item", i.clone())
+                        })
+                        .collect(),
+                ),
+            )
+            .set(
+                "hauls",
+                Json::Arr(
+                    hauls
+                        .iter()
+                        .map(|(p, f, t, i)| {
+                            Json::obj()
+                                .set("proto", p.clone())
+                                .set("from", Json::big(*f as u128))
+                                .set("to", Json::big(*t as u128))
+                                .set("item", i.clone())
+                        })
+                        .collect(),
+                ),
+            ),
         Act::DeleteMachine { id } | Act::DeleteStorage { id } | Act::DeleteWorldLink { id } => {
             o.set("id", Json::big(*id as u128))
         }
@@ -364,12 +469,50 @@ fn act_from_json(kind: &str, p: &Json) -> Result<Act, String> {
                 Json::Null => None,
                 d => Some(Design::from_json(d)?),
             },
+            example: p.at("example").as_bool().unwrap_or(false),
         },
         "DeleteMachine" => Act::DeleteMachine { id: id() },
         "PlaceStorage" => {
             Act::PlaceStorage { proto: s("proto"), x: n("x"), y: n("y"), face: face() }
         }
         "DeleteStorage" => Act::DeleteStorage { id: id() },
+        "Restore" => Act::Restore {
+            was: p.at("was").as_u64().unwrap_or(0),
+            proto: s("proto"),
+            x: n("x"),
+            y: n("y"),
+            face: face(),
+            item: p.at("item").as_str().map(str::to_string),
+            design: match p.at("design") {
+                Json::Null => None,
+                d => Some(Design::from_json(d)?),
+            },
+            conns: p
+                .at("conns")
+                .as_arr()
+                .iter()
+                .filter_map(|c| {
+                    Some((
+                        c.at("from").as_u64()?,
+                        c.at("to").as_u64()?,
+                        c.at("item").as_str()?.to_string(),
+                    ))
+                })
+                .collect(),
+            hauls: p
+                .at("hauls")
+                .as_arr()
+                .iter()
+                .filter_map(|h| {
+                    Some((
+                        h.at("proto").as_str()?.to_string(),
+                        h.at("from").as_u64()?,
+                        h.at("to").as_u64()?,
+                        h.at("item").as_str()?.to_string(),
+                    ))
+                })
+                .collect(),
+        },
         "CreateConnection" => {
             Act::CreateConnection { from: from(), to: to(), item: s("item") }
         }
@@ -434,10 +577,27 @@ fn act_from_json(kind: &str, p: &Json) -> Result<Act, String> {
 #[derive(Clone, Debug)]
 pub enum Effect {
     /// Something was taken out of the world, and should leave a ghost.
-    Removed { install: Box<Install>, by: PlayerId, at: Tick },
+    Removed {
+        install: Box<Install>,
+        by: PlayerId,
+        at: Tick,
+        /// What it was joined to, captured before `remove` dropped all of it.
+        /// This is what makes a ghost a tombstone rather than a snapshot of
+        /// one building.
+        conns: Vec<(Id, Id, String)>,
+        hauls: Vec<(String, Id, Id, String)>,
+    },
     /// A transport was taken out. Cheap enough to rebuild that it gets a
     /// mention rather than a ghost.
     Unlinked { name: String },
+    /// Something was put back, with as much of its wiring as would go back.
+    ///
+    /// `failed` is the honest half. A room that has moved on since the delete
+    /// may have no room for a connection any more -- something else was wired
+    /// to that port, or one of the far ends is itself gone -- and the player
+    /// is told which, rather than being left to find out from a machine that
+    /// silently is not running.
+    Restored { id: Id, name: String, wanted: usize, made: usize, failed: Vec<String> },
     /// A machine's design was replaced, and this is what it cost.
     Recommitted { id: Id, name: String, from: String, to: String },
     /// A load from another room reached a bay. `spilled` is what would not fit
@@ -462,14 +622,18 @@ pub enum Effect {
 pub fn apply(w: &mut World, c: &Cmd) -> Result<Vec<Effect>, String> {
     let mut out = Vec::new();
     match &c.act {
-        Act::PlaceMachine { proto: tag, x, y, face, item, design } => {
+        Act::PlaceMachine { proto: tag, x, y, face, item, design, example } => {
             let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
             if p.role == Role::Storage {
                 return Err("a bay is placed with PlaceStorage".into());
             }
-            let d = match (p.role, design) {
-                (Role::Machine, Some(d)) => Some(d.clone()),
-                (Role::Machine, None) => Some(super::world::stock_design(tag)?),
+            // Empty unless a design was named, or the worked example asked
+            // for by name. Nothing is substituted quietly: a chassis that
+            // silently filled itself with the catalogue's answer is exactly
+            // what note 7 was about.
+            let d = match (p.role.designed(), design, example) {
+                (true, Some(d), _) => Some(d.clone()),
+                (true, None, true) => Some(super::world::stock_design(tag)?),
                 _ => None,
             };
             w.place(p, *x, *y, *face, item.clone(), d, c.tick, c.player)?;
@@ -492,8 +656,68 @@ pub fn apply(w: &mut World, c: &Cmd) -> Result<Vec<Effect>, String> {
                     return Err(format!("player {p} is editing {}", inst.name));
                 }
             }
+            // The tombstone, taken before the thing is taken: `remove` drops
+            // every wire and every transport that touched it, so by the time
+            // it has returned there is nothing left to capture.
+            let conns: Vec<(Id, Id, String)> = w
+                .conns
+                .iter()
+                .filter(|k| k.from == *id || k.to == *id)
+                .map(|k| (k.from, k.to, k.item.clone()))
+                .collect();
+            let hauls: Vec<(String, Id, Id, String)> = w
+                .hauls
+                .iter()
+                .filter(|h| h.from == *id || h.to == *id)
+                .map(|h| (h.proto.tag.to_string(), h.from, h.to, h.item.clone()))
+                .collect();
             let gone = w.remove(*id)?;
-            out.push(Effect::Removed { install: Box::new(gone), by: c.player, at: c.tick });
+            out.push(Effect::Removed {
+                install: Box::new(gone),
+                by: c.player,
+                at: c.tick,
+                conns,
+                hauls,
+            });
+        }
+        Act::Restore { was, proto: tag, x, y, face, item, design, conns, hauls } => {
+            let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
+            let d = match (p.role.designed(), design) {
+                (true, Some(d)) => Some(d.clone()),
+                (true, None) => Some(super::world::stock_design(tag)?),
+                _ => None,
+            };
+            // The building first. If it will not go back -- somebody built on
+            // the spot while it was a ghost -- nothing else is attempted and
+            // the whole command is refused, which is the only answer that
+            // leaves every replica agreeing about what happened.
+            let id = w.place(p, *x, *y, *face, item.clone(), d, c.tick, c.player)?;
+            let sub = |i: Id| if i == *was { id } else { i };
+            let mut made = 0usize;
+            let mut failed: Vec<String> = Vec::new();
+            for (from, to, it) in conns {
+                match w.connect(sub(*from), sub(*to), it) {
+                    Ok(()) => made += 1,
+                    Err(e) => failed.push(format!("{}: {e}", super::lower::item_title(it))),
+                }
+            }
+            for (tag, from, to, it) in hauls {
+                let Some(hp) = proto(tag) else {
+                    failed.push(format!("{tag} is not in the catalogue any more"));
+                    continue;
+                };
+                match w.link(hp, sub(*from), sub(*to), it, c.tick, c.player) {
+                    Ok(_) => made += 1,
+                    Err(e) => failed.push(format!("{}: {e}", super::lower::item_title(it))),
+                }
+            }
+            out.push(Effect::Restored {
+                id,
+                name: w.get(id).map(|i| i.name.clone()).unwrap_or_default(),
+                wanted: conns.len() + hauls.len(),
+                made,
+                failed,
+            });
         }
         Act::CreateConnection { from, to, item } => w.connect(*from, *to, item)?,
         Act::DeleteConnection { from, to, item } => w.disconnect(*from, *to, item)?,
@@ -516,7 +740,14 @@ pub fn apply(w: &mut World, c: &Cmd) -> Result<Vec<Effect>, String> {
                 _ => {}
             }
             if i.draft.is_none() {
-                i.draft = i.design.clone();
+                // An empty chassis opens on an empty drawing board, named
+                // after the thing it will become. Without this a machine you
+                // had not designed yet could not be designed at all.
+                i.draft = Some(i.design.clone().unwrap_or_else(|| {
+                    let mut d = Design::empty();
+                    d.name = i.proto.title.to_string();
+                    d
+                }));
             }
             i.editor = Some(player);
         }

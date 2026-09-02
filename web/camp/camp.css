@@ -239,3 +239,30 @@ body[data-view='bench'] .onlymap {
 #news .item.route .what {
   color: #ffe066;
 }
+
+/* ------------------------------------------------- what crosses a boundary */
+/* One block per item, with the three places a load can be always all three:
+   a zero is an answer, and an omission is how material appears to vanish. */
+#roomio h3 {
+  margin: 10px 0 5px; font: 10px/1 var(--mono); letter-spacing: .14em;
+  text-transform: uppercase; color: var(--muted);
+}
+#roomio h3:first-child { margin-top: 0; }
+.io {
+  border: 1px solid var(--rule); border-left-width: 2px; border-radius: 3px;
+  padding: 5px 7px; margin-bottom: 5px; font-size: 11px;
+}
+.io.stuck { border-left-color: var(--signal); }
+.io.idle { opacity: .65; border-left-style: dashed; }
+.io-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.io-head .n { color: var(--muted); font-family: var(--mono); font-size: 10px; }
+.io-head .pip {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--d, var(--muted)); margin-right: 6px; vertical-align: middle;
+}
+.io-where {
+  display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 3px;
+  color: var(--muted); font: 10px var(--mono), monospace;
+}
+.io-note { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.io-note.bad { color: var(--signal); }

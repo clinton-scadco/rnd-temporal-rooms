@@ -13,7 +13,7 @@ import * as world from './world.js';
 import * as bench from './bench.js';
 import {
   renderGoal, renderWho, renderSync, renderFeed, renderGhosts, renderInspector,
-  renderPalette, markTool, toast,
+  renderPalette, renderLink, markTool, toast,
 } from './panels.js';
 
 const $ = id => document.getElementById(id);
@@ -23,7 +23,17 @@ let lastGoal = null;
 // -------------------------------------------------------------------- lobby
 
 async function lobby() {
+  // A browser that was in a room goes back to it before the lobby is ever
+  // drawn. A reload is not a decision to leave.
+  const back = await net.rejoin();
+  if (back.ok && back.rejoined) {
+    await enter(back.host);
+    toast(`back in ${back.code} as ${back.name || 'yourself'}`);
+    return;
+  }
+
   const goals = await net.goals();
+  if (!goals.ok) return ($('lobbyerr').textContent = goals.error);
   $('template').innerHTML = '<option value="">rolled from the seed</option>' +
     goals.templates.map(t => `<option value="${t.id}">${t.title} — ${t.family}</option>`).join('');
   refreshRooms();
@@ -62,11 +72,18 @@ async function enter(host) {
   for (const id of ['roombox', 'clockbox', 'views']) $(id).hidden = false;
   $('code').textContent = net.state.code;
   $('copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(net.state.code);
+  // A reload now comes straight back here, so there has to be a door out that
+  // is not the address bar. Leaving forgets the room, not the seat: the room
+  // goes on running and the code still gets you back into the same one.
+  $('leave').onclick = () => { net.leave(); location.reload(); };
 
   const cat = await net.catalogue();
-  renderPalette(cat, tag => {
-    world.setTool('place', tag);
-    markTool('place', tag);
+  if (!cat.ok) return toast(cat.error);
+  // A palette click places an empty chassis; the small `example` button
+  // beside it places the catalogue's worked answer, and says so.
+  renderPalette(cat, (tag, example) => {
+    world.setTool('place', tag, null, example);
+    markTool('place', tag, example);
   });
   document.querySelectorAll('.tools button').forEach(b => {
     b.onclick = () => {
@@ -78,6 +95,10 @@ async function enter(host) {
   markTool('pick');
 
   world.init($('world'), {
+    // Hovering shows; clicking pins. A pinned selection comes back the moment
+    // the pointer leaves the thing it wandered onto, so reading the room never
+    // costs you the building you were working on.
+    onHover: id => renderInspector(id === null ? world.selection : id, inspectorActions),
     onSelect: id => {
       renderInspector(id, inspectorActions);
       net.presence(null, id, bench.bench.id, mode);
@@ -100,6 +121,10 @@ async function enter(host) {
 
   net.onRefusal(e => toast(e));
   net.onFrame(frame);
+  // Health arrives whether or not a frame does, which is the whole point of
+  // it: a screen that has stopped being told about the room has to be able to
+  // say so, and it cannot say so in a handler that only runs when it is told.
+  net.onHealth(renderLink);
   net.start();
   setTimeout(() => world.focus(), 400);
 
@@ -116,6 +141,15 @@ async function enter(host) {
 
 const inspectorActions = {
   open: i => { bench.open(i.id); show('bench'); },
+  // Note 6: a connection starts on the building it comes out of, not in a
+  // tool list below the fold. The port has already named the item, so the next
+  // click is a destination and nothing else is asked.
+  connect: (i, item) => {
+    world.connectFrom(i.id, item);
+    markTool('connect');
+    toast(`${i.name} \u00b7 ${item} \u2014 click where it goes`);
+  },
+
   delete: i => net.send(i.role === 'storage' ? 'DeleteStorage' : 'DeleteMachine', { id: i.id }),
   // A wire and a transport are the two things a player draws that have no
   // building to select, and until they could be taken back a wrong one was

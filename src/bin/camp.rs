@@ -138,6 +138,11 @@ impl Play {
         let act = if storage {
             Act::PlaceStorage { proto: proto.into(), x, y, face: 0 }
         } else {
+            // The playthrough places the catalogue's worked examples on
+            // purpose. A player gets an empty chassis and designs it; a
+            // harness that had to draw four steam plants out of parts would be
+            // proving something about the designer rather than about the
+            // campaign.
             Act::PlaceMachine {
                 proto: proto.into(),
                 x,
@@ -145,9 +150,47 @@ impl Play {
                 face: 0,
                 item: None,
                 design: None,
+                example: true,
             }
         };
         self.act(who, site, "", act)
+    }
+
+    /// A head on the n-th patch of ground of the kind this prototype works.
+    ///
+    /// Since experiment 13 a room comes with ground rather than with working
+    /// mines, so the campaign has to build its own -- which is the point: the
+    /// first thing this playthrough does in every room is decide how to get
+    /// material out of it.
+    fn head(&mut self, who: PlayerId, site: &str, proto: &str, n: usize) -> Id {
+        let item = temporal_rooms::mp::kit::proto(proto).and_then(|p| p.extracts()).unwrap_or("");
+        let at = self
+            .c
+            .yard(site)
+            .and_then(|y| y.room.host.world.nth_ground(item, n))
+            .map(|d| (d.x, d.y));
+        match at {
+            Some((x, y)) => self.place(who, site, proto, x, y),
+            None => 0,
+        }
+    }
+
+    /// Another head on the same ground, `dx` tiles along from its corner.
+    ///
+    /// A seam is a budget rather than a socket: what one head cannot lift, two
+    /// or three standing beside each other can, for the price of the floor
+    /// they take. In Coal Basin that price is the whole objective.
+    fn beside(&mut self, who: PlayerId, site: &str, proto: &str, n: usize, dx: i32) -> Id {
+        let item = temporal_rooms::mp::kit::proto(proto).and_then(|p| p.extracts()).unwrap_or("");
+        let at = self
+            .c
+            .yard(site)
+            .and_then(|y| y.room.host.world.nth_ground(item, n))
+            .map(|d| (d.x + dx, d.y));
+        match at {
+            Some((x, y)) => self.place(who, site, proto, x, y),
+            None => 0,
+        }
     }
 
     fn wire(&mut self, who: PlayerId, site: &str, from: Id, to: Id, item: &str) {
@@ -263,11 +306,17 @@ fn play(seed: u64) -> i32 {
             })
             .unwrap_or(0)
     };
-    let seam = fixture(&p, "basin", "coalpit", 0);
-    let seam2 = fixture(&p, "basin", "coalpit", 1);
-    let intake = fixture(&p, "basin", "waterpump", 0);
     let grid = fixture(&p, "basin", "grid", 0);
     let coal_out = fixture(&p, "basin", "depot", 0);
+    let seam = p.head(ada, "basin", "coalpit", 0);
+    let intake = p.head(ada, "basin", "waterpump", 0);
+    // The export seam is worth nine hundred a second and one head lifts four
+    // hundred, so it takes three of them standing side by side -- which is the
+    // trade this room is about, since every tile they cost is a tile the
+    // plants wanted. The third one only gets the hundred that is left.
+    let seam2 = p.head(ada, "basin", "coalpit", 1);
+    let seam2b = p.beside(ada, "basin", "coalpit", 1, 2);
+    let seam2c = p.beside(ada, "basin", "coalpit", 1, 4);
 
     let bay_c = p.place(ada, "basin", "bay", 8, 2);
     let bay_w = p.place(ada, "basin", "bay", 8, 8);
@@ -277,6 +326,8 @@ fn play(seed: u64) -> i32 {
     p.wire(ada, "basin", intake, bay_w, "Water");
     p.wire(ada, "basin", bay_p, grid, "Power");
     p.wire(ada, "basin", seam2, bay_x, "Coal");
+    p.wire(ada, "basin", seam2b, bay_x, "Coal");
+    p.wire(ada, "basin", seam2c, bay_x, "Coal");
     p.wire(ada, "basin", bay_x, coal_out, "Coal");
 
     p.at(10);
@@ -327,6 +378,7 @@ fn play(seed: u64) -> i32 {
             face: 0,
             item: None,
             design: None,
+            example: true,
         },
     )
     .is_ok()
@@ -360,10 +412,10 @@ fn play(seed: u64) -> i32 {
         Err(e) => p.bad.push(format!("the coal line was refused: {e}")),
     }
 
-    let mine1 = fixture(&p, "valley", "oremine", 0);
-    let mine2 = fixture(&p, "valley", "oremine", 1);
-    let seam_v = fixture(&p, "valley", "coalpit", 0);
-    let water_v = fixture(&p, "valley", "waterpump", 0);
+    let mine1 = p.head(ada, "valley", "oremine", 0);
+    let mine2 = p.head(ada, "valley", "oremine", 1);
+    let seam_v = p.head(ada, "valley", "coalpit", 0);
+    let water_v = p.head(ada, "valley", "waterpump", 0);
     let coal_in = fixture(&p, "valley", "yard", 0);
     let powder_out = fixture(&p, "valley", "depot", 0);
 
@@ -413,7 +465,7 @@ fn play(seed: u64) -> i32 {
         Ok(_) => p.say("a second train: Basin to the Station, 30,000 a load"),
         Err(e) => p.bad.push(format!("the station's coal line was refused: {e}")),
     }
-    let water_s = fixture(&p, "station", "waterpump", 0);
+    let water_s = p.head(ada, "station", "waterpump", 0);
     let coal_s = fixture(&p, "station", "yard", 0);
     let grid_s = fixture(&p, "station", "grid", 0);
     p.at(p.t + 4);
@@ -446,7 +498,7 @@ fn play(seed: u64) -> i32 {
             Err(e) => p.bad.push(format!("the {item} line into works was refused: {e}")),
         }
     }
-    let caster = fixture(&p, "works", "billetcaster", 0);
+    let caster = p.head(ada, "works", "billetcaster", 0);
     let coal_w = fixture(&p, "works", "yard", 0);
     let pow_w = fixture(&p, "works", "yard", 1);
     let gear_out = fixture(&p, "works", "depot", 0);
@@ -498,7 +550,7 @@ fn play(seed: u64) -> i32 {
             Err(e) => p.bad.push(format!("the {item} line into Final Works was refused: {e}")),
         }
     }
-    let water_f = fixture(&p, "final", "waterpump", 0);
+    let water_f = p.head(ada, "final", "waterpump", 0);
     let coal_f = fixture(&p, "final", "yard", 0);
     let gear_in = fixture(&p, "final", "yard", 1);
     let conc_in = fixture(&p, "final", "yard", 2);
@@ -779,6 +831,7 @@ fn refusals() -> i32 {
                 face: 0,
                 item: None,
                 design: None,
+                example: true,
             },
         )
         .map(|_| String::new()),
@@ -862,6 +915,7 @@ fn refusals() -> i32 {
                 face: 0,
                 item: None,
                 design: None,
+                example: true,
             },
         )
         .map(|cmd| format!("stamped at tick {}, sequence {}", cmd.tick, cmd.seq)),

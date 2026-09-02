@@ -218,6 +218,7 @@ pub mod camp;
 pub mod domains;
 pub mod dsl;
 pub mod graph;
+pub mod http;
 pub mod json;
 pub mod live;
 pub mod machine;

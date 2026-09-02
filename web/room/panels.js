@@ -59,32 +59,64 @@ export function menu(title, options) {
 
 // -------------------------------------------------------------- the palette
 
+/// What may be placed, and -- for anything designed -- what it arrives empty.
+///
+/// Note 7 of the play session was the shortest one in it: prebuilt machines
+/// take the fun out of the game entirely. So the palette places a *chassis*,
+/// and the catalogue's answer is a second, smaller button that says what it
+/// is. Experiment 13 allows worked examples and asks that they not be the
+/// normal way forward; a button labelled "example" beside one labelled with
+/// the machine's name is about as far from normal as a button gets.
 export function renderPalette(cat, onPick) {
   const box = $('palette');
   box.innerHTML = '';
   const order = ['source', 'storage', 'machine', 'sink'];
   for (const role of order) {
     for (const p of cat.protos.filter(p => p.role === role)) {
+      const row = document.createElement('div');
+      row.className = 'pal';
       const b = document.createElement('button');
       b.dataset.proto = p.tag;
-      b.title = p.blurb;
+      b.title = p.example
+        ? `${p.blurb}\n\nPlaces an empty ${p.title}. Open it to design what goes inside.`
+        : p.blurb;
       b.innerHTML =
         `<span class="swatch" style="background:var(--${role})"></span>` +
-        `<span>${p.title}</span><span class="n">${p.w}&times;${p.h}</span>`;
-      b.onclick = () => onPick(p.tag);
-      box.appendChild(b);
+        `<span>${p.title}${p.example ? ' <em>empty</em>' : ''}</span>` +
+        `<span class="n">${p.needsDeposit ? 'on ground' : `${p.w}\u00d7${p.h}`}</span>`;
+      b.onclick = () => onPick(p.tag, false);
+      row.appendChild(b);
+      if (p.example) {
+        const x = document.createElement('button');
+        x.className = 'eg';
+        x.dataset.proto = p.tag;
+        x.dataset.example = '1';
+        x.textContent = 'example';
+        x.title =
+          `Place the worked ${p.title} out of the book instead of an empty one.\n\n` +
+          'Fine for a first look, and not how the game is meant to be played: ' +
+          'what you unlock is components, not answers.';
+        x.onclick = () => onPick(p.tag, true);
+        row.appendChild(x);
+      }
+      box.appendChild(row);
     }
   }
 }
 
-export function markTool(mode, proto) {
+export function markTool(mode, proto, example) {
   document.querySelectorAll('#palette button').forEach(b =>
-    b.classList.toggle('on', mode === 'place' && b.dataset.proto === proto));
+    b.classList.toggle(
+      'on',
+      mode === 'place' && b.dataset.proto === proto
+        && !!b.dataset.example === !!example,
+    ));
   document.querySelectorAll('.tools button').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === mode));
   const hint = {
     place: 'click the plot &middot; <b>R</b> turns it &middot; <b>Esc</b> puts it down',
-    connect: 'click a bay, then a machine (or the other way round)',
+    connect: 'click what it comes out of, then what it goes into &middot; ' +
+      'no bay needed between two machines',
     belt: 'click the bay it leaves, then the bay it arrives at',
     rail: 'click the bay it leaves, then the bay it arrives at',
     delete: 'click anything. It leaves a ghost you can restore',
@@ -102,13 +134,37 @@ export function renderGoal(v) {
   $('goalnote').textContent = g.note;
   const box = $('goallines');
   box.innerHTML = '';
+
+  // Finished, and whether it is still true.
+  //
+  // These are two different questions and the panel used to have room for one
+  // of them. The play session finished a room, unplugged one of the power
+  // stations that had finished it, watched the number fall, and could not tell
+  // whether anything was wrong -- because the objective panel answers "have
+  // you" and they were asking "are you". Both now, and the second one loudly.
+  if (p.doneAt !== null && p.doneAt !== undefined) {
+    const d = document.createElement('div');
+    d.className = 'verdict' + (p.holding ? '' : ' slipped');
+    d.innerHTML = `<b>room completed</b><span>at ${net.clock(p.doneAt)}</span>` +
+      (p.holding ? '' :
+        '<em>the factory is no longer doing it. The room stays passed; ' +
+        `what has stopped is: ${p.slipped.join('; ')}.</em>`);
+    box.appendChild(d);
+  }
+
   for (const l of p.lines) {
     const at_most = l.unit.includes('most');
     const k = l.need > 0 ? Math.min(1.6, l.have / l.need) : 0;
     const d = document.createElement('div');
     d.className = 'line' + (l.met ? ' met' : '') + (at_most && !l.met ? ' over' : '');
+    // An achievement that is met is done with; a live requirement that is met
+    // is only met *at the moment*, and saying so is the whole point of the
+    // distinction.
+    const mark = l.kind === 'state'
+      ? `<span class="kind" title="a fact about the factory right now, which can stop being true">now</span>`
+      : `<span class="kind" title="a total that only grows: once reached, reached">total</span>`;
     d.innerHTML =
-      `<div class="what"><span>${l.what}</span>` +
+      `<div class="what"><span>${mark}${l.what}</span>` +
       `<span class="have">${net.num(l.have)} / ${net.num(l.need)} ${l.unit.replace('at most', '')}</span></div>` +
       `<div class="track"><div class="fill" style="width:${Math.min(100, k * 100).toFixed(0)}%"></div></div>`;
     box.appendChild(d);
@@ -128,9 +184,14 @@ export function renderWho(v) {
   box.innerHTML = '';
   for (const p of v.players) {
     const d = document.createElement('div');
-    d.className = 'p' + (p.behind > 120 ? ' behind' : '');
+    // Dimmed for somebody who has stopped *watching*, not somebody whose
+    // replica is behind: with the room beating on its own, every replica is at
+    // the current tick whether its browser is there or not, so `behind` no
+    // longer says anything about whether a person is. `away` does.
+    d.className = 'p' + (p.away > 180 ? ' behind' : '');
     d.title = `${p.name} joined at ${net.clock(p.joinedAt)} · ` +
-      `${p.agreed} checks agreed, ${p.mismatches} mismatched, ${p.resyncs} resynchronised`;
+      `${p.agreed} checks agreed, ${p.mismatches} mismatched, ${p.resyncs} resynchronised` +
+      (p.away > 180 ? ` · last looked ${p.awaySeconds.toFixed(0)}s ago` : '');
     d.innerHTML = `<span class="dot" style="background:${p.colour}"></span>${p.name}` +
       (p.editing ? ' <span style="color:var(--signal)">&#9998;</span>' : '');
     box.appendChild(d);
@@ -149,6 +210,34 @@ export function renderSync(v) {
     `you  ${s.hash || '----------------'}<br>` +
     `host ${s.hostHash || '----------------'}` +
     (you ? `<br>${you.agreed} checks &middot; ${you.resyncs} resync` : '');
+}
+
+/// How current the picture is, which is a different question from whether it
+/// is right.
+///
+/// `renderSync` above answers "does this browser's reconstruction of the room
+/// agree with the host's?" -- the experiment. This answers "is this browser
+/// being told about it?", and it only has anything to say when the answer is
+/// no. A live connection writes nothing at all: a healthy game does not need a
+/// green light, and a stale one is the only case anybody has ever needed to be
+/// told about.
+export function renderLink(h) {
+  const box = $('link');
+  if (!box) return;
+  const secs = (h.lag / 1000).toFixed(0);
+  if (h.misses > 2) {
+    box.className = 'link out';
+    box.textContent = `no answer · ${secs}s`;
+  } else if (!h.live) {
+    box.className = 'link slow';
+    box.textContent = `catching up · ${secs}s`;
+  } else {
+    box.className = 'link';
+    box.textContent = '';
+  }
+  box.title = h.live
+    ? `current, ${h.rtt} ms round trip`
+    : `the room is still running; this screen last heard from it ${secs}s ago`;
 }
 
 export function renderFeed(v) {
@@ -182,11 +271,16 @@ export function renderGhosts(v, project) {
     const who = v.players.find(p => p.id === g.by);
     d.innerHTML = `<div>${g.title}<br><span style="opacity:.7">${who ? who.name : ''} &middot; ${g.fades.toFixed(0)}s</span></div>`;
     const b = document.createElement('button');
-    b.textContent = 'restore';
-    b.onclick = () => {
-      const payload = { proto: g.proto, x: g.x, y: g.y, face: g.face, item: g.item };
-      net.send(g.proto === 'bay' || g.proto === 'yard' ? 'PlaceStorage' : 'PlaceMachine', payload);
-    };
+    // The wiring comes back too, and the button says so before it is pressed.
+    b.textContent = g.conns ? `restore +${g.conns}` : 'restore';
+    b.title = g.conns
+      ? `puts ${g.title} back, and reconnects the ${g.conns} connection` +
+        `${g.conns === 1 ? '' : 's'} it had. Any that no longer fit are named in the feed.`
+      : `puts ${g.title} back`;
+    // The command is the room's, not this browser's: assembling it here is how
+    // a restored machine used to come back with the catalogue's design instead
+    // of the one somebody had built.
+    b.onclick = () => net.send(g.restore.type, g.restore.payload);
     d.appendChild(b);
     box.appendChild(d);
   }
@@ -228,20 +322,8 @@ export function renderInspector(id, hooks) {
         (why.nextDeliveryBy ? ` (${why.nextDeliveryBy})` : '') + '</dd>';
     }
     html += '</dl>';
-    if (why.needs && why.needs.length) {
-      html += '<h2>needs</h2>';
-      for (const n of why.needs) {
-        html += `<div class="row${n.short ? ' short' : ''}"><span>${n.item} &times;${net.num(n.perCycle)}</span>` +
-          `<span>${net.num(n.available)} in ${n.bay}</span></div>`;
-      }
-    }
-    if (why.holding && why.holding.length) {
-      html += '<h2>holding</h2>';
-      for (const n of why.holding) {
-        html += `<div class="row"><span>${n.item}</span><span>${n.bay} ${n.full}% full</span></div>`;
-      }
-    }
   }
+  html += flows(i, why);
   if (p && p.held) {
     html += '<h2>contents</h2>';
     for (const q of p.held) {
@@ -264,6 +346,7 @@ export function renderInspector(id, hooks) {
         `It will need a bay that can hold one.</p>`;
     }
   }
+  html += connectBlock(i);
   html += '<div class="acts">';
   if (i.role === 'machine') {
     html += '<button data-act="open">open the machine</button>' +
@@ -272,9 +355,149 @@ export function renderInspector(id, hooks) {
   html += '<button data-act="delete">delete</button></div>';
   box.innerHTML = html;
   box.querySelectorAll('[data-act]').forEach(b => {
-    b.onclick = () => hooks[b.dataset.act] && hooks[b.dataset.act](i);
+    b.onclick = () => hooks[b.dataset.act] && hooks[b.dataset.act](i, b.dataset.item);
   });
 }
+
+/// What is coming in and what is going out, one row per port.
+///
+/// The play session's note 3, and the reason it was worth doing before
+/// anything prettier: every building could say what it *was* and none of them
+/// could say what they were getting. The old panel listed the needs the
+/// simulator happened to be blocked on, which is a different set from "the
+/// things this machine consumes" -- an input nobody had wired at all did not
+/// appear, because a machine with an unwired input is not commissioned and has
+/// no opinion about anything.
+///
+/// So the spine is the ports, which exist whether or not anybody has connected
+/// them, and the simulator's numbers are hung off them where there are any.
+function flows(i, why) {
+  const ports = i.ports || [];
+  if (!ports.length) return '';
+  const v = net.state.view;
+  const need = {};
+  for (const n of (why && why.needs) || []) need[n.item] = n;
+  const holding = {};
+  for (const n of (why && why.holding) || []) holding[n.item] = n;
+
+  // Who is on the other end of each item, and how fast they can push or pull.
+  const from = {}, to = {};
+  for (const c of v.world.conns) {
+    if (c.to === i.id) from[c.item] = c;
+    if (c.from === i.id) to[c.item] = c;
+  }
+  for (const h of v.world.hauls) {
+    if (h.to === i.id) from[h.item] = h;
+    if (h.from === i.id) to[h.item] = h;
+  }
+
+  const rateOut = (id, item) => {
+    const o = net.byId(id);
+    const port = o && (o.ports || []).find(p => p.out && p.item === item);
+    return port ? port.perSecond : null;
+  };
+  // What is sitting in whatever feeds or drains this port right now.
+  const stock = c => {
+    if (!c) return null;
+    const name = c.buffer || (net.byId(c.from === i.id ? c.to : c.from) || {}).name;
+    const held = name && net.plantOf(name);
+    const q = held && held.held && held.held.find(h => h.item === c.item);
+    return q ? q.qty : (held ? 0 : null);
+  };
+
+  const seen = new Set();
+  const row = pt => {
+    const key = (pt.out ? 'o' : 'i') + pt.item;
+    if (seen.has(key)) return '';
+    seen.add(key);
+    const c = pt.out ? to[pt.item] : from[pt.item];
+    const other = c ? net.byId(pt.out ? c.to : c.from) : null;
+    const have = stock(c);
+    const n = need[pt.item];
+    const short = !pt.out && (!c || (n && n.short));
+    const incoming = !pt.out && c ? rateOut(c.from, pt.item) : null;
+    let right;
+    if (!c) right = 'not connected';
+    else if (pt.out) right = `${other ? other.name : '?'}${have === null ? '' : ` &middot; ${net.num(have)} waiting`}`;
+    else right = `${have === null ? '--' : net.num(have)} available` +
+      (incoming ? ` &middot; ${net.num(incoming)}/s in` : '');
+    return `<div class="row${short ? ' short' : ''}">` +
+      `<span><i class="pip" style="--d:var(--${pt.domain})"></i>` +
+      `${pt.title || pt.item} <em>${net.num(pt.perSecond)}${pt.domain === 'electrical' ? ' MW' : '/s'}</em></span>` +
+      `<span>${right}</span></div>`;
+  };
+
+  const ins = ports.filter(pt => !pt.out).map(row).join('');
+  const outs = ports.filter(pt => pt.out).map(row).join('');
+  let html = '';
+  if (ins) html += `<h2>taking</h2>${ins}`;
+  if (outs) html += `<h2>giving</h2>${outs}`;
+  // The one line the old panel had that this would otherwise lose: a machine
+  // whose output has nowhere to go is blocked, and it should say so here.
+  for (const k in holding) {
+    html += `<div class="row"><span>backed up</span><span>${holding[k].bay} ${holding[k].full}% full</span></div>`;
+  }
+  return html;
+}
+
+/// The connection points this building has, and which of them are joined to
+/// anything.
+///
+/// The play session asked for this twice over: note 6 wanted the wire tools
+/// out of a scrolling side menu and onto the thing being wired, and note 3
+/// wanted every building to say what it takes and gives. They are the same
+/// panel. Clicking a port starts a connection from it, which means the second
+/// click is a destination and there is no menu at all -- note 10's "never ask
+/// a question whose answer is already determined", answered at the source.
+///
+/// A filled dot is connected; a hollow one is not. A machine with a hollow
+/// input is the machine that is not running, and this is where you see it
+/// without reading a paragraph.
+function connectBlock(i) {
+  const v = net.state.view;
+  const ports = i.ports || [];
+  if (!ports.length) {
+    return i.role === 'storage'
+      ? '<h2>connect</h2><p class="muted">nothing has been wired into this bay yet, ' +
+        'so it does not know what it holds. Wire something in, or draw from it ' +
+        'to a machine that needs one thing.</p>'
+      : '';
+  }
+  const wired = new Set();
+  const partner = {};
+  const note = (key, name) => { wired.add(key); (partner[key] ||= []).push(name); };
+  for (const c of v.world.conns) {
+    if (c.from === i.id) note('out:' + c.item, nameOf(c.to));
+    if (c.to === i.id) note('in:' + c.item, nameOf(c.from));
+  }
+  for (const h of v.world.hauls) {
+    if (h.from === i.id) note('out:' + h.item, nameOf(h.to));
+    if (h.to === i.id) note('in:' + h.item, nameOf(h.from));
+  }
+  const seen = new Set();
+  const row = p => {
+    const key = (p.out ? 'out:' : 'in:') + p.item;
+    if (seen.has(key)) return '';
+    seen.add(key);
+    const on = wired.has(key);
+    const to = (partner[key] || []).join(', ');
+    const rate = p.perSecond ? `${net.num(p.perSecond)}/s` : '';
+    return `<button class="port${on ? ' on' : ''}" data-act="connect" ` +
+      `data-item="${p.item}" title="${p.out ? 'out' : 'in'} &middot; ${p.domain}` +
+      `${on ? ' &middot; ' + to : ' &middot; not connected'}">` +
+      `<span class="dot" style="--d:var(--${p.domain})"></span>` +
+      `<span class="what">${p.title || p.item}</span>` +
+      `<span class="n">${on ? to : rate || '&mdash;'}</span></button>`;
+  };
+  const ins = ports.filter(p => !p.out).map(row).join('');
+  const outs = ports.filter(p => p.out).map(row).join('');
+  let html = '<h2>connect</h2>';
+  if (ins) html += `<div class="ports"><span class="lbl">in</span>${ins}</div>`;
+  if (outs) html += `<div class="ports"><span class="lbl">out</span>${outs}</div>`;
+  return html;
+}
+
+const nameOf = id => (net.byId(id) || {}).name || `#${id}`;
 
 /// One wire, and the button that takes it back.
 ///
@@ -287,12 +510,28 @@ function inspectWire(box, wire, hooks) {
     box.innerHTML = '<p class="muted">click anything.</p>';
     return;
   }
+  // The document's own line, which carries the domain and -- when the two
+  // ends are machines -- the buffer the compiler put between them.
+  const c = (net.state.view.world.conns || []).find(
+    c => c.from === wire.from && c.to === wire.to && c.item === wire.item
+  ) || wire;
+  const buf = c.buffer && net.plantOf(c.buffer);
+  const held = buf && buf.held && buf.held.length ? buf.held[0].qty : null;
   box.innerHTML =
     `<div class="name">${a.name} &rarr; ${b.name}</div>` +
-    `<div class="sub">a wire &middot; ${wire.item}</div>` +
-    `<p class="muted">${a.role === 'storage'
-      ? `${b.name} draws its ${wire.item} from this bay.`
-      : `${a.name} posts its ${wire.item} into this bay.`}</p>` +
+    `<div class="sub">${c.domain || 'material'} &middot; ${c.title || wire.item}</div>` +
+    `<p class="muted">${
+      a.role === 'storage' ? `${b.name} draws its ${c.title || wire.item} from this bay.`
+      : b.role === 'storage' ? `${a.name} posts its ${c.title || wire.item} into this bay.`
+      // The whole of experiment 13's first change, said in one sentence where
+      // the player is looking at the thing it changed.
+      : `${a.name} feeds ${b.name} directly. No bay needed: the buffer between ` +
+        `them is part of the connection.`}</p>` +
+    (c.buffer
+      ? '<dl>' +
+        `<dt>buffered</dt><dd>${held === null ? '--' : net.num(held)} of ${net.num(c.capacity)}</dd>` +
+        '</dl>'
+      : '') +
     '<div class="acts"><button data-act="unwire">delete this wire</button></div>';
   box.querySelectorAll('[data-act]').forEach(btn => {
     btn.onclick = () => hooks.unwire && hooks.unwire(wire);

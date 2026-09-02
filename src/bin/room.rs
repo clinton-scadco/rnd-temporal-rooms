@@ -88,10 +88,24 @@ fn scenario(seed: u64) -> i32 {
             .map(|i| i.id)
             .unwrap_or(0)
     };
-    let caster = named(&r, "billetcaster", 0);
-    let coal = named(&r, "coalpit", 0);
-    let water = named(&r, "waterpump", 0);
     let depot = named(&r, "depot", 0);
+    // A room comes with ground now, not with working mines, so the first thing
+    // anybody does is put a head on each seam.
+    let head = |r: &mut Room, who: u32, tag: &str| -> Id {
+        let item = temporal_rooms::mp::kit::proto(tag).and_then(|p| p.extracts()).unwrap_or("");
+        let Some((x, y)) = r.host.world.nth_ground(item, 0).map(|d| (d.x, d.y)) else {
+            return 0;
+        };
+        let act =
+            Act::PlaceMachine { proto: tag.into(), x, y, face: 0, item: None, design: None, example: true };
+        match r.submit(who, act) {
+            Ok(_) => r.host.world.installs.last().map(|i| i.id).unwrap_or(0),
+            Err(_) => 0,
+        }
+    };
+    let caster = head(&mut r, a, "billetcaster");
+    let coal = head(&mut r, a, "coalpit");
+    let water = head(&mut r, a, "waterpump");
     let bays: Vec<Id> =
         r.host.world.installs.iter().filter(|i| i.proto.tag == "bay").map(|i| i.id).collect();
 
@@ -123,6 +137,7 @@ fn scenario(seed: u64) -> i32 {
             face: 0,
             item: None,
             design: None,
+            example: true,
         },
     );
     let gearbay = step(
@@ -209,6 +224,7 @@ fn scenario(seed: u64) -> i32 {
             face: 0,
             item: None,
             design: None,
+            example: true,
         },
     );
     let powerbay = step(
@@ -237,6 +253,7 @@ fn scenario(seed: u64) -> i32 {
             face: 0,
             item: None,
             design: None,
+            example: true,
         },
     );
     wire(&mut r, 36, a, bays[1], plant2, "Coal", "Ada feeds it coal");
@@ -517,6 +534,7 @@ fn failures() -> i32 {
                 face: 0,
                 item: None,
                 design: None,
+                example: true,
             },
         )
         .map(|_| r.host.world.installs.last().unwrap().id)

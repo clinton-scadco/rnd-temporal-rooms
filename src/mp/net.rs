@@ -41,12 +41,13 @@
 
 use super::room::Room;
 use super::world::PlayerId;
-use crate::json::{self, Json};
+use crate::http::{self, Req};
+use crate::json::Json;
 use crate::machine::design::Design;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
+use std::time::Duration;
 
 const ASSETS: &[(&str, &str, &str)] = &[
     ("/", "text/html; charset=utf-8", include_str!("../../web/room/index.html")),
@@ -81,6 +82,7 @@ fn with_rooms<R>(f: impl FnOnce(&mut HashMap<String, Room>) -> R) -> R {
 pub fn serve(port: u16) -> std::io::Result<()> {
     let listener = bind(port)?;
     let addr = listener.local_addr()?;
+    beat();
     println!("prototype 2 is at   http://{addr}/");
     println!("one browser hosts, the other joins with the code.");
     println!("ctrl-c to stop.");
@@ -89,7 +91,7 @@ pub fn serve(port: u16) -> std::io::Result<()> {
             Ok(s) => {
                 std::thread::spawn(move || {
                     if let Err(e) = handle(s) {
-                        if e.kind() != std::io::ErrorKind::BrokenPipe {
+                        if !http::hung_up(e.kind()) {
                             eprintln!("request failed: {e}");
                         }
                     }
@@ -99,6 +101,38 @@ pub fn serve(port: u16) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The room's own thread.
+///
+/// Every room here used to be advanced by somebody's browser: `/api/state`
+/// arrived, the room ran to the current tick, and the frame was cut from where
+/// it landed. That works while every browser is polling and fails the moment
+/// one is not -- and browsers stop polling constantly. A background tab is
+/// throttled to a `setTimeout` a minute; a laptop that was shut sends nothing
+/// at all. Every tick that passes meanwhile is a tick somebody's next poll has
+/// to simulate in one call, holding [`ROOMS`] while it does, with the other
+/// player's poll queued behind it. The person who froze was never the person
+/// who walked away.
+///
+/// So the clock gets a thread. Four times a second it takes the lock, carries
+/// every started room and every replica in it to the current tick, and puts
+/// the lock down. The work is the same work -- the same ticks, the same
+/// commands, the same hashes -- but it is spread across the beats it belongs
+/// to rather than dropped on whichever request happens to arrive after a gap.
+///
+/// The sleep is at the top of the loop and unconditional, so a beat that runs
+/// long cannot turn this into a thread that holds the lock forever: there is
+/// always a quarter of a second in which requests get served.
+fn beat() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_millis(super::HEARTBEAT_MS));
+        with_rooms(|rs| {
+            for r in rs.values_mut() {
+                r.heartbeat();
+            }
+        });
+    });
 }
 
 fn bind(port: u16) -> std::io::Result<TcpListener> {
@@ -112,69 +146,10 @@ fn bind(port: u16) -> std::io::Result<TcpListener> {
     Err(last.unwrap())
 }
 
-struct Req {
-    method: String,
-    path: String,
-    query: HashMap<String, String>,
-    body: String,
-}
-
-impl Req {
-    fn q(&self, k: &str) -> String {
-        self.query.get(k).cloned().unwrap_or_default()
-    }
-    fn json(&self) -> Json {
-        json::parse(&self.body).unwrap_or(Json::Null)
-    }
-}
-
 fn handle(stream: TcpStream) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
-    if reader.read_line(&mut line)? == 0 {
-        return Ok(());
-    }
-    let mut parts = line.split_whitespace();
-    let method = parts.next().unwrap_or("GET").to_string();
-    let target = parts.next().unwrap_or("/").to_string();
-
-    let mut len = 0usize;
-    loop {
-        let mut h = String::new();
-        if reader.read_line(&mut h)? == 0 || h.trim().is_empty() {
-            break;
-        }
-        if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
-            len = v.trim().parse().unwrap_or(0);
-        }
-    }
-    let mut body = vec![0u8; len];
-    if len > 0 {
-        reader.read_exact(&mut body)?;
-    }
-    let (path, qs) = match target.split_once('?') {
-        Some((p, q)) => (p.to_string(), q.to_string()),
-        None => (target.clone(), String::new()),
-    };
-    let query = qs
-        .split('&')
-        .filter(|s| !s.is_empty())
-        .map(|kv| match kv.split_once('=') {
-            Some((k, v)) => (k.to_string(), percent(v)),
-            None => (kv.to_string(), String::new()),
-        })
-        .collect();
-    let req = Req { method, path, query, body: String::from_utf8_lossy(&body).into_owned() };
+    let Some(req) = http::accept(&stream)? else { return Ok(()) };
     let (status, mime, payload) = route(&req);
-    let mut out = stream;
-    let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\n\
-         Cache-Control: no-store\r\nConnection: close\r\n\r\n",
-        payload.len()
-    );
-    out.write_all(head.as_bytes())?;
-    out.write_all(payload.as_bytes())?;
-    out.flush()
+    http::reply(&stream, status, mime, &payload)
 }
 
 const MIME: &str = "application/json; charset=utf-8";
@@ -244,6 +219,7 @@ fn host(j: &Json) -> Result<Json, String> {
     let seed = j.at("seed").as_u64().unwrap_or_else(fresh_seed);
     let template = j.at("template").as_str().filter(|t| !t.is_empty());
     let name = j.at("name").as_str().unwrap_or("host").to_string();
+    let key = j.at("key").as_str().unwrap_or_default().to_string();
     with_rooms(|rs| {
         let mut room = Room::open(seed, template);
         if rs.contains_key(&room.code) {
@@ -257,7 +233,7 @@ fn host(j: &Json) -> Result<Json, String> {
         // the objective to be on screen before anybody builds, and that is the
         // only pause the game has: once `/api/start` is called there is no
         // matching stop.
-        let id = room.join(&name)?;
+        let (id, _) = room.join_as(&name, &key)?;
         let goal = room.goal.clone();
         let progress = room.host.progress();
         rs.insert(code.clone(), room);
@@ -270,16 +246,43 @@ fn host(j: &Json) -> Result<Json, String> {
     })
 }
 
+/// Arrive, or come back.
+///
+/// The same route for both, because the client cannot tell which it is doing:
+/// a browser that was refreshed knows only its own token and the last code it
+/// was in. Whether that is a seat or a stranger is the room's question, and
+/// the answer comes back as `rejoined` so the screen can say so.
+///
+/// An absent name means "whatever I was called before", which is what a
+/// reload has to mean -- the name was in the page that went away.
+///
+/// `back` is a client saying it is only interested in a seat it already has.
+/// Without it a stale code in a browser's storage would take a *new* seat in
+/// whatever room happens to answer to it -- and a code is derived from a seed,
+/// so a room reopened on the same seed answers to the same code. That is a
+/// phantom player in somebody else's room, arriving from a tab nobody opened.
 fn join(j: &Json) -> Result<Json, String> {
     let code = j.at("code").as_str().unwrap_or_default().to_uppercase();
-    let name = j.at("name").as_str().unwrap_or("player").to_string();
+    let name = j.at("name").as_str().unwrap_or_default().to_string();
+    let key = j.at("key").as_str().unwrap_or_default().to_string();
+    let back = j.at("back").as_bool().unwrap_or(false);
     with_rooms(|rs| {
         let room = rs.get_mut(&code).ok_or(format!("there is no room {code}"))?;
-        let id = room.join(&name)?;
+        if back && !room.seated(&key) {
+            return Err(format!("your seat in {code} is not there any more"));
+        }
+        let (id, rejoined) = room.join_as(&name, &key)?;
         Ok(Json::obj()
             .set("ok", true)
             .set("code", code.clone())
             .set("player", id as i64)
+            .set("rejoined", rejoined)
+            // Seat one opened the room, and seat one is the only seat with a
+            // start button on it. A host that reloaded before starting the
+            // clock has to get that button back, so the answer says which seat
+            // this is rather than leaving the browser to remember.
+            .set("host", id == 1)
+            .set("name", room.player(id).map(|p| Json::Str(p.name.clone())))
             .set("joinedAt", room.player(id).map(|p| Json::Int(p.joined as i128))))
     })
 }
@@ -473,36 +476,4 @@ fn fresh_seed() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
     super::hash64(&t.as_nanos().to_le_bytes())
-}
-
-fn percent(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'%' if i + 2 < b.len() => {
-                let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("");
-                match u8::from_str_radix(hex, 16) {
-                    Ok(v) => {
-                        out.push(v);
-                        i += 3;
-                    }
-                    Err(_) => {
-                        out.push(b[i]);
-                        i += 1;
-                    }
-                }
-            }
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }

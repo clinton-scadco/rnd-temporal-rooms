@@ -73,6 +73,28 @@ pub enum Port {
     Out(&'static str),
 }
 
+/// A patch of ground worth standing on.
+///
+/// Note 1 of the play session, and note 7 with it: the rooms used to be
+/// furnished with working mines and intakes, so the first thing a player saw
+/// was a factory somebody else had started. Now they are furnished with what
+/// is *under* the plot -- a seam, a table, a body -- and the heads that work
+/// it are the player's to build and to design.
+pub struct Ground {
+    pub item: &'static str,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    /// The most that can come out of it in a second. The room's number, and
+    /// usually the room's whole problem.
+    pub yields: Qty,
+}
+
+const fn seam(item: &'static str, x: i32, y: i32, w: i32, h: i32, yields: Qty) -> Ground {
+    Ground { item, x, y, w, h, yields }
+}
+
 /// One thing the room comes with.
 pub struct Fixture {
     pub proto: &'static str,
@@ -120,6 +142,8 @@ pub struct Site {
     /// Components finishing it hands over.
     pub gives: &'static [&'static str],
     pub kit: &'static [Fixture],
+    /// What is in the ground. Terrain, not buildings.
+    pub ground: &'static [Ground],
     /// Where it sits on the campaign map, in map units.
     pub mx: i32,
     pub my: i32,
@@ -143,16 +167,18 @@ pub static SITES: &[Site] = &[
         needs: &[],
         gives: &["motor", "gearbox", "shaft"],
         kit: &[
-            // Two seams, because a source feeds exactly one bay: a room that
+            fix("grid", 30, 2, None),
+            ship("depot", 30, 8, "Coal"),
+        ],
+        ground: &[
+            // Two seams, because a head works exactly one of them: a room that
             // had to choose between running and exporting would be a room with
             // one decision in it, and that decision is not this room's problem.
             // The second is the larger, because four other rooms burn what
             // comes off it and this one only burns a hundred and sixty.
-            fix("coalpit", 2, 2, Some(400)),
-            fix("coalpit", 2, 7, Some(900)),
-            fix("waterpump", 2, 12, Some(1_600)),
-            fix("grid", 30, 2, None),
-            ship("depot", 30, 8, "Coal"),
+            seam("Coal", 2, 2, 6, 4, 400),
+            seam("Coal", 2, 7, 6, 4, 900),
+            seam("Water", 2, 12, 6, 4, 1_600),
         ],
         mx: 0,
         my: 1,
@@ -169,13 +195,18 @@ pub static SITES: &[Site] = &[
         needs: &["basin"],
         gives: &["separator", "preheater", "condenser"],
         kit: &[
-            fix("oremine", 4, 6, Some(120)),
-            fix("oremine", 4, 20, Some(120)),
-            fix("coalpit", 4, 34, Some(35)),
-            fix("waterpump", 4, 46, Some(400)),
             land(4, 58, "Coal", DEPOT),
             ship("depot", 100, 10, "OrePowder"),
             ship("depot", 100, 24, "Concentrate"),
+        ],
+        ground: &[
+            seam("IronOre", 4, 6, 8, 6, 120),
+            seam("IronOre", 4, 20, 8, 6, 120),
+            // Thirty-five a second, which will not keep one boiler alight.
+            // The room's whole problem is under the plot rather than written
+            // on a building.
+            seam("Coal", 4, 34, 6, 4, 35),
+            seam("Water", 4, 46, 6, 4, 400),
         ],
         mx: 1,
         my: 0,
@@ -192,10 +223,10 @@ pub static SITES: &[Site] = &[
         needs: &["basin"],
         gives: &["furnace", "rollmill", "press", "crank"],
         kit: &[
-            fix("waterpump", 4, 8, Some(1_200)),
             land(4, 20, "Coal", DEPOT),
             fix("grid", 68, 10, None),
         ],
+        ground: &[seam("Water", 4, 8, 8, 6, 1_200)],
         mx: 2,
         my: 2,
     },
@@ -211,11 +242,11 @@ pub static SITES: &[Site] = &[
         needs: &["station"],
         gives: &["lathe"],
         kit: &[
-            fix("billetcaster", 4, 8, Some(120)),
             land(4, 20, "Coal", DEPOT),
             land(4, 34, "Power", DEPOT),
             ship("depot", 60, 12, "Gear"),
         ],
+        ground: &[seam("IronBillet", 4, 8, 6, 4, 120)],
         mx: 3,
         my: 1,
     },
@@ -231,7 +262,6 @@ pub static SITES: &[Site] = &[
         needs: &["valley", "works"],
         gives: &["column"],
         kit: &[
-            fix("waterpump", 4, 8, Some(800)),
             land(4, 20, "Coal", DEPOT),
             land(4, 34, "Gear", DEPOT),
             land(4, 48, "Concentrate", DEPOT),
@@ -239,6 +269,7 @@ pub static SITES: &[Site] = &[
             ship("depot", 74, 22, "Gear"),
             ship("depot", 74, 36, "Concentrate"),
         ],
+        ground: &[seam("Water", 4, 8, 8, 6, 800)],
         mx: 4,
         my: 1,
     },
@@ -258,8 +289,13 @@ pub struct Ports {
     pub outgoing: BTreeMap<String, Id>,
     /// Everything the room came with. None of it may be deleted: a room's
     /// fixtures are what the room *is*, and a player who could bulldoze the
-    /// coal seam and rebuild it at full rate would have deleted the problem
-    /// rather than solved it.
+    /// grid connection and rebuild it somewhere better would have deleted the
+    /// problem rather than solved it.
+    ///
+    /// Since experiment 13 there are fewer of these than there were, and that
+    /// is the point: what a room comes with is a yard for what arrives, a
+    /// depot for what leaves, and *ground*. Everything that turns ground into
+    /// material is now the player's to build.
     pub fixtures: Vec<Id>,
 }
 
@@ -273,6 +309,11 @@ impl Site {
         let mut w = World::new(self.tag);
         w.plot = self.plot;
         let mut ports = Ports::default();
+        // The ground first, so that anything the room does place on it finds
+        // it already there.
+        for g in self.ground {
+            w.seam(g.item, g.x, g.y, g.w, g.h, g.yields);
+        }
         for f in self.kit {
             let Some(p) = proto(f.proto) else { continue };
             let item = f.item.map(str::to_string);

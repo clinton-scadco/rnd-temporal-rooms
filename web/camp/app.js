@@ -17,7 +17,7 @@ import * as net from '../room/net.js';
 import * as world from '../room/world.js';
 import * as bench from '../room/bench.js';
 import { renderGoal, renderWho, renderSync, renderFeed, renderGhosts, renderInspector,
-         renderPalette, markTool, toast } from '../room/panels.js';
+         renderPalette, renderLink, markTool, toast } from '../room/panels.js';
 import * as map from './map.js';
 import * as shell from './shell.js';
 
@@ -31,9 +31,28 @@ let done = new Set();   // rooms we have already announced
 // ------------------------------------------------------------------- lobby
 
 async function lobby() {
+  // A browser that was in the campaign goes back to it before the lobby is
+  // ever drawn. A reload is not a decision to leave -- and a campaign seat
+  // owns five rooms, a place on the map, and everything the tech tree has been
+  // opened with, so losing one to a refresh was the worst version of that bug
+  // this project had.
+  //
+  // `back` says this is a reload and not a new player: without it a token left
+  // over from a campaign that has since been thrown away would take a fresh
+  // seat in whatever campaign is running now.
+  const again = await post('/api/enter', { key: net.seat(), back: true });
+  if (again.ok && again.rejoined) {
+    net.state.code = again.at;
+    net.state.player = again.player;
+    await enter(again);
+    toast(`back in ${again.code} as ${again.name || 'yourself'}`);
+    return;
+  }
+
   $('enter').onclick = async () => {
     const res = await post('/api/enter', {
       name: $('whoami').value,
+      key: net.seat(),
       seed: $('seed').value.trim() ? Number($('seed').value.trim()) : undefined,
     });
     if (!res.ok) return ($('lobbyerr').textContent = res.error);
@@ -63,9 +82,11 @@ async function enter(res) {
   $('copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(res.code);
 
   const cat = await net.catalogue();
-  renderPalette(cat, tag => {
-    world.setTool('place', tag);
-    markTool('place', tag);
+  // A palette click places an empty chassis; the small `example` button
+  // beside it places the catalogue's worked answer, and says so.
+  renderPalette(cat, (tag, example) => {
+    world.setTool('place', tag, null, example);
+    markTool('place', tag, example);
   });
   document.querySelectorAll('.tools button').forEach(b => {
     b.onclick = () => {
@@ -77,6 +98,10 @@ async function enter(res) {
   markTool('pick');
 
   world.init($('world'), {
+    // Hovering shows; clicking pins. A pinned selection comes back the moment
+    // the pointer leaves the thing it wandered onto, so reading the room never
+    // costs you the building you were working on.
+    onHover: id => renderInspector(id === null ? world.selection : id, actions),
     onSelect: id => {
       renderInspector(id, actions);
       net.presence(null, id, bench.bench.id, view);
@@ -103,6 +128,10 @@ async function enter(res) {
 
   net.onRefusal(e => toast(e));
   net.onFrame(frame);
+  // Health arrives whether or not a frame does: a screen that has stopped
+  // being told about the campaign has to be able to say so, and it cannot say
+  // so in a handler that only runs when it is told.
+  net.onHealth(renderLink);
   net.start();
   pump();
 
@@ -126,7 +155,13 @@ async function enter(res) {
 function pump(period = 600) {
   const tick = async () => {
     try {
-      const v = await fetch(`/api/camp?player=${net.state.player}`).then(r => r.json());
+      // Bounded, for the same reason the room's poll is: a socket that is
+      // never going to answer must not stop the loop that would have asked
+      // again. The campaign keeps running either way -- it beats on a thread
+      // of its own now -- so a missed pump costs a stale map and nothing else.
+      const v = await fetch(`/api/camp?player=${net.state.player}`, {
+        signal: AbortSignal.timeout ? AbortSignal.timeout(5000) : undefined,
+      }).then(r => r.json());
       if (v.ok) {
         camp = v;
         if (v.started) $('briefing').hidden = true;
@@ -152,6 +187,9 @@ function paint() {
   shell.renderTech(camp);
   shell.renderLanes(camp, laneActions);
   shell.renderNews(camp);
+  // The room you are standing in, not the one whose card is open on the map:
+  // this panel is about the factory in front of you.
+  shell.renderRoomIO(camp, camp.at);
   if (view === 'map') map.show(camp);
   // The palette follows the components: a prototype becomes placeable the
   // moment the last of its parts arrives, and nobody has to be told twice.
@@ -244,6 +282,15 @@ function project(x, y, w, h) {
 
 const actions = {
   open: i => { bench.open(i.id); show('bench'); },
+  // Note 6: a connection starts on the building it comes out of, not in a
+  // tool list below the fold. The port has already named the item, so the next
+  // click is a destination and nothing else is asked.
+  connect: (i, item) => {
+    world.connectFrom(i.id, item);
+    markTool('connect');
+    toast(`${i.name} \u00b7 ${item} \u2014 click where it goes`);
+  },
+
   delete: i => net.send(i.role === 'storage' ? 'DeleteStorage' : 'DeleteMachine', { id: i.id }),
   unwire: w => { net.send('DeleteConnection', w); world.select(null); },
   unlink: h => { net.send('DeleteWorldLink', { id: h.id }); world.select(null); },

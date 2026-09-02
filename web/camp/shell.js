@@ -226,6 +226,65 @@ export function renderLanes(v, acts) {
 
 // ------------------------------------------------------------------ news
 
+/// What this room imports and exports, and where anything that is not moving
+/// has stopped.
+///
+/// Notes 7, 10 and 16 are one panel. A room could not say what it was being
+/// sent, and when something could not be delivered the message said so without
+/// saying where it had gone. Nothing disappears in this game -- a load is at
+/// its source, in the air, or waiting at its destination -- and the panel's
+/// whole job is to name which.
+export function renderRoomIO(v, tag) {
+  const box = document.getElementById('roomio');
+  if (!box) return;
+  const room = (v.rooms || []).find(r => r.tag === tag);
+  const io = room && room.io;
+  if (!io) { box.innerHTML = '<p class="muted">nothing crosses the boundary yet.</p>'; return; }
+
+  const n = x => (x >= 1e6 ? (x / 1e6).toFixed(1) + 'M'
+    : x >= 1e4 ? (x / 1e3).toFixed(0) + 'k' : String(Math.round(x)));
+
+  const flow = (r, importing) => {
+    // The three places, always all three, so that a zero is an answer rather
+    // than an omission.
+    const where =
+      `<span title="waiting at ${r.from}">${n(r.atSource)} at source</span>` +
+      `<span title="between rooms">${n(r.inTransit)} in transit</span>` +
+      (importing && r.bay
+        ? `<span title="the yard it lands in">${r.bay}${
+            r.bayFull === null || r.bayFull === undefined ? '' : ` ${r.bayFull.toFixed(0)}% full`}</span>`
+        : '');
+    return `<div class="io${r.blocked ? ' stuck' : ''}" data-route="${r.route}">` +
+      `<div class="io-head"><span><i class="pip" style="--d:var(--${r.domain})"></i>` +
+      `${r.itemTitle}</span>` +
+      `<span class="n">${r.rate.toFixed(1)}/s ${importing ? 'from ' + r.from : 'to ' + r.to}</span></div>` +
+      `<div class="io-where">${where}</div>` +
+      (r.nextIn !== null && r.nextIn !== undefined
+        ? `<div class="io-note">next arrival in ${r.nextIn.toFixed(0)}s &middot; ${r.fleet}</div>` : '') +
+      (r.spilled > 0
+        ? `<div class="io-note bad">${n(r.spilled)} could not be unloaded and stayed where it was</div>` : '') +
+      (r.blocked ? `<div class="io-note bad">${r.blocked}</div>` : '') +
+      '</div>';
+  };
+
+  // A port with no route on it is the thing that was invisible: the room can
+  // take coal, and nobody is sending any.
+  const idle = (ports, routes, verb) => ports
+    .filter(p => !routes.some(r => r.item === p.item))
+    .map(p => `<div class="io idle"><div class="io-head">` +
+      `<span><i class="pip" style="--d:var(--${p.domain})"></i>${p.itemTitle}</span>` +
+      `<span class="n">no route</span></div>` +
+      `<div class="io-note">this room can ${verb} ${p.itemTitle.toLowerCase()}` +
+      `${p.at ? ` at ${p.at}` : ''}, and nothing is.</div></div>`).join('');
+
+  let html = '';
+  html += '<h3>in</h3>' + (io.imports.map(r => flow(r, true)).join('') +
+    idle(io.takes, io.imports, 'receive') || '<p class="muted">nothing arrives here.</p>');
+  html += '<h3>out</h3>' + (io.exports.map(r => flow(r, false)).join('') +
+    idle(io.gives, io.exports, 'ship') || '<p class="muted">nothing leaves here.</p>');
+  box.innerHTML = html;
+}
+
 export function renderNews(v) {
   const items = (v.news || []).concat(
     (v.moves || []).map(m => ({ at: m.at, kind: m.arriving ? 'in' : 'out', what: m.what }))

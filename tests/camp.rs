@@ -331,18 +331,36 @@ fn run_basin(step: u64) -> (Option<u64>, u64) {
             .unwrap_or(0)
     };
     c.set_now(secs(2));
-    let seam = fixture(&c, "coalpit", 0);
-    let intake = fixture(&c, "waterpump", 0);
     let grid = fixture(&c, "grid", 0);
     let place = |c: &mut Camp, proto: &str, x: i32, y: i32| -> Id {
         let act = if proto == "bay" {
             Act::PlaceStorage { proto: proto.into(), x, y, face: 0 }
         } else {
-            Act::PlaceMachine { proto: proto.into(), x, y, face: 0, item: None, design: None }
+            Act::PlaceMachine {
+                proto: proto.into(),
+                x,
+                y,
+                face: 0,
+                item: None,
+                design: None,
+                example: true,
+            }
         };
         c.submit(ada, "basin", act).expect("a placement");
         c.yard("basin").and_then(|y| y.room.host.world.installs.last().map(|i| i.id)).unwrap_or(0)
     };
+    // The room comes with ground; the heads that work it are ours to build.
+    let ground = |c: &Camp, item: &str, n: usize| -> (i32, i32) {
+        c.yard("basin")
+            .and_then(|y| y.room.host.world.nth_ground(item, n))
+            .map(|d| (d.x, d.y))
+            .expect("Coal Basin has ground in it")
+    };
+    let (cx, cy) = ground(&c, "Coal", 0);
+    let seam = place(&mut c, "coalpit", cx, cy);
+    let (wx, wy) = ground(&c, "Water", 0);
+    let intake = place(&mut c, "waterpump", wx, wy);
+
     let bay_c = place(&mut c, "bay", 8, 2);
     let bay_w = place(&mut c, "bay", 8, 8);
     let bay_p = place(&mut c, "bay", 24, 2);
@@ -444,6 +462,136 @@ fn every_room_advances_whether_or_not_it_is_occupied() {
         assert_eq!(y.room.host.now, secs(300), "{} was left behind", s.tag);
         assert!(y.room.host.probe() > 0, "{} never took a canonical sample", s.tag);
     }
+}
+
+/// A browser that stops asking is carried anyway -- in all five rooms.
+///
+/// [`Camp::advance`] always carried the hosts; nothing carried the replicas.
+/// Those moved only when the browser that owned them polled, so a tab in the
+/// background stopped five reconstructions at once, and the poll that
+/// eventually arrived had to carry all five in one call under the campaign's
+/// single lock -- with the other player queued behind it. The player who froze
+/// was the one who stayed.
+#[test]
+fn a_quiet_browser_is_carried_through_every_room() {
+    let mut c = Camp::open(29);
+    c.start_manual();
+    let ada = c.join("Ada").unwrap();
+    let bee = c.join("Bee").unwrap();
+    // Five minutes, in beats. Ada polls one room; Bee's browser says nothing
+    // at all, in any of them.
+    for k in 1..=60u64 {
+        c.set_now(secs(k * 5));
+        c.heartbeat();
+        c.look(ada, "basin").expect("Ada's frame");
+    }
+    let now = c.now();
+    assert!(c.stalled.is_none(), "the campaign stopped beating: {:?}", c.stalled);
+    for s in SITES {
+        let y = c.yard(s.tag).expect("a room");
+        let quiet = y.room.player(bee).expect("Bee has a seat here");
+        assert_eq!(quiet.sim.now, now, "{} left the quiet replica behind", s.tag);
+        // And it got there the right way: same commands, same lattice, same
+        // hash as the host of that room.
+        let t = y.room.host.probe().min(quiet.sim.probe());
+        assert!(t > 0, "{} never took a canonical sample", s.tag);
+        assert_eq!(y.room.host.check(t), quiet.sim.check(t), "{} diverged at {t}", s.tag);
+        assert_eq!(quiet.mismatches, 0, "{} counted a quiet browser as a broken one", s.tag);
+        assert_eq!(quiet.resyncs, 0, "{} corrected a replica that was never wrong", s.tag);
+    }
+    // The poll Bee eventually sends is a read, not a catch-up.
+    let before = c.yard("valley").unwrap().room.player(bee).unwrap().sim.now;
+    c.look(bee, "valley").expect("Bee's frame");
+    assert_eq!(
+        c.yard("valley").unwrap().room.player(bee).unwrap().sim.now,
+        before,
+        "the poll still had five rooms of work to do"
+    );
+}
+
+/// A refreshed browser keeps its seat -- and therefore five rooms of building,
+/// its place on the map, and its name.
+///
+/// Prototype 2 learned this the hard way and Prototype 3 did not inherit it:
+/// `POST /api/enter` had no token on it at all, so every reload was a new
+/// player in a campaign where the old one still held everything.
+#[test]
+fn a_refreshed_browser_keeps_its_campaign_seat() {
+    let mut c = Camp::open(31);
+    c.start_manual();
+    let ada = c.join("Ada").unwrap();
+    c.set_now(secs(4));
+
+    let (cy, fresh) = c.join_as("Cy", "seat-cy").unwrap();
+    assert!(!fresh, "the first arrival was not an arrival");
+    let seats = c.cast.len();
+
+    // Cy walks somewhere else and builds, so the seat is worth coming back to.
+    c.set_now(secs(8));
+    c.travel(cy, "basin").unwrap();
+    // Coal Basin's plot is forty tiles a side and most of it is furnished, so
+    // the bay goes wherever there is still room for one.
+    let (bx, by) = {
+        let w = &c.yard("basin").unwrap().room.host.world;
+        (0..w.plot() - 4)
+            .flat_map(|y| (0..w.plot() - 4).map(move |x| (x, y)))
+            .find(|&(x, y)| w.free(x, y, 4, 4, None).is_ok())
+            .expect("Coal Basin has nowhere left to build")
+    };
+    c.submit(cy, "basin", Act::PlaceStorage { proto: "bay".into(), x: bx, y: by, face: 0 })
+        .unwrap();
+    let built = c.yard("basin").unwrap().room.host.world.installs.last().unwrap().id;
+
+    // The refresh: the same token, and no memory of the name or the id.
+    c.set_now(secs(12));
+    let (again, rejoined) = c.join_as("", "seat-cy").unwrap();
+    assert!(rejoined, "the campaign did not recognise the browser");
+    assert_eq!(again, cy, "the same browser was given a different seat");
+    assert_eq!(c.cast.len(), seats, "coming back added a player");
+    assert_eq!(c.who(cy).unwrap().name, "Cy", "the name was forgotten");
+    assert_eq!(c.who(cy).unwrap().at, site::site("basin").unwrap().0, "put down in the wrong room");
+    assert_eq!(c.who(cy).unwrap().rejoins, 1, "a rejoin was not counted as one");
+    assert!(
+        c.yard("basin").unwrap().room.host.world.installs.iter().any(|i| i.id == built),
+        "what the seat had built did not survive the reload"
+    );
+
+    // Every room recognised the same token, so the ids stayed in lockstep and
+    // no room quietly grew a sixth player.
+    for s in SITES {
+        let y = c.yard(s.tag).expect("a room");
+        assert!(y.room.player(cy).is_some(), "{} lost Cy", s.tag);
+        assert_eq!(y.room.players.len(), c.cast.len(), "{} disagrees about the cast", s.tag);
+        assert_eq!(y.room.player(cy).unwrap().rejoins, 1, "{} did not count the rejoin", s.tag);
+        assert_eq!(
+            y.room.player(cy).unwrap().resyncs,
+            0,
+            "{} counted a reload as a correction",
+            s.tag
+        );
+    }
+
+    // A token is the identity; a name is not. And an anonymous arrival -- the
+    // headless campaign, and every test above this one -- still gets a fresh
+    // seat every time it asks.
+    let (twin, back) = c.join_as("Cy", "seat-someone-else").unwrap();
+    assert!(!back && twin != cy, "a different browser took the same seat");
+    let (a1, _) = c.join_as("nobody", "").unwrap();
+    let (a2, _) = c.join_as("nobody", "").unwrap();
+    assert_ne!(a1, a2, "two anonymous arrivals shared a seat");
+    assert!(!c.seated("seat-never-been-here"), "a stranger is seated");
+    assert!(c.seated("seat-cy"), "Cy is not");
+
+    // And the replicas still agree after all of that.
+    for k in 1..=8u64 {
+        c.set_now(secs(12 + k * 6));
+        c.heartbeat();
+    }
+    let y = c.yard("basin").unwrap();
+    let t = y.room.host.probe().min(y.room.player(cy).unwrap().sim.probe());
+    assert!(t > 0, "nothing was ever checked");
+    assert_eq!(y.room.host.check(t), y.room.player(cy).unwrap().sim.check(t));
+    assert_eq!(y.room.player(ada).unwrap().mismatches, 0);
 }
 
 /// A `Peak` goal is the one shape a flat factory cannot answer, and the
