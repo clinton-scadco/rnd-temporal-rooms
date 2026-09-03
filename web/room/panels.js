@@ -59,58 +59,42 @@ export function menu(title, options) {
 
 // -------------------------------------------------------------- the palette
 
-/// What may be placed, and -- for anything designed -- what it arrives empty.
+/// What may be placed.
 ///
-/// Note 7 of the play session was the shortest one in it: prebuilt machines
-/// take the fun out of the game entirely. So the palette places a *chassis*,
-/// and the catalogue's answer is a second, smaller button that says what it
-/// is. Experiment 13 allows worked examples and asks that they not be the
-/// normal way forward; a button labelled "example" beside one labelled with
-/// the machine's name is about as far from normal as a button gets.
+/// One button per thing, and anything designed arrives empty: note 7 of the
+/// play session was the shortest one in it -- prebuilt machines take the fun
+/// out of the game entirely. A machine here is a *chassis*, and what goes
+/// inside it is yours.
+///
+/// There was briefly a second button beside each one that placed the
+/// catalogue's worked answer. It went, because a build menu with two of every
+/// building in it is a build menu nobody can read, and because a worked
+/// example belongs where you are designing rather than where you are choosing
+/// what to put down.
 export function renderPalette(cat, onPick) {
   const box = $('palette');
   box.innerHTML = '';
   const order = ['source', 'storage', 'machine', 'sink'];
   for (const role of order) {
     for (const p of cat.protos.filter(p => p.role === role)) {
-      const row = document.createElement('div');
-      row.className = 'pal';
       const b = document.createElement('button');
       b.dataset.proto = p.tag;
-      b.title = p.example
-        ? `${p.blurb}\n\nPlaces an empty ${p.title}. Open it to design what goes inside.`
+      b.title = p.designed
+        ? `${p.blurb}\n\nArrives empty. Open it to design what goes inside.`
         : p.blurb;
       b.innerHTML =
         `<span class="swatch" style="background:var(--${role})"></span>` +
-        `<span>${p.title}${p.example ? ' <em>empty</em>' : ''}</span>` +
-        `<span class="n">${p.needsDeposit ? 'on ground' : `${p.w}\u00d7${p.h}`}</span>`;
-      b.onclick = () => onPick(p.tag, false);
-      row.appendChild(b);
-      if (p.example) {
-        const x = document.createElement('button');
-        x.className = 'eg';
-        x.dataset.proto = p.tag;
-        x.dataset.example = '1';
-        x.textContent = 'example';
-        x.title =
-          `Place the worked ${p.title} out of the book instead of an empty one.\n\n` +
-          'Fine for a first look, and not how the game is meant to be played: ' +
-          'what you unlock is components, not answers.';
-        x.onclick = () => onPick(p.tag, true);
-        row.appendChild(x);
-      }
-      box.appendChild(row);
+        `<span>${p.title}</span>` +
+        `<span class="n">${p.needsGround ? 'on ground' : `${p.w}\u00d7${p.h}`}</span>`;
+      b.onclick = () => onPick(p.tag);
+      box.appendChild(b);
     }
   }
 }
 
-export function markTool(mode, proto, example) {
+export function markTool(mode, proto) {
   document.querySelectorAll('#palette button').forEach(b =>
-    b.classList.toggle(
-      'on',
-      mode === 'place' && b.dataset.proto === proto
-        && !!b.dataset.example === !!example,
-    ));
+    b.classList.toggle('on', mode === 'place' && b.dataset.proto === proto));
   document.querySelectorAll('.tools button').forEach(b =>
     b.classList.toggle('on', b.dataset.mode === mode));
   const hint = {
@@ -348,9 +332,15 @@ export function renderInspector(id, hooks) {
   }
   html += connectBlock(i);
   html += '<div class="acts">';
-  if (i.role === 'machine') {
-    html += '<button data-act="open">open the machine</button>' +
-      '<button data-act="duplicate" title="a copy of this design, which then goes its own way">duplicate</button>';
+  // Anything designed can be opened, including something with nothing in it
+  // yet -- which is how an empty chassis stops being empty. `designed` comes
+  // from the room, so the panel does not have to know which roles those are.
+  if (i.designed) {
+    html += `<button data-act="open">${i.macro ? 'open the machine' : 'design it'}</button>`;
+    if (i.macro) {
+      html += '<button data-act="duplicate" ' +
+        'title="a copy of this design, which then goes its own way">duplicate</button>';
+    }
   }
   html += '<button data-act="delete">delete</button></div>';
   box.innerHTML = html;

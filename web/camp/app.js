@@ -118,7 +118,9 @@ async function enter(res) {
   $('viewworld').onclick = () => show('world');
   $('viewbench').onclick = () => {
     if (!bench.bench.id) {
-      const first = (net.state.view.world.installs || []).find(i => i.role === 'machine');
+      // Including one with nothing in it yet, which is exactly the one you
+      // want to open.
+      const first = (net.state.view.world.installs || []).find(i => i.designed);
       if (!first) return toast('there is no machine to open yet');
       bench.open(first.id);
     }
@@ -247,7 +249,7 @@ function frame(v) {
   world.invalidate();
   if (world.selection) renderInspector(world.selection, actions);
 
-  const machines = v.world.installs.filter(i => i.role === 'machine');
+  const machines = v.world.installs.filter(i => i.designed);
   $('viewbench').disabled = !machines.length;
   if (view === 'bench' && bench.bench.id) {
     const me = v.world.installs.find(i => i.id === bench.bench.id);

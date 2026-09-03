@@ -664,7 +664,6 @@ impl Camp {
                 face,
                 item: None,
                 design: Some(design),
-                example: false,
             },
         )
     }

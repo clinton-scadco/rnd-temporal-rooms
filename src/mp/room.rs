@@ -1248,38 +1248,40 @@ fn describe(a: &Act, w: &World) -> String {
 /// Laid out from the seed, so both players see the same yard, and spread out
 /// enough that the first thing anybody does is decide where the factory
 /// actually goes.
-/// What a patch of ground of this kind is worth, in the standalone rooms.
+/// What a patch of ground is worth, in a room rolled from a seed.
 ///
 /// Prototype 3's five rooms each write their own numbers, because scarcity is
 /// what makes them different from each other. A room rolled from a seed has no
-/// such opinion, so the ground is worth what the catalogue's head can lift and
-/// the constraint lives in the goal instead.
-fn per_second(p: &'static super::kit::Proto) -> crate::model::Qty {
-    match p.tag {
-        "waterpump" => 400,
-        "crudewell" => 200,
-        _ => 100,
+/// such opinion, so the ground is worth what the stock head can lift and the
+/// constraint lives in the goal instead.
+fn worth(item: &str) -> crate::model::Qty {
+    match item {
+        "Water" => 800,
+        "Crude" => 200,
+        _ => 400,
     }
 }
 
 pub fn starting_world(goal: &Goal, seed: u64) -> World {
     let mut w = World::new("Room");
     let mut r = Rng(seed ^ 0x51ed_2701);
+    let kit = goal.starting_kit();
+    // Ground down the western edge. Everything that turns it into material is
+    // the player's to build, which is the whole of experiment 13's first
+    // change: a room offers an opportunity and never an output.
+    let mut y = 6;
+    for item in &kit.ground {
+        let jitter = r.between(0, 1) as i32;
+        w.seam(item, 3, y + jitter, 8, 6, worth(item));
+        y += 12;
+    }
+    // A bay beside each seam, and the delivery points down the eastern edge.
+    // Everything in between is the game.
     let mut y = 6;
     let mut ship = 8;
-    for (tag, item) in goal.starting_kit() {
+    for (tag, item) in kit.builds {
         let Some(p) = super::kit::proto(tag) else { continue };
         match p.role {
-            // Ground down the western edge, each with a bay beside it, and the
-            // delivery points down the eastern one. Everything in between is
-            // the game -- including, since experiment 13, the heads that work
-            // the ground: a room hands out an opportunity and never an output.
-            Role::Source => {
-                let jitter = r.between(0, 1) as i32;
-                if let Some(item) = p.extracts() {
-                    w.seam(item, 3, y + jitter, 8, 6, per_second(p));
-                }
-            }
             Role::Storage => {
                 let _ = w.place(p, 14, y, 0, None, None, 0, 0);
                 y += 12;

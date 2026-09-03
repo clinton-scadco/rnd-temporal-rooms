@@ -160,6 +160,10 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
             "/api/sites" => return ok(sites()),
             "/api/kit" => return ok(crate::machine::form::kit_json()),
             "/api/catalogue" => return ok(catalogue()),
+            // See `mp::net::reference`: the designs the catalogue's numbers
+            // came from, for the front end's own harness. Nothing in the game
+            // places one.
+            "/api/reference" => return ok(crate::mp::net::reference()),
             "/api/parts" => return ok(parts()),
             "/api/camp" => {
                 let player = req.q("player").parse().unwrap_or(0);
@@ -495,7 +499,15 @@ fn form(req: &Req) -> Result<Json, String> {
         let y = c.yard(&code).ok_or(format!("there is no room called {code}"))?;
         let i = y.room.host.world.get(id).ok_or("there is no such machine")?;
         let d = if want_draft { i.draft.clone().or_else(|| i.design.clone()) } else { i.design.clone() };
-        d.ok_or_else(|| "that installation has no design".to_string())
+        // An empty chassis builds an empty scene rather than refusing to be
+        // looked at. It used to error, which meant the one machine you most
+        // needed to open -- the one with nothing in it -- was the one you
+        // could not.
+        Ok(d.unwrap_or_else(|| {
+            let mut d = Design::empty();
+            d.name = i.proto.title.to_string();
+            d
+        }))
     })?;
     let ask = crate::machine::form::Ask {
         style: crate::machine::form::Style::Yard,
@@ -525,8 +537,19 @@ fn inside(j: &Json) -> Result<Json, String> {
         } else {
             i.design.clone()
         };
-        Ok::<_, String>((d.ok_or_else(|| "that installation has no design".to_string())?, now))
+        Ok::<_, String>((d, now))
     })?;
+    // Nothing designed yet: an answer rather than an error, because the panel
+    // beside an empty drawing board should say it is empty.
+    let Some(design) = design else {
+        return Ok(Json::obj()
+            .set("ok", true)
+            .set("empty", true)
+            .set("units", Json::Arr(Vec::new()))
+            .set("phase", 0)
+            .set("period", 0)
+            .set("transient", 0));
+    };
     let c = crate::machine::orbit::compile(&design)?;
     let r = crate::machine::eval::report(&design, &c);
     let phase = c.equivalent_tick(now / crate::mp::DESIGN_TICK);

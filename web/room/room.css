@@ -283,18 +283,14 @@ h2 {
 #wondetail b { color: var(--muted); font-weight: 400; }
 .muted { color: var(--muted); }
 
-/* ------------------------------------------------- a chassis, and an example */
-/* Note 7: prebuilt machines take the fun out of the game entirely. The palette
-   places an empty one; the book's answer is a second, smaller button that says
-   what it is. */
-.pal { display: flex; gap: 4px; align-items: stretch; }
-.pal > button:first-child { flex: 1; }
-.palette .pal em {
-  font-style: normal; color: var(--muted); font-size: 10px; margin-left: 4px;
+/* ------------------------------------------------------- the bench palette */
+/* The component list opens on `everything`, because the family filter used to
+   open on whichever family sorted first -- `control` -- and a player who had
+   just put an extraction head on a seam was shown a valve and a clutch. So
+   the whole vocabulary is on screen, under one heading per family. */
+.palette h3.fam {
+  margin: 8px 0 2px; font: 600 10px/1.6 var(--mono); letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted);
 }
-.palette button.eg {
-  flex: none; padding: 0 6px; font-size: 10px; color: var(--muted);
-  border-style: dashed;
-}
-.palette button.eg:hover { color: var(--signal); border-color: var(--signal); }
-.palette button.eg.on { color: var(--signal); border-color: var(--signal); border-style: solid; }
+.palette h3.fam:first-child { margin-top: 0; }
+.palette button.locked { opacity: .34; cursor: not-allowed; }

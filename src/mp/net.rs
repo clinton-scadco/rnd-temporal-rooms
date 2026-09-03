@@ -15,6 +15,7 @@
 //!   POST /api/form              a design, built as a plant, for the 3D view
 //!   POST /api/inside            what every component in it is doing, and why
 //!   GET  /api/goals             every template, for the developer panel
+//!   GET  /api/reference         the designs the catalogue's numbers came from
 //! ```
 //!
 //! # What the server is, and is not
@@ -170,6 +171,7 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
             }
             "/api/kit" => return ok(crate::machine::form::kit_json()),
             "/api/goals" => return ok(goals()),
+            "/api/reference" => return ok(reference()),
             "/api/rooms" => return ok(rooms()),
             "/api/state" => {
                 let (code, player) = (req.q("code"), req.q("player"));
@@ -373,7 +375,15 @@ fn form(req: &Req) -> Result<Json, String> {
         let room = rs.get(&code).ok_or(format!("there is no room {code}"))?;
         let i = room.host.world.get(id).ok_or("there is no such machine")?;
         let d = if want_draft { i.draft.clone().or_else(|| i.design.clone()) } else { i.design.clone() };
-        d.ok_or_else(|| "that installation has no design".to_string())
+        // An empty chassis builds an empty scene rather than refusing to be
+        // looked at. It used to error, which meant the one machine you most
+        // needed to open -- the one with nothing in it -- was the one you
+        // could not.
+        Ok::<_, String>(d.unwrap_or_else(|| {
+            let mut d = Design::empty();
+            d.name = i.proto.title.to_string();
+            d
+        }))
     })?;
     let ask = crate::machine::form::Ask {
         style: crate::machine::form::Style::Yard,
@@ -415,8 +425,19 @@ fn inside(req: &Req) -> Result<Json, String> {
         } else {
             i.design.clone()
         };
-        Ok::<_, String>((d.ok_or_else(|| "that installation has no design".to_string())?, room.now()))
+        Ok::<_, String>((d, room.now()))
     })?;
+    // Nothing designed yet: an answer rather than an error, because the panel
+    // beside an empty drawing board should say it is empty.
+    let Some(design) = design else {
+        return Ok(Json::obj()
+            .set("ok", true)
+            .set("empty", true)
+            .set("units", Json::Arr(Vec::new()))
+            .set("phase", 0)
+            .set("period", 0)
+            .set("transient", 0));
+    };
     let c = crate::machine::orbit::compile(&design)?;
     let r = crate::machine::eval::report(&design, &c);
     let phase = c.equivalent_tick(now / super::DESIGN_TICK);
@@ -426,6 +447,45 @@ fn inside(req: &Req) -> Result<Json, String> {
         .set("phase", phase as i64)
         .set("period", c.period as i64)
         .set("transient", c.transient as i64))
+}
+
+/// The designs the catalogue's numbers were measured from.
+///
+/// Not a game feature, and deliberately not reachable from one: nothing in the
+/// palette places these, no unlock hands one over, and no panel asks for them.
+/// A machine is placed empty and designed, which is the whole of experiment
+/// 13's third section.
+///
+/// They are on the wire for the front end's own test harness, which has to
+/// build a working factory to check that the client and the server agree about
+/// its fields, and which would otherwise be drawing a nine-component machining
+/// cell one command at a time -- proving something about the designer rather
+/// than about the contract under test.
+///
+/// If that stops being worth the surface, this route and its two callers in
+/// `tests/` are the whole of it.
+pub fn reference() -> Json {
+    Json::obj().set("ok", true).set(
+        "designs",
+        Json::Arr(
+            crate::mp::kit::PROTOS
+                .iter()
+                .filter_map(|p| {
+                    let d = crate::mp::world::stock_design(p.tag).ok()?;
+                    Some(Json::obj().set("proto", p.tag).set("design", d.to_json()))
+                })
+                .chain(crate::mp::lower::ITEMS.iter().filter_map(|item| {
+                    let d = crate::mp::world::head_design(item).ok()?;
+                    Some(
+                        Json::obj()
+                            .set("proto", "head")
+                            .set("draws", *item)
+                            .set("design", d.to_json()),
+                    )
+                }))
+                .collect(),
+        ),
+    )
 }
 
 fn rooms() -> Json {

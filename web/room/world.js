@@ -18,12 +18,7 @@ import { menu, toast } from './panels.js';
 const TILE = 7;
 
 export const view = { ox: 20, oy: 20, scale: 1, w: 0, h: 0, dpr: 1 };
-export const tool = {
-  mode: 'pick', proto: null, face: 0, from: null, item: null, design: null,
-  /// Place the catalogue's worked example rather than an empty chassis. Only
-  /// ever set by asking for one by name.
-  example: false,
-};
+export const tool = { mode: 'pick', proto: null, face: 0, from: null, item: null, design: null };
 export let selection = null;
 
 let canvas = null, ctx = null, hover = null, need = true, onSelect = () => {};
@@ -48,11 +43,10 @@ export function invalidate() { need = true; }
 /// duplicating one is a placement command carrying the design it had at the
 /// moment the player pressed the button. Editing either copy afterwards does
 /// nothing at all to the other.
-export function setTool(mode, proto, design, example) {
+export function setTool(mode, proto, design) {
   tool.mode = mode;
   tool.proto = proto || null;
   tool.design = design || null;
-  tool.example = !!example;
   tool.from = null;
   // A port chosen for a connection that was never finished must not be
   // waiting inside the next one.
@@ -220,11 +214,12 @@ function collides(x, y, w, h) {
 /// under the pointer means the player never has to earn that refusal.
 function onGround(x, y, w, h) {
   const p = net.proto(tool.proto);
-  if (!p || !p.extracts) return true;
+  if (!p || !p.needsGround) return true;
+  // Any ground at all. Which of the things it draws a head will actually get
+  // is a question about its design, and an empty one has no design yet.
   const v = net.state.view;
   return ((v && v.world.deposits) || []).some(d =>
-    d.item === p.extracts && d.spare > 0
-    && x < d.x + d.w && d.x < x + w && y < d.y + d.h && d.y < y + h);
+    x < d.x + d.w && d.x < x + w && y < d.y + d.h && d.y < y + h);
 }
 
 // ----------------------------------------------------------------- pointer
@@ -308,17 +303,9 @@ function place(x, y) {
   if (!h) return;
   if (collides(x, y, h.w, h.h)) return toast('that does not fit there');
   // A placement is a *chassis* unless it is carrying a design: one off the
-  // shelf, a copy of something already standing, or -- asked for by name --
-  // the catalogue's worked example. Note 7 of the play session: prebuilt
-  // machines take the fun out of the game entirely.
-  const common = {
-    proto: h.p.tag,
-    x,
-    y,
-    face: tool.face,
-    design: tool.design,
-    example: !tool.design && !!tool.example,
-  };
+  // shelf, or a copy of something already standing. Note 7 of the play
+  // session: prebuilt machines take the fun out of the game entirely.
+  const common = { proto: h.p.tag, x, y, face: tool.face, design: tool.design };
   if (h.p.role === 'storage') return net.send('PlaceStorage', common);
   if (h.p.choosesItem) {
     return menu('ships which item?', itemsOfInterest().map(i => ({
@@ -514,8 +501,7 @@ function ground(d) {
   const spent = d.spare === 0;
   // Something is being placed that would work this ground: say so before the
   // click rather than after it.
-  const wanted = tool.mode === 'place' && net.proto(tool.proto)
-    && net.proto(tool.proto).extracts === d.item;
+  const wanted = tool.mode === 'place' && !!(net.proto(tool.proto) || {}).needsGround;
 
   ctx.save();
   ctx.beginPath();

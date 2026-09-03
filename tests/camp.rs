@@ -13,15 +13,18 @@
 //! here is the way Prototype 2 proved synchronisation: run the same command
 //! stream twice, in different shapes, and compare the canonical hashes.
 
+use temporal_rooms::camp::play::{self, Play};
 use temporal_rooms::camp::run::Camp;
 use temporal_rooms::camp::ship::{self, Ledger};
 use temporal_rooms::camp::site::{self, SITES};
 use temporal_rooms::camp::tech::{self, Tech};
+use temporal_rooms::machine::design::Design;
 use temporal_rooms::machine::parts;
-use temporal_rooms::mp::cmd::Act;
+use temporal_rooms::mp::cmd::{self, Act, Cmd};
 use temporal_rooms::mp::goal::{Goal, Shape};
-use temporal_rooms::mp::kit::{Role, PROTOS};
-use temporal_rooms::mp::world::{stock_design, Id};
+use temporal_rooms::mp::kit::{self, Role, PROTOS};
+use temporal_rooms::mp::lower::lower;
+use temporal_rooms::mp::world::{head_design, stock_design, Id};
 use temporal_rooms::mp::{secs, world::World};
 
 // =================================================================== the map
@@ -300,6 +303,120 @@ fn closing_a_route_does_not_recall_its_trains() {
     assert_eq!(landed, air, "a load evaporated with its contract");
 }
 
+// ============================================================== the playthrough
+
+/// The campaign, finished the way it is played.
+///
+/// This is the experiment's acceptance test and it is the same script `camp
+/// play` narrates -- five rooms, in the order the map allows, two players, and
+/// every replica compared against its host every simulated second.
+///
+/// What makes it worth a test rather than a demo is the middle of it. Nothing
+/// here is placed with a design in its hand: every machine goes down as an
+/// empty chassis and is then *drawn*, one component at a time, through exactly
+/// the commands the bench sends -- `OpenDesign`, `PlaceComponent`,
+/// `TuneComponent`, `ConnectComponent`, `CommitMachineDesign`. Twenty-two
+/// machines and five extraction heads, built the long way.
+///
+/// So it answers a question the old playthrough could not: is the game
+/// *finishable by playing it*? The version that handed the server finished
+/// documents proved the simulator worked and said nothing at all about
+/// whether a machine could be built -- which is how a campaign that could not
+/// be entered again after somebody put down an empty steam plant reached a
+/// play session.
+#[test]
+fn the_campaign_can_be_finished_by_designing_every_machine() {
+    let mut p = Play::quiet(3);
+    let reached_the_end = play::run(&mut p);
+    assert!(p.bad.is_empty(), "the playthrough went wrong:
+  {}", p.bad.join("
+  "));
+    assert!(reached_the_end, "the playthrough did not reach the end");
+    assert!(p.c.complete(), "only {} of {} rooms finished", p.c.done.len(), SITES.len());
+    assert!(p.checks > 0 && p.c.agrees(), "a replica disagreed with its host");
+
+    // Every machine standing at the end has an inside, and it got there
+    // through the bench. A chassis nobody designed would be a room that
+    // finished with a building doing nothing in it, which is not a pass.
+    let mut designed = 0;
+    for y in &p.c.yards {
+        for i in &y.room.host.world.installs {
+            if !i.proto.role.designed() {
+                continue;
+            }
+            assert!(
+                i.design.is_some(),
+                "{} in {} was never designed",
+                i.name,
+                y.site.tag
+            );
+            assert!(i.draft.is_none() && i.editor.is_none(), "{} was left open", i.name);
+            designed += 1;
+        }
+    }
+    assert!(designed >= 20, "only {designed} machines were drawn");
+}
+
+/// A design and the stream of commands that draws it are the same thing.
+///
+/// Every design in the book, put through [`cmd::draw`] into a real draft and
+/// read back. Component names change on the way -- the host names them, from
+/// the kind and the lowest free number, so that two clients placing at once
+/// cannot disagree -- and nothing else may.
+#[test]
+fn every_design_survives_being_drawn_one_component_at_a_time() {
+    let named: Vec<(String, Design)> = PROTOS
+        .iter()
+        .filter_map(|p| stock_design(p.tag).ok().map(|d| (p.tag.to_string(), d)))
+        .chain(
+            ["IronOre", "Coal", "Water", "Crude", "IronBillet"]
+                .iter()
+                .map(|i| (format!("head:{i}"), head_design(i).expect("a head design"))),
+        )
+        .collect();
+    assert!(named.len() >= 12, "the book is empty: {}", named.len());
+
+    for (what, want) in named {
+        let mut w = World::new("Bench");
+        let proto = if what.starts_with("head:") { "head" } else { what.as_str() };
+        // Ground for a head to stand on, so the chassis can be placed at all.
+        w.seam("Coal", 0, 0, 8, 8, 1_000);
+        w.seam("IronOre", 0, 0, 8, 8, 1_000);
+        w.seam("Water", 0, 0, 8, 8, 1_000);
+        w.seam("Crude", 0, 0, 8, 8, 1_000);
+        w.seam("IronBillet", 0, 0, 8, 8, 1_000);
+        let id = w
+            .place(kit::proto(proto).expect("a prototype"), 0, 0, 0, None, None, 0, 1)
+            .unwrap_or_else(|e| panic!("{what}: the chassis would not go down: {e}"));
+
+        let stream = cmd::draw(id, &want);
+        assert!(
+            matches!(stream.first(), Some(Act::OpenDesign { .. })),
+            "{what}: a design begins with a draft"
+        );
+        assert!(
+            matches!(stream.last(), Some(Act::CommitMachineDesign { .. })),
+            "{what}: and ends with a commit"
+        );
+        for (n, act) in stream.into_iter().enumerate() {
+            let verb = act.verb();
+            let c = Cmd { room: "R".into(), tick: 0, seq: n as u64 + 1, player: 1, act };
+            cmd::apply(&mut w, &c)
+                .unwrap_or_else(|e| panic!("{what}: command {n} ({verb}) was refused: {e}"));
+        }
+
+        let built = w.get(id).expect("the machine is still there");
+        let got = built.design.as_ref().expect("it was committed").emit();
+        assert_eq!(got, cmd::redrawn(&want).emit(), "{what}: a different machine came out");
+        // Same components, same wires, same recipe -- only the names moved.
+        assert_eq!(
+            built.lowered.as_ref().map(|m| (m.takes.clone(), m.gives.clone(), m.cycle)),
+            lower(&want).ok().map(|m| (m.takes, m.gives, m.cycle)),
+            "{what}: the drawn machine does not do what the design does"
+        );
+    }
+}
+
 // ================================================================= the world
 
 /// An arrival is a command, and a command is a thing every replica applies.
@@ -342,24 +459,34 @@ fn run_basin(step: u64) -> (Option<u64>, u64) {
                 y,
                 face: 0,
                 item: None,
-                design: None,
-                example: true,
+                design: stock_design(proto).ok(),
             }
         };
         c.submit(ada, "basin", act).expect("a placement");
         c.yard("basin").and_then(|y| y.room.host.world.installs.last().map(|i| i.id)).unwrap_or(0)
     };
-    // The room comes with ground; the heads that work it are ours to build.
-    let ground = |c: &Camp, item: &str, n: usize| -> (i32, i32) {
-        c.yard("basin")
+    // The room comes with ground; the heads that work it are ours to build,
+    // and there is one chassis for all of them -- what a head draws is one
+    // word inside its design.
+    let head = |c: &mut Camp, item: &'static str, n: usize| -> Id {
+        let (x, y) = c
+            .yard("basin")
             .and_then(|y| y.room.host.world.nth_ground(item, n))
             .map(|d| (d.x, d.y))
-            .expect("Coal Basin has ground in it")
+            .expect("Coal Basin has ground in it");
+        c.submit(ada, "basin", Act::PlaceMachine {
+            proto: "head".into(),
+            x,
+            y,
+            face: 0,
+            item: None,
+            design: Some(head_design(item).expect("a head that draws it")),
+        })
+        .expect("a head on its own ground");
+        c.yard("basin").and_then(|y| y.room.host.world.installs.last().map(|i| i.id)).unwrap_or(0)
     };
-    let (cx, cy) = ground(&c, "Coal", 0);
-    let seam = place(&mut c, "coalpit", cx, cy);
-    let (wx, wy) = ground(&c, "Water", 0);
-    let intake = place(&mut c, "waterpump", wx, wy);
+    let seam = head(&mut c, "Coal", 0);
+    let intake = head(&mut c, "Water", 0);
 
     let bay_c = place(&mut c, "bay", 8, 2);
     let bay_w = place(&mut c, "bay", 8, 8);
@@ -387,6 +514,62 @@ fn run_basin(step: u64) -> (Option<u64>, u64) {
     c.advance().expect("the campaign runs");
     let y = c.yard("basin").unwrap();
     (y.room.host.check(secs(240)), y.shipped("Power"))
+}
+
+/// An empty chassis left standing does not shut the door.
+///
+/// Joining a campaign rebuilds every one of the joiner's five replicas from
+/// the host's snapshot, so anything a snapshot cannot carry is not a bug in
+/// one room -- it is a campaign nobody can enter. A machine that has been put
+/// down and not yet designed is the most ordinary thing in the game, and it
+/// used to be exactly that: place an empty steam plant, refresh the page, and
+/// there was no way back in short of restarting the server and losing the
+/// world.
+#[test]
+fn an_empty_chassis_does_not_shut_the_door() {
+    let mut c = Camp::open(5);
+    c.start_manual();
+    let ada = c.join_as("Ada", "seat-ada").expect("the first player").0;
+    c.set_now(secs(2));
+    c.submit(
+        ada,
+        "basin",
+        Act::PlaceMachine {
+            proto: "steamplant".into(),
+            x: 22,
+            y: 14,
+            face: 0,
+            item: None,
+            design: None,
+        },
+    )
+    .expect("an empty chassis can be placed");
+    // And a head, which is the other thing a room hands you empty.
+    let (x, y) = c
+        .yard("basin")
+        .and_then(|y| y.room.host.world.nth_ground("Coal", 0))
+        .map(|d| (d.x, d.y))
+        .expect("Coal Basin has ground");
+    c.submit(
+        ada,
+        "basin",
+        Act::PlaceMachine { proto: "head".into(), x, y, face: 0, item: None, design: None },
+    )
+    .expect("an empty head can be placed");
+    c.set_now(secs(20));
+    c.advance().expect("the campaign runs");
+
+    // Ada comes back from a refresh, and gets the seat she left.
+    let (again, rejoined) = c.join_as("Ada", "seat-ada").expect("Ada can come back");
+    assert!(rejoined && again == ada, "Ada was not recognised");
+    // And a stranger with no seat at all can still arrive.
+    let bruno = c.join_as("Bruno", "seat-bruno").expect("a second player can enter");
+    assert!(!bruno.1 && bruno.0 != ada);
+    // Both replicas of every room were rebuilt, and agree.
+    for id in [ada, bruno.0] {
+        c.sync_all(id).expect("every replica rebuilt");
+    }
+    assert!(c.agrees(), "a replica disagreed with its host");
 }
 
 /// Nothing may be built in a room that has not opened, and no room opens

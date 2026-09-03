@@ -73,14 +73,6 @@ pub enum Act {
         /// a prototype is a *chassis*: a footprint, a name, and nothing inside
         /// it until you put something there.
         design: Option<Design>,
-        /// Place the catalogue's worked example instead of an empty chassis.
-        ///
-        /// Kept, and kept explicit. Experiment 13 allows tutorial examples and
-        /// says they must not be the normal way to progress, so this is a
-        /// separate thing to ask for rather than what you get by not asking.
-        /// It also reads correctly in the log: a room can tell you which
-        /// machines somebody designed and which they copied out of the book.
-        example: bool,
     },
     DeleteMachine {
         id: Id,
@@ -341,13 +333,12 @@ impl Cmd {
 fn payload(a: &Act) -> Json {
     let o = Json::obj();
     match a {
-        Act::PlaceMachine { proto, x, y, face, item, design, example } => o
+        Act::PlaceMachine { proto, x, y, face, item, design } => o
             .set("proto", proto.clone())
             .set("x", *x as i64)
             .set("y", *y as i64)
             .set("face", *face as i64)
             .set("item", item.clone())
-            .set("example", *example)
             .set(
                 "design",
                 match design {
@@ -469,7 +460,6 @@ fn act_from_json(kind: &str, p: &Json) -> Result<Act, String> {
                 Json::Null => None,
                 d => Some(Design::from_json(d)?),
             },
-            example: p.at("example").as_bool().unwrap_or(false),
         },
         "DeleteMachine" => Act::DeleteMachine { id: id() },
         "PlaceStorage" => {
@@ -621,20 +611,31 @@ pub enum Effect {
 /// the same answer, or the experiment has failed.
 pub fn apply(w: &mut World, c: &Cmd) -> Result<Vec<Effect>, String> {
     let mut out = Vec::new();
+    let acted = apply_one(w, c, &mut out);
+    // Anything that changes the document can change who is working what: a
+    // head placed or taken down, obviously, but also a *design committed into
+    // one*. That last is the case this was missing -- a head redesigned to
+    // draw coal instead of ore kept the share it had, which is to say none,
+    // and stood there producing nothing with no reason given.
+    if acted.is_ok() && c.act.structural() {
+        w.reprice();
+    }
+    acted.map(|()| out)
+}
+
+fn apply_one(w: &mut World, c: &Cmd, out: &mut Vec<Effect>) -> Result<(), String> {
     match &c.act {
-        Act::PlaceMachine { proto: tag, x, y, face, item, design, example } => {
+        Act::PlaceMachine { proto: tag, x, y, face, item, design } => {
             let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
             if p.role == Role::Storage {
                 return Err("a bay is placed with PlaceStorage".into());
             }
-            // Empty unless a design was named, or the worked example asked
-            // for by name. Nothing is substituted quietly: a chassis that
-            // silently filled itself with the catalogue's answer is exactly
-            // what note 7 was about.
-            let d = match (p.role.designed(), design, example) {
-                (true, Some(d), _) => Some(d.clone()),
-                (true, None, true) => Some(super::world::stock_design(tag)?),
-                _ => None,
+            // Empty unless a design was named. Nothing is substituted
+            // quietly: a chassis that filled itself in with the catalogue's
+            // answer is exactly what note 7 of the play session was about.
+            let d = match p.role.designed() {
+                true => design.clone(),
+                false => None,
             };
             w.place(p, *x, *y, *face, item.clone(), d, c.tick, c.player)?;
         }
@@ -682,11 +683,7 @@ pub fn apply(w: &mut World, c: &Cmd) -> Result<Vec<Effect>, String> {
         }
         Act::Restore { was, proto: tag, x, y, face, item, design, conns, hauls } => {
             let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
-            let d = match (p.role.designed(), design) {
-                (true, Some(d)) => Some(d.clone()),
-                (true, None) => Some(super::world::stock_design(tag)?),
-                _ => None,
-            };
+            let d = design.clone();
             // The building first. If it will not go back -- somebody built on
             // the spot while it was a ghost -- nothing else is attempted and
             // the whole command is refused, which is the only answer that
@@ -874,7 +871,7 @@ pub fn apply(w: &mut World, c: &Cmd) -> Result<Vec<Effect>, String> {
             }
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 fn summary(m: &super::lower::Macro) -> String {
@@ -948,4 +945,133 @@ fn tune(u: &mut Unit, field: &str, value: &str) -> Result<(), String> {
         other => return Err(format!("`{other}` is not a setting")),
     }
     Ok(())
+}
+
+// ============================================================ drawing a design
+
+/// One design, as the stream of intentions that would have drawn it.
+///
+/// There is no command that says "here is a machine". A player opens a draft,
+/// puts one component down at a time, tunes the two or three that need it,
+/// wires them together and commits -- and since experiment 13 that is the
+/// *only* way a machine in this game acquires an inside, because every
+/// placement is an empty chassis. So this is that stream, for a design
+/// somebody already has.
+///
+/// It exists so that a proof can play the campaign the way the game is played
+/// rather than by handing the server finished documents. Nothing in the game
+/// calls it: a player's stream comes from their hands.
+///
+/// # The names change on the way through
+///
+/// A component is named by the *host*, from its kind and the lowest free
+/// number, so that two clients placing at once cannot disagree about what
+/// anything is called. `I1` in a file becomes `IN1` in a draft. [`redrawn`] is
+/// that renaming applied to a whole document, and the draft this stream leaves
+/// behind is equal to it -- which is worth asserting, because a stream that
+/// built a *nearly* identical machine would pass every test that only counted
+/// components.
+pub fn draw(id: Id, d: &Design) -> Vec<Act> {
+    let renamed = redrawn(d);
+    let mut out = vec![Act::OpenDesign { id }];
+    for u in &renamed.units {
+        out.push(Act::PlaceComponent {
+            id,
+            kind: u.kind.tag().to_string(),
+            x: u.x,
+            y: u.y,
+            z: u.z,
+            face: u.face,
+        });
+    }
+    for u in &renamed.units {
+        for (field, value) in settings(u) {
+            out.push(Act::TuneComponent {
+                id,
+                unit: u.name.clone(),
+                field: field.to_string(),
+                value,
+            });
+        }
+    }
+    for w in &renamed.wires {
+        out.push(Act::ConnectComponent {
+            id,
+            from: w.from.clone(),
+            from_port: w.from_port.clone(),
+            to: w.to.clone(),
+            to_port: w.to_port.clone(),
+        });
+    }
+    out.push(Act::CommitMachineDesign { id, design: renamed });
+    out
+}
+
+/// The same design, under the names the bench will have given it.
+pub fn redrawn(d: &Design) -> Design {
+    let mut out = Design {
+        name: d.name.clone(),
+        brief: d.brief,
+        units: Vec::new(),
+        wires: Vec::new(),
+    };
+    let mut was: Vec<(String, String)> = Vec::new();
+    for u in &d.units {
+        let name = unique_name(&out, u.kind);
+        was.push((u.name.clone(), name.clone()));
+        out.units.push(Unit { name, ..u.clone() });
+    }
+    let now = |old: &str| {
+        was.iter()
+            .find(|(o, _)| o == old)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| old.to_string())
+    };
+    for w in &d.wires {
+        out.wires.push(Wire {
+            from: now(&w.from),
+            from_port: w.from_port.clone(),
+            to: now(&w.to),
+            to_port: w.to_port.clone(),
+        });
+    }
+    out
+}
+
+/// The settings on one component that are not what a freshly placed one would
+/// have, in the order they can be applied without passing through a state the
+/// document would refuse.
+///
+/// That order is the whole reason this is a function rather than a match arm.
+/// `pulse` before its two levels: a store told to hold at 200 down to 100
+/// before anybody said it pulses is a store with a range nothing reads, and a
+/// range set before the levels are is checked against the defaults, which are
+/// always inside the port's capacity.
+fn settings(u: &Unit) -> Vec<(&'static str, String)> {
+    let d = Tune::default_for(u.kind);
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    match u.kind {
+        Kind::Reactor if u.tune.throttle != d.throttle => {
+            out.push(("throttle", u.tune.throttle.to_string()))
+        }
+        Kind::Pump | Kind::Inlet if u.tune.subst != d.subst => {
+            out.push(("subst", u.tune.subst.tag().to_string()))
+        }
+        Kind::Gearbox if u.tune.ratio != d.ratio => out.push(("ratio", u.tune.ratio.to_string())),
+        Kind::Valve | Kind::Clutch if u.tune.limit != d.limit => {
+            out.push(("limit", u.tune.limit.to_string()))
+        }
+        Kind::Column if u.tune.stages != d.stages => {
+            out.push(("stages", u.tune.stages.to_string()))
+        }
+        _ => {}
+    }
+    // Pulse is not exclusive with any of the above: only the four stores have
+    // it, and none of them have anything else to set.
+    if u.tune.pulse {
+        out.push(("pulse", "true".to_string()));
+        out.push(("high", u.tune.high.to_string()));
+        out.push(("low", u.tune.low.to_string()));
+    }
+    out
 }

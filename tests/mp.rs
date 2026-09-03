@@ -20,9 +20,9 @@ use temporal_rooms::mp::cmd::{Act, Cmd, Effect};
 use temporal_rooms::mp::goal::{self, Goal, Shape, TEMPLATES};
 use temporal_rooms::mp::kit::{proto, Role, PROTOS};
 use temporal_rooms::mp::room::{Room, Sim};
-use temporal_rooms::mp::world::{stock_design, Id, World};
+use temporal_rooms::mp::world::{head_design, stock_design, Id, World};
 use temporal_rooms::mp::{lower, secs, Rng};
-use temporal_rooms::json;
+use temporal_rooms::json::{self, Json};
 
 // ============================================================== the machines
 
@@ -87,16 +87,21 @@ fn the_primitive_cycle_keeps_the_rate() {
 
 /// A head on a patch of ground, which is now the only way to get material out
 /// of the world at all.
-fn head(w: &mut World, tag: &'static str, x: i32, y: i32, yields: u64) -> Id {
-    let item = proto(tag).unwrap().extracts().expect("not an extraction head");
+fn head(w: &mut World, item: &'static str, x: i32, y: i32, yields: u64) -> Id {
     w.seam(item, x, y, 8, 6, yields);
-    w.place(proto(tag).unwrap(), x, y, 0, None, Some(stock_design(tag).unwrap()), 0, 0)
-        .unwrap_or_else(|e| panic!("a {tag} on its own ground: {e}"))
+    on_ground(w, item, x, y)
+}
+
+/// An extraction head on ground that is already there.
+fn on_ground(w: &mut World, item: &str, x: i32, y: i32) -> Id {
+    let d = head_design(item).expect("a head that draws it");
+    w.place(proto("head").unwrap(), x, y, 0, None, Some(d), 0, 0)
+        .unwrap_or_else(|e| panic!("a head drawing {item} on its own ground: {e}"))
 }
 
 fn tiny_world() -> (World, Vec<Id>) {
     let mut w = World::new("Test");
-    let mine = head(&mut w, "oremine", 0, 0, 100);
+    let mine = head(&mut w, "IronOre", 0, 0, 400);
     let bay = w.place(proto("bay").unwrap(), 10, 0, 0, None, None, 0, 0).unwrap();
     let depot = w
         .place(proto("depot").unwrap(), 20, 0, 0, Some("IronOre".into()), None, 0, 0)
@@ -158,9 +163,9 @@ fn bayless_world() -> (World, Vec<Id>) {
     };
     let plant = machine("steamplant", 0, 0);
     let cell = machine("machining", 20, 0);
-    let coal = head(&mut w, "coalpit", 0, 20, 100);
-    let water = head(&mut w, "waterpump", 20, 20, 400);
-    let caster = head(&mut w, "billetcaster", 40, 20, 100);
+    let coal = head(&mut w, "Coal", 0, 20, 400);
+    let water = head(&mut w, "Water", 20, 20, 800);
+    let caster = head(&mut w, "IronBillet", 40, 20, 400);
     let depot = w
         .place(proto("depot").unwrap(), 60, 20, 0, Some("Gear".into()), None, 0, 0)
         .unwrap();
@@ -255,7 +260,7 @@ fn one_supplier_per_item_per_machine() {
 
     // A second caster on its own stock is a second supplier, and is refused
     // the same way.
-    let spare = head(&mut w, "billetcaster", 80, 40, 100);
+    let spare = head(&mut w, "IronBillet", 80, 40, 400);
     let e = w.connect(spare, cell, "IronBillet").unwrap_err();
     assert!(e.contains("already has somewhere to draw"), "{e}");
 
@@ -328,42 +333,46 @@ fn a_placed_machine_is_empty_until_it_is_designed() {
     assert!(why.contains("designed"), "{why}");
 }
 
-/// The worked example is still there, and has to be asked for by name.
+/// A machine is placed with a design or it is placed empty. There is no third
+/// thing.
 ///
-/// Experiment 13 allows tutorial examples and asks that they not be the normal
-/// way forward. So the command says which it is, and the room's log therefore
-/// says which machines somebody designed and which they copied out of the book.
+/// The catalogue used to substitute its own answer for an absent design, and
+/// for one pass after that there was an `example` flag asking for that answer
+/// by name. Both are gone: an example beside every chassis in the build menu
+/// was two buttons for one building, and a build menu is a bad place to keep
+/// a tutorial. What is left is the honest pair -- a design you have, or
+/// nothing yet.
 #[test]
-fn the_worked_example_is_asked_for_by_name() {
+fn a_machine_is_placed_with_a_design_or_empty() {
     let (mut r, a, _) = wired_room(33);
     r.set_now(secs(20));
-    let empty = |example: bool| Act::PlaceMachine {
+    let put = |design: Option<Design>, x: i32| Act::PlaceMachine {
         proto: "machining".into(),
-        x: if example { 70 } else { 84 },
+        x,
         y: 60,
         face: 0,
         item: None,
-        design: None,
-        example,
+        design,
     };
-    r.submit(a, empty(false)).unwrap();
+    r.submit(a, put(None, 84)).unwrap();
     let chassis = r.host.world.installs.last().unwrap();
     assert!(chassis.design.is_none(), "a plain placement filled itself in");
+    assert!(chassis.lowered.is_none());
 
-    r.submit(a, empty(true)).unwrap();
-    let worked = r.host.world.installs.last().unwrap();
-    assert!(worked.design.is_some(), "the worked example did not arrive");
-    assert!(worked.makes().iter().any(|i| i == "Gear"), "and it does not make gears");
+    let mine = stock_design("machining").unwrap();
+    r.submit(a, put(Some(mine.clone()), 70)).unwrap();
+    let built = r.host.world.installs.last().unwrap();
     assert_eq!(
-        worked.design.as_ref().map(|d| d.emit()),
-        Some(stock_design("machining").unwrap().emit()),
-        "the example is not the catalogue's"
+        built.design.as_ref().map(|d| d.emit()),
+        Some(mine.emit()),
+        "the design that arrived is not the one that was sent"
     );
+    assert!(built.makes().iter().any(|i| i == "Gear"));
 
-    // The distinction survives the wire, because it is what the log says
-    // happened.
+    // And the design travels in the command, so every replica builds the same
+    // machine rather than looking one up.
     let last = r.log.last().unwrap().to_json();
-    assert_eq!(last.at("payload").at("example").as_bool(), Some(true));
+    assert!(!matches!(last.at("payload").at("design"), Json::Null));
 }
 
 /// An empty chassis opens on an empty drawing board.
@@ -381,7 +390,6 @@ fn an_empty_chassis_can_be_designed() {
         face: 0,
         item: None,
         design: None,
-        example: false,
     })
     .unwrap();
     let id = r.host.world.installs.last().unwrap().id;
@@ -414,50 +422,27 @@ fn an_empty_chassis_can_be_designed() {
 fn a_head_has_to_stand_on_something() {
     let mut w = World::new("Test");
     // Nothing in the ground: a head is refused, by name, where it can be seen.
+    let ore = || head_design("IronOre").unwrap();
     let e = w
-        .place(
-            proto("oremine").unwrap(),
-            0,
-            0,
-            0,
-            None,
-            Some(stock_design("oremine").unwrap()),
-            0,
-            0,
-        )
+        .place(proto("head").unwrap(), 0, 0, 0, None, Some(ore()), 0, 0)
         .unwrap_err();
-    assert!(e.contains("ore body"), "{e}");
+    assert!(e.contains("stand on ground"), "{e}");
 
-    // The wrong ground is no ground at all.
+    // Ground of the wrong kind is ground, so it may be *stood* on -- an empty
+    // chassis has no opinion about what it draws yet. What it may not do is
+    // work it, and the plant says so rather than the placement.
     w.seam("Coal", 0, 0, 8, 6, 200);
-    let e = w
-        .place(
-            proto("oremine").unwrap(),
-            0,
-            0,
-            0,
-            None,
-            Some(stock_design("oremine").unwrap()),
-            0,
-            0,
-        )
-        .unwrap_err();
-    assert!(e.contains("ore body"), "{e}");
+    let wrong = w
+        .place(proto("head").unwrap(), 0, 0, 0, None, Some(ore()), 0, 0)
+        .expect("a head may stand on the wrong ground");
+    assert!(w.under(wrong).is_none(), "it thinks it is working a coal seam");
+    let why = w.compile().why_idle(wrong).expect("and is idle for it").to_string();
+    assert!(why.contains("coal seam") && why.contains("not designed"), "{why}");
+    w.remove(wrong).unwrap();
 
-    // The right ground, and it stands. A head only has to *touch* the seam:
-    // "on or beside it", not centred on it to the tile.
-    let pit = w
-        .place(
-            proto("coalpit").unwrap(),
-            6,
-            4,
-            0,
-            None,
-            Some(stock_design("coalpit").unwrap()),
-            0,
-            0,
-        )
-        .expect("a coal head on a coal seam");
+    // The right design on the same ground, and it works. A head only has to
+    // *touch* the seam: "on or beside it", not centred on it to the tile.
+    let pit = on_ground(&mut w, "Coal", 6, 4);
     assert!(w.under(pit).is_some(), "the head does not know what it is standing on");
     assert_eq!(w.under(pit).unwrap().item, "Coal");
 }
@@ -472,12 +457,12 @@ fn the_ground_caps_the_head() {
 
     // A seam richer than the head: the head's design is the constraint.
     let mut rich = World::new("Rich");
-    let a = head(&mut rich, "coalpit", 0, 0, 5_000);
+    let a = head(&mut rich, "Coal", 0, 0, 5_000);
     assert_eq!(rate(&rich, a), 400, "a head on a rich seam is not running flat out");
 
     // A seam thinner than the head: the ground is the constraint.
     let mut thin = World::new("Thin");
-    let b = head(&mut thin, "coalpit", 0, 0, 35);
+    let b = head(&mut thin, "Coal", 0, 0, 35);
     assert_eq!(rate(&thin, b), 35, "a thin seam did not hold the head back");
 
     // And the thin one still turns every second rather than in lumps -- an
@@ -494,36 +479,24 @@ fn the_ground_caps_the_head() {
 fn a_seam_is_shared_first_come_first_served() {
     let mut w = World::new("Test");
     w.seam("Coal", 0, 0, 12, 6, 900);
-    let put = |w: &mut World, x: i32| -> Id {
-        w.place(
-            proto("coalpit").unwrap(),
-            x,
-            0,
-            0,
-            None,
-            Some(stock_design("coalpit").unwrap()),
-            0,
-            0,
-        )
-        .unwrap_or_else(|e| panic!("a head at {x}: {e}"))
-    };
-    let one = put(&mut w, 0);
-    let two = put(&mut w, 2);
-    let three = put(&mut w, 4);
+    let one = on_ground(&mut w, "Coal", 0, 0);
+    let two = on_ground(&mut w, "Coal", 2, 0);
+    let three = on_ground(&mut w, "Coal", 4, 0);
+    let share = |w: &World, id: Id| w.get(id).unwrap().ground.clone();
     // Four hundred, four hundred, and the hundred that is left.
-    assert_eq!(w.get(one).unwrap().rated, Some(400));
-    assert_eq!(w.get(two).unwrap().rated, Some(400));
-    assert_eq!(w.get(three).unwrap().rated, Some(100));
+    assert_eq!(share(&w, one), Some(("Coal".to_string(), 400)));
+    assert_eq!(share(&w, two), Some(("Coal".to_string(), 400)));
+    assert_eq!(share(&w, three), Some(("Coal".to_string(), 100)));
 
     // A fourth is refused rather than left standing there turning at nothing.
     let e = w
         .place(
-            proto("coalpit").unwrap(),
+            proto("head").unwrap(),
             6,
             0,
             0,
             None,
-            Some(stock_design("coalpit").unwrap()),
+            Some(head_design("Coal").unwrap()),
             0,
             0,
         )
@@ -532,8 +505,8 @@ fn a_seam_is_shared_first_come_first_served() {
 
     // Taking one down gives its share back to what is still standing.
     w.remove(two).unwrap();
-    assert_eq!(w.get(one).unwrap().rated, Some(400));
-    assert_eq!(w.get(three).unwrap().rated, Some(400), "the seam was not shared out again");
+    assert_eq!(share(&w, one), Some(("Coal".to_string(), 400)));
+    assert_eq!(share(&w, three), Some(("Coal".to_string(), 400)), "not shared out again");
 }
 
 /// A head draws the substance it is standing on out of the *ground*, and never
@@ -547,7 +520,7 @@ fn a_seam_is_shared_first_come_first_served() {
 #[test]
 fn a_head_does_not_ask_a_bay_for_what_it_is_digging() {
     let mut w = World::new("Test");
-    let pit = head(&mut w, "coalpit", 0, 0, 400);
+    let pit = head(&mut w, "Coal", 0, 0, 400);
     assert!(!w.get(pit).unwrap().wants().iter().any(|i| i == "Coal"));
     assert!(w.get(pit).unwrap().makes().iter().any(|i| i == "Coal"));
     let bay = w.place(proto("bay").unwrap(), 20, 0, 0, None, None, 0, 0).unwrap();
@@ -573,7 +546,7 @@ fn ground_survives_the_wire() {
     assert_eq!(back.signature(), w.signature());
 
     // And the head that stands on it came back able to run.
-    let mine = back.installs.iter().find(|i| i.proto.tag == "oremine").expect("the head");
+    let mine = back.installs.iter().find(|i| i.proto.digs()).expect("the head");
     assert!(mine.lowered.is_some(), "a head came back without its recipe");
     assert!(mine.makes().iter().any(|i| i == "IronOre"));
 
@@ -637,7 +610,7 @@ fn distance_is_derived_from_the_layout() {
     let a = w.place(proto("bay").unwrap(), 0, 0, 0, None, None, 0, 0).unwrap();
     let near = w.place(proto("bay").unwrap(), 12, 0, 0, None, None, 0, 0).unwrap();
     let far = w.place(proto("bay").unwrap(), 100, 0, 0, None, None, 0, 0).unwrap();
-    let mine = head(&mut w, "oremine", 0, 20, 100);
+    let mine = head(&mut w, "IronOre", 0, 20, 400);
     w.connect(mine, a, "IronOre").unwrap();
     let h1 = w.link(proto("belt").unwrap(), a, near, "IronOre", 0, 0).unwrap();
     let h2 = w.link(proto("belt").unwrap(), a, far, "IronOre", 0, 0).unwrap();
@@ -648,6 +621,65 @@ fn distance_is_derived_from_the_layout() {
     let (n1, n2) = (node(&w.haul(h1).unwrap().name), node(&w.haul(h2).unwrap().name));
     assert!(n1.duration < n2.duration, "the longer belt was not slower");
     assert!(n1.geometry.is_some(), "the latency was not derived from a distance");
+}
+
+/// A machine nobody has designed yet survives the wire too.
+///
+/// Since experiment 13 every placement is an empty chassis, so "designed
+/// prototype, no design" is an ordinary state a document is in for as long as
+/// it takes somebody to open it -- and it used to be indistinguishable, on the
+/// wire, from a *frame* being passed off as a snapshot. `from_json` refused
+/// both.
+///
+/// That was a lockout rather than an inconvenience: joining a room rebuilds
+/// the joiner's replica from the host's snapshot, so one empty steam plant
+/// standing in one room meant nobody could enter the campaign again -- not the
+/// player who placed it coming back from a refresh, and not a stranger with no
+/// seat at all. The only way out was to restart the server, which throws the
+/// world away.
+///
+/// The document says which it is now, and a frame is still refused.
+#[test]
+fn an_undesigned_chassis_survives_the_wire() {
+    let mut w = World::new("Test");
+    let empty = w
+        .place(proto("steamplant").unwrap(), 4, 4, 0, None, None, 0, 1)
+        .expect("an empty chassis can be placed");
+    assert!(w.get(empty).unwrap().design.is_none());
+
+    let build = w.compile();
+    let snapshot = w.to_json(&build, true).to_string();
+    let back = World::from_json(&json::parse(&snapshot).unwrap())
+        .expect("an empty chassis came back");
+    assert_eq!(back.signature(), w.signature());
+    let there = back.get(empty).expect("the chassis is still there");
+    assert!(there.design.is_none() && there.lowered.is_none(), "it arrived with an inside");
+
+    // And it is honest about being empty rather than idle for some other
+    // reason, which is the sentence its inspector shows.
+    let why = back.compile().why_idle(empty).unwrap_or_default().to_string();
+    assert!(why.contains("designed"), "an empty chassis says something else: {why}");
+
+    // A machine that *has* a design and did not send one is still a frame, and
+    // still refused: the distinction is the whole point.
+    let designed = w
+        .place(
+            proto("machining").unwrap(),
+            20,
+            20,
+            0,
+            None,
+            Some(stock_design("machining").unwrap()),
+            0,
+            1,
+        )
+        .unwrap();
+    assert!(w.get(designed).unwrap().design.is_some());
+    let frame = w.to_json(&w.compile(), false).to_string();
+    assert!(
+        World::from_json(&json::parse(&frame).unwrap()).is_err(),
+        "a frame was accepted as a snapshot"
+    );
 }
 
 /// The document survives the wire. A joining client is handed exactly this.
@@ -696,7 +728,9 @@ fn goals_are_a_function_of_the_seed() {
         let g = Goal::of_seed(3, Some(t.id));
         assert_eq!(g.template, t.id);
         assert!(!g.brief().is_empty());
-        assert!(!g.starting_kit().is_empty(), "{}: a room with nothing in it", t.id);
+        let kit = g.starting_kit();
+        assert!(!kit.ground.is_empty(), "{}: a room with nothing in the ground", t.id);
+        assert!(!kit.builds.is_empty(), "{}: a room with nothing on it", t.id);
     }
 }
 
@@ -756,19 +790,23 @@ fn a_rate_is_measured_on_the_lattice() {
 // ================================================================== the room
 
 /// A head on the room's own ground, placed as a command like anything else.
-fn sink_head(r: &mut Room, who: u32, tag: &'static str) -> Id {
-    let item = proto(tag).unwrap().extracts().expect("not an extraction head");
+fn sink_head(r: &mut Room, who: u32, item: &'static str) -> Id {
     let (x, y) = r
         .host
         .world
         .nth_ground(item, 0)
         .map(|d| (d.x, d.y))
         .unwrap_or_else(|| panic!("the room has no {item} in the ground"));
-    r.submit(
-        who,
-        Act::PlaceMachine { proto: tag.into(), x, y, face: 0, item: None, design: None, example: true },
-    )
-        .unwrap_or_else(|e| panic!("a {tag} on its own ground: {e}"));
+    let design = head_design(item).expect("a head that draws it");
+    r.submit(who, Act::PlaceMachine {
+        proto: "head".into(),
+        x,
+        y,
+        face: 0,
+        item: None,
+        design: Some(design),
+    })
+    .unwrap_or_else(|e| panic!("a head drawing {item} on its own ground: {e}"));
     r.host.world.installs.last().unwrap().id
 }
 
@@ -784,8 +822,8 @@ fn wired_room(seed: u64) -> (Room, u32, u32) {
     };
     // A room comes with ground, not with working mines, so the first thing
     // anybody does is put a head on each seam.
-    let caster = sink_head(&mut r, a, "billetcaster");
-    let coal = sink_head(&mut r, a, "coalpit");
+    let caster = sink_head(&mut r, a, "IronBillet");
+    let coal = sink_head(&mut r, a, "Coal");
     let depot = tag(&r, "depot", 0);
     let bays: Vec<Id> =
         r.host.world.installs.iter().filter(|i| i.proto.tag == "bay").map(|i| i.id).collect();
@@ -797,8 +835,7 @@ fn wired_room(seed: u64) -> (Room, u32, u32) {
         y: 6,
         face: 0,
         item: None,
-        design: None,
-        example: true,
+        design: stock_design("machining").ok(),
     })
     .unwrap();
     let cell = r.host.world.installs.last().unwrap().id;
@@ -810,15 +847,14 @@ fn wired_room(seed: u64) -> (Room, u32, u32) {
         y: 26,
         face: 0,
         item: None,
-        design: None,
-        example: true,
+        design: stock_design("steamplant").ok(),
     })
     .unwrap();
     let plant = r.host.world.installs.last().unwrap().id;
     r.submit(a, Act::PlaceStorage { proto: "yard".into(), x: 60, y: 26, face: 0 }).unwrap();
     let powerbay = r.host.world.installs.last().unwrap().id;
 
-    let water = sink_head(&mut r, b, "waterpump");
+    let water = sink_head(&mut r, b, "Water");
     let mut wire = |from: Id, to: Id, item: &str| {
         r.submit(b, Act::CreateConnection { from, to, item: item.into() }).unwrap();
     };
@@ -1248,7 +1284,6 @@ fn commands_survive_json() {
             face: 2,
             item: None,
             design: Some(stock_design("stamping").unwrap()),
-            example: false,
         },
         Act::PlaceStorage { proto: "bay".into(), x: 1, y: 2, face: 1 },
         // A chassis: the same command with nothing inside it, which is what a
@@ -1260,7 +1295,6 @@ fn commands_survive_json() {
             face: 0,
             item: None,
             design: None,
-            example: false,
         },
         Act::DeleteMachine { id: 7 },
         Act::DeleteStorage { id: 8 },
@@ -1335,7 +1369,7 @@ fn a_finished_goal_does_not_stop_the_room() {
     let a = r.join("Ada").unwrap();
     let bay = r.host.world.installs.iter().find(|i| i.proto.tag == "bay").map(|i| i.id).unwrap();
     let depot = r.host.world.installs.iter().find(|i| i.proto.tag == "depot").map(|i| i.id).unwrap();
-    let caster = sink_head(&mut r, a, "billetcaster");
+    let caster = sink_head(&mut r, a, "IronBillet");
     r.set_now(secs(2));
     r.submit(a, Act::CreateConnection { from: caster, to: bay, item: "IronBillet".into() })
         .unwrap();
@@ -1512,7 +1546,7 @@ fn a_finished_room_still_says_what_it_is_doing() {
     };
     let bay = tag(&r, "bay");
     let depot = tag(&r, "depot");
-    let caster = sink_head(&mut r, a, "billetcaster");
+    let caster = sink_head(&mut r, a, "IronBillet");
     r.set_now(secs(2));
     r.submit(a, Act::CreateConnection { from: caster, to: bay, item: "IronBillet".into() })
         .unwrap();

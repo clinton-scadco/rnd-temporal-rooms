@@ -91,21 +91,27 @@ fn scenario(seed: u64) -> i32 {
     let depot = named(&r, "depot", 0);
     // A room comes with ground now, not with working mines, so the first thing
     // anybody does is put a head on each seam.
-    let head = |r: &mut Room, who: u32, tag: &str| -> Id {
-        let item = temporal_rooms::mp::kit::proto(tag).and_then(|p| p.extracts()).unwrap_or("");
+    let head = |r: &mut Room, who: u32, item: &str| -> Id {
         let Some((x, y)) = r.host.world.nth_ground(item, 0).map(|d| (d.x, d.y)) else {
             return 0;
         };
-        let act =
-            Act::PlaceMachine { proto: tag.into(), x, y, face: 0, item: None, design: None, example: true };
+        let Ok(design) = temporal_rooms::mp::world::head_design(item) else { return 0 };
+        let act = Act::PlaceMachine {
+            proto: "head".into(),
+            x,
+            y,
+            face: 0,
+            item: None,
+            design: Some(design),
+        };
         match r.submit(who, act) {
             Ok(_) => r.host.world.installs.last().map(|i| i.id).unwrap_or(0),
             Err(_) => 0,
         }
     };
-    let caster = head(&mut r, a, "billetcaster");
-    let coal = head(&mut r, a, "coalpit");
-    let water = head(&mut r, a, "waterpump");
+    let caster = head(&mut r, a, "IronBillet");
+    let coal = head(&mut r, a, "Coal");
+    let water = head(&mut r, a, "Water");
     let bays: Vec<Id> =
         r.host.world.installs.iter().filter(|i| i.proto.tag == "bay").map(|i| i.id).collect();
 
@@ -136,8 +142,7 @@ fn scenario(seed: u64) -> i32 {
             y: 6,
             face: 0,
             item: None,
-            design: None,
-            example: true,
+            design: temporal_rooms::mp::world::stock_design("stamping").ok(),
         },
     );
     let gearbay = step(
@@ -223,8 +228,7 @@ fn scenario(seed: u64) -> i32 {
             y: 26,
             face: 0,
             item: None,
-            design: None,
-            example: true,
+            design: temporal_rooms::mp::world::stock_design("steamplant").ok(),
         },
     );
     let powerbay = step(
@@ -252,8 +256,7 @@ fn scenario(seed: u64) -> i32 {
             y: 34,
             face: 0,
             item: None,
-            design: None,
-            example: true,
+            design: temporal_rooms::mp::world::stock_design("steamplant").ok(),
         },
     );
     wire(&mut r, 36, a, bays[1], plant2, "Coal", "Ada feeds it coal");
@@ -533,8 +536,7 @@ fn failures() -> i32 {
                 y: 60,
                 face: 0,
                 item: None,
-                design: None,
-                example: true,
+                design: temporal_rooms::mp::world::stock_design("stamping").ok(),
             },
         )
         .map(|_| r.host.world.installs.last().unwrap().id)
@@ -657,13 +659,14 @@ fn goals(args: &[String]) -> i32 {
         println!("  {} ({})", g.title, g.family.word());
         println!("  {}", g.brief());
         println!("  {}", g.note);
-        println!("\n  it starts you with:");
-        for (tag, item) in g.starting_kit() {
-            println!(
-                "    {:<14} {}",
-                tag,
-                item.unwrap_or_default()
-            );
+        let kit = g.starting_kit();
+        println!("\n  the ground under it:");
+        for item in &kit.ground {
+            println!("    {item}");
+        }
+        println!("\n  and what it comes with:");
+        for (tag, item) in kit.builds {
+            println!("    {:<14} {}", tag, item.unwrap_or_default());
         }
         return 0;
     }

@@ -79,11 +79,11 @@ async function enter(host) {
 
   const cat = await net.catalogue();
   if (!cat.ok) return toast(cat.error);
-  // A palette click places an empty chassis; the small `example` button
-  // beside it places the catalogue's worked answer, and says so.
-  renderPalette(cat, (tag, example) => {
-    world.setTool('place', tag, null, example);
-    markTool('place', tag, example);
+  // A palette click places an empty chassis. What goes inside it comes from
+  // the designer, or off the shelf.
+  renderPalette(cat, tag => {
+    world.setTool('place', tag);
+    markTool('place', tag);
   });
   document.querySelectorAll('.tools button').forEach(b => {
     b.onclick = () => {
@@ -109,9 +109,10 @@ async function enter(host) {
   $('viewworld').onclick = () => show('world');
   $('viewbench').onclick = () => {
     // The machine window needs a machine. Without one chosen, take the first
-    // one anybody has built.
+    // thing anybody has built that has an inside -- including one with
+    // nothing in it yet, which is exactly the one you want to open.
     if (!bench.bench.id) {
-      const first = (net.state.view.world.installs || []).find(i => i.role === 'machine');
+      const first = (net.state.view.world.installs || []).find(i => i.designed);
       if (!first) return toast('there is no machine to open yet');
       bench.open(first.id);
     }
@@ -199,7 +200,7 @@ function frame(v) {
   world.invalidate();
   if (world.selection) renderInspector(world.selection, inspectorActions);
 
-  const machines = v.world.installs.filter(i => i.role === 'machine');
+  const machines = v.world.installs.filter(i => i.designed);
   $('viewbench').disabled = !machines.length;
   if (mode === 'bench' && bench.bench.id) {
     // Only rebuild the 3D window when the document under it has changed --

@@ -84,6 +84,7 @@
 //! is not the size of the number on the order -- it is that the machine that
 //! answered the last room is the wrong machine for this one.
 
+pub mod play;
 pub mod run;
 pub mod shelf;
 pub mod ship;

@@ -523,64 +523,72 @@ impl Goal {
     /// Not a hint and not a tutorial: the raw materials the goal is about, a
     /// bay each, and somewhere to ship the answer. Everything between them is
     /// the game.
-    pub fn starting_kit(&self) -> Vec<(&'static str, Option<String>)> {
-        let mut kit: Vec<(&'static str, Option<String>)> = Vec::new();
-        let mut want = |tag: &'static str| {
-            if !kit.iter().any(|(t, _)| *t == tag) {
-                kit.push((tag, None));
+    /// What the room is furnished with.
+    ///
+    /// Two lists, and the split is experiment 13's first change: the *ground*
+    /// is what the room has, and the buildings are what it hands you. Raw
+    /// material used to be a building -- a mine that produced ore because the
+    /// catalogue said so -- and is now a patch of ground with a number on it
+    /// and nothing standing on it at all.
+    pub fn starting_kit(&self) -> Furnishing {
+        let mut ground: Vec<&'static str> = Vec::new();
+        let mut want = |item: &'static str| {
+            if !ground.contains(&item) {
+                ground.push(item);
             }
         };
         let items = self.shape.items();
         for item in &items {
             match item.as_str() {
                 "Gear" => {
-                    want("billetcaster");
-                    want("coalpit");
+                    want("IronBillet");
+                    want("Coal");
                 }
                 "Concentrate" | "OrePowder" => {
-                    want("oremine");
-                    want("coalpit");
-                    want("waterpump");
+                    want("IronOre");
+                    want("Coal");
+                    want("Water");
                 }
                 "LightFraction" | "MiddleFraction" | "HeavyFraction" => {
-                    want("crudewell");
-                    want("coalpit");
-                    want("waterpump");
+                    want("Crude");
+                    want("Coal");
+                    want("Water");
                 }
                 "Power" => {
-                    want("coalpit");
-                    want("waterpump");
+                    want("Coal");
+                    want("Water");
                 }
-                "IronBillet" => want("billetcaster"),
-                "IronOre" => want("oremine"),
-                _ => want("oremine"),
+                "IronBillet" => want("IronBillet"),
+                "IronOre" => want("IronOre"),
+                _ => want("IronOre"),
             }
         }
         if let Shape::Frugal { cap_item, .. } = &self.shape {
             match cap_item.as_str() {
-                "Water" => want("waterpump"),
-                "Coal" => want("coalpit"),
+                "Water" => want("Water"),
+                "Coal" => want("Coal"),
                 _ => {}
             }
         }
         // A stamping line runs off the grid, so anything that ends in gears
         // needs somewhere to make electricity as well.
         if items.iter().any(|i| i == "Gear") {
-            want("waterpump");
+            want("Water");
         }
-        let mut out: Vec<(&'static str, Option<String>)> = Vec::new();
-        for (tag, _) in kit {
-            out.push((tag, None));
-            out.push(("bay", None));
+        let mut builds: Vec<(&'static str, Option<String>)> = Vec::new();
+        // A bay beside each seam, because somewhere to put what comes out of
+        // the ground is not the interesting part of the problem.
+        for _ in &ground {
+            builds.push(("bay", None));
         }
         for item in items {
             if item == "Power" {
-                out.push(("grid", None));
+                builds.push(("grid", None));
             } else {
-                out.push(("depot", Some(item)));
+                builds.push(("depot", Some(item)));
             }
         }
-        out
+        Furnishing { ground, builds }
     }
 
     pub fn to_json(&self, p: &Progress) -> Json {
@@ -594,6 +602,16 @@ impl Goal {
             .set("window", self.shape.window())
             .set("progress", p.to_json())
     }
+}
+
+/// A room as it stands before anybody has built anything: what is under it,
+/// and what is on it.
+#[derive(Clone, Debug, Default)]
+pub struct Furnishing {
+    /// Items there is ground for, in the order the room lays them out.
+    pub ground: Vec<&'static str>,
+    /// Buildings the room comes with: a bay per seam, and the delivery points.
+    pub builds: Vec<(&'static str, Option<String>)>,
 }
 
 /// One objective, in the sentence a player reads.

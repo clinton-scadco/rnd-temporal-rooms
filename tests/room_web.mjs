@@ -208,6 +208,18 @@ ok(!!v.goal.progress, 'and an objective with progress on it');
 // The command path, including the refusals.
 console.log('commands');
 const cmd = (player, type, payload) => post('/api/cmd', { code, player, type, payload });
+
+// A machine is placed empty and designed. That is the game, and it is checked
+// below by designing an extraction head out of two components and a wire.
+//
+// It is not, however, something a harness can do nine times: a machining cell
+// is nine components and twelve wires, and drawing it here would be a test of
+// the designer rather than of the client-and-server contract this file is
+// about. So the finished designs come off `/api/reference`, which exists for
+// exactly this and which nothing in the game reads.
+const book = await get('/api/reference');
+ok(book.ok && book.designs.length > 0, `${book.designs.length} reference designs, for the harness`);
+const designOf = tag => (book.designs.find(d => d.proto === tag) || {}).design;
 const find = tag => v.world.installs.find(i => i.proto === tag);
 
 const depot = find('depot');
@@ -219,29 +231,63 @@ ok(!!depot, 'the goal furnished the plot with what it is about');
 ok(v.world.deposits.length > 0, `${v.world.deposits.length} patches of ground to work`);
 ok(v.world.deposits.every(d => d.item && d.title && d.yields > 0),
   'each says what it is and what it is worth');
-async function head(tag) {
-  const p = (await net.catalogue()).protos.find(x => x.tag === tag);
+// One chassis for all of them: what a head draws is one word inside its
+// design. There is no catalogue answer to ask for any more, so the harness
+// does what a player does -- puts an empty head on the seam, opens it, and
+// draws two components and a wire.
+//
+// It is longer than handing over a finished design and it is the point: this
+// is the loop experiment 13's third section is about, and if it did not work
+// the game would have no way to get material out of the ground at all.
+const DRAWS = { IronOre: 'ore', Coal: 'coal', Water: 'water', IronBillet: 'iron', Crude: 'crude' };
+async function head(item) {
   const w = (await frame(ada)).world;
-  const d = w.deposits.find(g => g.item === p.extracts && g.spare > 0);
-  ok(!!d, `there is ${p.extracts} in the ground for a ${tag}`);
-  const r = await cmd(ada, 'PlaceMachine', {
-    proto: tag, x: d.x, y: d.y, face: 0, example: true,
-  });
-  ok(r.ok, `a ${tag} on its own ground` + (r.ok ? '' : `: ${r.error}`));
-  return (await frame(ada)).world.installs.slice(-1)[0].id;
+  const d = w.deposits.find(g => g.item === item && g.spare > 0);
+  ok(!!d, `there is ${item} in the ground`);
+  const put = await cmd(ada, 'PlaceMachine', { proto: 'head', x: d.x, y: d.y, face: 0 });
+  ok(put.ok, `an empty head on the ${item} ground` + (put.ok ? '' : `: ${put.error}`));
+  const id = (await frame(ada)).world.installs.slice(-1)[0].id;
+
+  // Open it, and draw. A fluid comes in through a pump and leaves as liquid;
+  // a solid comes in through an inlet and leaves as solid.
+  const fluid = item === 'Water' || item === 'Crude';
+  const src = fluid ? 'pump' : 'inlet';
+  const step = async (type, payload, what) => {
+    const r = await cmd(ada, type, payload);
+    ok(r.ok, `${what} on the ${item} head` + (r.ok ? '' : `: ${r.error}`));
+    return r;
+  };
+  await step('OpenDesign', { id }, 'a drawing board');
+  await step('PlaceComponent', { id, kind: src, x: 0, y: 0, z: 0 }, `an ${src}`);
+  await step('PlaceComponent', { id, kind: 'outlet', x: 4, y: 0, z: 0 }, 'an outlet');
+  const draft = (await net.form(id, true)).design;
+  const inlet = draft.units.find(u => u.kind === src).name;
+  const outlet = draft.units.find(u => u.kind === 'outlet').name;
+  await step('TuneComponent', { id, unit: inlet, field: 'subst', value: DRAWS[item] },
+    `it set to draw ${DRAWS[item]}`);
+  await step('ConnectComponent', {
+    id,
+    from: inlet, fromPort: fluid ? 'water' : 'out',
+    to: outlet, toPort: fluid ? 'liquid' : 'solid',
+  }, 'a wire to the outlet');
+  const done = (await net.form(id, true)).design;
+  await step('CommitMachineDesign', { id, design: done }, 'the design committed');
+
+  const built = (await frame(ada)).world.installs.find(i => i.id === id);
+  ok(built.makes.includes(item), `and it makes ${item}: ${JSON.stringify(built.makes)}`);
+  ok(!built.wants.includes(item), 'without asking a bay for what it is digging');
+  return id;
 }
-const caster = { id: await head('billetcaster') };
-const coal = { id: await head('coalpit') };
-const water = { id: await head('waterpump') };
+const caster = { id: await head('IronBillet') };
+const coal = { id: await head('Coal') };
+const water = { id: await head('Water') };
 
 // And a head that has nowhere to stand is refused where it can be seen.
-const nowhere = await cmd(ada, 'PlaceMachine', {
-  proto: 'oremine', x: 60, y: 60, face: 0, example: true,
-});
-ok(!nowhere.ok && /stand on/.test(nowhere.error), `refused: ${nowhere.error}`);
+const nowhere = await cmd(ada, 'PlaceMachine', { proto: 'head', x: 60, y: 60, face: 0 });
+ok(!nowhere.ok && /stand on ground/.test(nowhere.error), `refused: ${nowhere.error}`);
 
 const placed = await cmd(ada, 'PlaceMachine', {
-  proto: 'machining', x: 40, y: 8, face: 0, example: true,
+  proto: 'machining', x: 40, y: 8, face: 0, design: designOf('machining'),
 });
 ok(placed.ok, 'a machining cell is placed');
 ok(placed.command.tick >= 0 && placed.command.seq > 0, 'stamped with a tick and a sequence');
@@ -260,7 +306,7 @@ ok(gearbay.ok, 'a bay for the gears');
 v = await frame(bee);
 const gears = v.world.installs[v.world.installs.length - 1];
 const plant = await cmd(ada, 'PlaceMachine', {
-  proto: 'steamplant', x: 40, y: 30, face: 0, example: true,
+  proto: 'steamplant', x: 40, y: 30, face: 0, design: designOf('steamplant'),
 });
 ok(plant.ok, 'a steam plant');
 v = await frame(ada);
@@ -488,12 +534,12 @@ console.log('ports, and a wire with no bay in it');
 
   // Two machines, joined directly. This was a refusal until now.
   const p2 = await cmd(ada, 'PlaceMachine', {
-    proto: 'steamplant', x: 4, y: 60, face: 0, example: true,
+    proto: 'steamplant', x: 4, y: 60, face: 0, design: designOf('steamplant'),
   });
   ok(p2.ok, 'a second steam plant' + (p2.ok ? '' : `: ${p2.error}`));
   const plantB = (await frame(ada)).world.installs.slice(-1)[0];
   const c2 = await cmd(ada, 'PlaceMachine', {
-    proto: 'machining', x: 30, y: 60, face: 0, example: true,
+    proto: 'machining', x: 30, y: 60, face: 0, design: designOf('machining'),
   });
   ok(c2.ok, 'and a second machining cell' + (c2.ok ? '' : `: ${c2.error}`));
   const cellB = (await frame(ada)).world.installs.slice(-1)[0];

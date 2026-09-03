@@ -78,8 +78,16 @@ pub struct Install {
     /// an import yard would be refused for being fed by nobody. Prototype 3's
     /// rooms are the only things that set it, when they furnish themselves.
     pub item: Option<String>,
+    /// What this head is drawing out of the ground, and how much of it a
+    /// second it is allowed.
+    ///
+    /// Derived, never authored: [`World::reprice`] works it out from what the
+    /// design draws, what is underneath, and who got there first. It is cached
+    /// on the installation because `recipe` is asked sixty times a second and
+    /// has no world to ask.
+    pub ground: Option<(String, Qty)>,
     /// What *this* one is rated at, when the catalogue's number is not the
-    /// right one: a source's items a second, or a bay's capacity.
+    /// right one: a bay's capacity.
     ///
     /// Nothing a player places ever carries one. It exists so that a room can
     /// be *furnished* -- a coal seam that yields forty-five a second rather
@@ -146,41 +154,36 @@ impl Install {
         match self.proto.spec {
             // An extraction head runs its design like any other machine, and
             // then the ground has the last word.
-            Spec::Extract { item, .. } => match &self.lowered {
-                Some(m) => {
+            // A head runs its design like any other machine, and then the
+            // ground has the last word about the one thing it is standing on.
+            Spec::Extract => match (&self.lowered, &self.ground) {
+                (Some(m), Some((item, cap))) => {
                     let cycle = m.cycle.max(1);
                     let give = m.gives_of(item);
                     // What the ground allows over one turn of this design.
                     //
-                    // The first version of this stretched the *cycle* until
-                    // the average came out right, which is arithmetically
-                    // identical and plays quite differently: a head capped to
-                    // a third of its design delivered three times as much,
-                    // three times less often, and every machine downstream sat
-                    // idle between the lumps. The campaign lost eleven percent
-                    // of its gears to it.
-                    //
-                    // So the cycle is the design's and the *amounts* are
-                    // scaled. Exact, because a head's cycle is a whole number
+                    // The first version of this stretched the *cycle* until the
+                    // average came out right, which is arithmetically identical
+                    // and plays quite differently: a head capped to a third of
+                    // its design delivered three times as much, three times
+                    // less often, and every machine downstream sat idle between
+                    // the lumps. The campaign lost eleven percent of its gears
+                    // to it. So the cycle is the design's and the *amounts* are
+                    // scaled -- exact, because a head's cycle is a whole number
                     // of seconds and the cap is written in seconds.
-                    let allowed = match self.rated {
-                        Some(cap) => {
-                            (cap as u128 * cycle as u128 / SIM_TICK_RATE as u128) as Qty
-                        }
-                        None => give,
-                    };
+                    let allowed = (*cap as u128 * cycle as u128 / SIM_TICK_RATE as u128) as Qty;
                     let keep = allowed.min(give);
                     let scale = |q: Qty| match give {
                         0 => 0,
                         g => (q as u128 * keep as u128 / g as u128) as Qty,
                     };
                     (
-                        // Whatever the head draws of the substance it is
-                        // standing on comes out of the *ground*, and must not
-                        // also be asked of a bay. Inside the machine an inlet
-                        // is a boundary flow like any other -- it has to be, or
-                        // the design would not balance -- and out here the
-                        // boundary it crosses is the deposit.
+                        // What it draws of the substance under it comes out of
+                        // the *ground*, and must not also be asked of a bay.
+                        // Inside the machine an inlet is a boundary flow like
+                        // any other -- it has to be, or the design would not
+                        // balance -- and out here the boundary it crosses is
+                        // the deposit.
                         //
                         // Anything else it draws is a real input: a head that
                         // washes its ore wants water delivered like everything
@@ -197,7 +200,10 @@ impl Install {
                         cycle,
                     )
                 }
-                None => (Vec::new(), Vec::new(), SIM_TICK_RATE),
+                // Designed, but not standing on anything it can use. It has
+                // nothing to say until it is moved or redesigned, and
+                // `compile` says which.
+                _ => (Vec::new(), Vec::new(), SIM_TICK_RATE),
             },
             Spec::Sink { .. } => {
                 let item = self.item.clone().unwrap_or_default();
@@ -225,6 +231,19 @@ impl Install {
 
     pub fn is_storage(&self) -> bool {
         self.proto.role == Role::Storage
+    }
+
+    /// What this installation pulls in across its own boundary.
+    ///
+    /// The inlets and pumps inside it, read off the lowered design. For most
+    /// machines these are things a bay has to deliver. For a head standing on
+    /// ground, one of them comes out of the ground instead -- and *which* one
+    /// is the whole of what used to be five separate prototypes.
+    pub fn draws(&self) -> Vec<String> {
+        match &self.lowered {
+            Some(m) => m.takes.iter().map(|(i, _)| i.clone()).collect(),
+            None => Vec::new(),
+        }
     }
 
     /// The connection points this installation actually has.
@@ -515,21 +534,39 @@ impl World {
         self.deposits.iter().find(|d| d.item == item && d.touches(x, y, w, h))
     }
 
-    /// The deposit one installation is standing on.
+    /// The deposit one installation is standing on and can actually use.
     pub fn under(&self, id: Id) -> Option<&Deposit> {
         let i = self.get(id)?;
-        let item = i.proto.extracts()?;
+        if !i.proto.digs() {
+            return None;
+        }
         let (w, h) = i.size();
-        self.ground(item, i.x, i.y, w, h)
+        let draws = i.draws();
+        self.deposits
+            .iter()
+            .find(|d| draws.iter().any(|it| *it == d.item) && d.touches(i.x, i.y, w, h))
     }
 
-    /// The heads standing on one patch of ground, in placement order.
+    /// Any ground this footprint is standing on, whatever it is.
+    ///
+    /// What a placement is checked against: an empty chassis draws nothing
+    /// yet, so the only thing that can be asked at that moment is whether
+    /// there is something underneath it at all.
+    pub fn any_ground(&self, x: i32, y: i32, w: i32, h: i32) -> Option<&Deposit> {
+        self.deposits.iter().find(|d| d.touches(x, y, w, h))
+    }
+
+    /// The heads standing on one patch of ground *and designed to use it*, in
+    /// placement order.
+    ///
+    /// A head drawing ore, sitting on a coal seam, is not working that seam --
+    /// it is standing in the wrong place, and it does not get a share.
     pub fn worked(&self, d: &Deposit) -> Vec<&Install> {
         let mut on: Vec<&Install> = self
             .installs
             .iter()
             .filter(|i| {
-                i.proto.extracts() == Some(d.item.as_str()) && {
+                i.proto.digs() && i.draws().iter().any(|it| *it == d.item) && {
                     let (w, h) = i.size();
                     d.touches(i.x, i.y, w, h)
                 }
@@ -539,11 +576,10 @@ impl World {
         on
     }
 
-    /// What one head's design could lift in a second, before the ground has
-    /// its say. Integer throughout, because a rate that accumulates in a float
-    /// is a desynchronisation with a delay fuse in it.
-    fn appetite(i: &Install) -> Qty {
-        let Some(item) = i.proto.extracts() else { return 0 };
+    /// What one head's design could lift of one item in a second, before the
+    /// ground has its say. Integer throughout, because a rate that accumulates
+    /// in a float is a desynchronisation with a delay fuse in it.
+    fn appetite(i: &Install, item: &str) -> Qty {
         let Some(m) = &i.lowered else { return 0 };
         let give = m.gives_of(item);
         if m.cycle == 0 {
@@ -567,19 +603,27 @@ impl World {
     /// Deterministic, because ids are handed out by replaying the log and
     /// every replica replays the same one. Called from the two places that can
     /// change the answer -- a placement and a removal -- and nowhere else.
-    fn reprice(&mut self) {
-        let ground: Vec<(Id, Qty)> =
-            self.deposits.iter().map(|d| (d.id, d.yields)).collect();
-        for (did, yields) in ground {
+    pub fn reprice(&mut self) {
+        // Every head starts with nothing: one that has been moved off its seam,
+        // or redesigned to draw something else, must lose what it had.
+        for i in self.installs.iter_mut().filter(|i| i.proto.digs()) {
+            i.ground = None;
+        }
+        let ground: Vec<(Id, String, Qty)> = self
+            .deposits
+            .iter()
+            .map(|d| (d.id, d.item.clone(), d.yields))
+            .collect();
+        for (did, item, yields) in ground {
             let Some(d) = self.deposits.iter().find(|d| d.id == did) else { continue };
             let ids: Vec<Id> = self.worked(d).iter().map(|i| i.id).collect();
             let mut left = yields;
             for id in ids {
                 let Some(k) = self.installs.iter().position(|i| i.id == id) else { continue };
-                let want = Self::appetite(&self.installs[k]);
+                let want = Self::appetite(&self.installs[k], &item);
                 let share = want.min(left);
                 left -= share;
-                self.installs[k].rated = Some(share);
+                self.installs[k].ground = Some((item.clone(), share));
             }
         }
     }
@@ -689,6 +733,7 @@ impl World {
                 Spec::Sink { item: None, .. } | Spec::Storage { .. } => item,
                 _ => None,
             },
+            ground: None,
             rated: None,
             design,
             lowered,
@@ -704,42 +749,39 @@ impl World {
         // machine is how well you take it, so a head in the middle of an empty
         // field is a refusal with a reason on it rather than a building that
         // quietly produces nothing.
-        if let Some(item) = proto.extracts() {
-            let Some(d) = self.ground(item, x, y, w, h) else {
+        if proto.digs() {
+            // Only that there is *something* under it. Which of the things it
+            // draws it will actually get is a question about the design, and an
+            // empty chassis has no design yet -- that is the whole point of
+            // placing one.
+            let Some(d) = self.any_ground(x, y, w, h) else {
                 return Err(format!(
-                    "a {} has to stand on {}, and there is none here",
-                    proto.title,
-                    match item {
-                        "IronOre" => "an ore body",
-                        "Coal" => "a coal seam",
-                        "Water" => "a water table",
-                        "Crude" => "a crude field",
-                        "IronBillet" => "billet stock",
-                        other => other,
-                    }
+                    "an {} has to stand on ground, and there is none here",
+                    proto.title.to_lowercase()
                 ));
             };
-            // What is left of it, so that a head placed on ground somebody has
+            // What is left of it, so that a head put on ground somebody has
             // already drained is refused where the player can see it rather
-            // than standing there turning at nothing.
-            let taken: Qty = self.worked(d).iter().map(|i| Self::appetite(i)).sum();
-            if taken >= d.yields {
-                return Err(format!(
-                    "this {} is already spoken for: {} of {} a second",
-                    d.title(),
-                    taken.min(d.yields),
-                    d.yields
-                ));
+            // than standing there turning at nothing. Only checked when the
+            // head has a design to be turned away for.
+            if let Some(item) = inst.draws().iter().find(|it| **it == d.item) {
+                let taken: Qty =
+                    self.worked(d).iter().map(|i| Self::appetite(i, item)).sum();
+                if taken >= d.yields {
+                    return Err(format!(
+                        "this {} is already spoken for: {} of {} a second",
+                        d.title(),
+                        taken.min(d.yields),
+                        d.yields
+                    ));
+                }
             }
-            // A placeholder. `reprice` below hands out the real share once the
-            // building is actually standing there.
-            inst.rated = Some(0);
         }
         inst.name = format!("{}{}", proto.short, id);
-        let extracts = inst.proto.extracts().is_some();
+        let digs = inst.proto.digs();
         self.installs.push(inst);
         self.next_id += 1;
-        if extracts {
+        if digs {
             self.reprice();
         }
         Ok(id)
@@ -767,7 +809,7 @@ impl World {
         self.hauls.retain(|h| h.from != id && h.to != id);
         // Taking a head down gives its share of the seam back to whatever is
         // still standing on it.
-        if gone.proto.extracts().is_some() {
+        if gone.proto.digs() {
             self.reprice();
         }
         Ok(gone)
@@ -1162,8 +1204,20 @@ impl World {
                             // A head standing on ground that is already fully
                             // worked. Saying so is the difference between a
                             // puzzle and a bug.
-                            Some(i) if i.proto.extracts().is_some() => {
-                                "the ground under it is already spoken for".to_string()
+                            Some(i) if i.proto.digs() && i.design.is_some() => {
+                                match self.any_ground(i.x, i.y, i.size().0, i.size().1) {
+                                    // Designed for something that is not
+                                    // underneath it. Five prototypes used to
+                                    // make this impossible by making it
+                                    // unspellable; one chassis makes it a
+                                    // mistake you can make and be told about.
+                                    Some(d) => format!(
+                                        "it is standing on {} and is not designed to draw {}",
+                                        d.title(),
+                                        lower::item_title(&d.item)
+                                    ),
+                                    None => "it is not standing on anything".to_string(),
+                                }
                             }
                             Some(i) if i.proto.role.designed() && i.design.is_none() => {
                                 "nothing has been designed inside it yet".to_string()
@@ -1359,6 +1413,11 @@ impl World {
             }
             v.extend_from_slice(i.item.as_deref().unwrap_or("-").as_bytes());
             v.extend_from_slice(&i.rated.unwrap_or(0).to_le_bytes());
+            if let Some((item, cap)) = &i.ground {
+                v.extend_from_slice(item.as_bytes());
+                v.extend_from_slice(&cap.to_le_bytes());
+            }
+            v.push(0xf5);
             if let Some(d) = &i.design {
                 v.extend_from_slice(d.emit().as_bytes());
             }
@@ -1419,6 +1478,12 @@ impl World {
                                 .set("proto", i.proto.tag)
                                 .set("title", i.proto.title)
                                 .set("role", i.proto.role.word())
+                                // Whether this is a thing with an inside. The
+                                // client should not have to know which roles
+                                // those are -- and an empty one still has an
+                                // inside, which is the whole point of being
+                                // able to open it.
+                                .set("designed", i.proto.role.designed())
                                 .set("name", i.name.clone())
                                 .set("x", i.x as i64)
                                 .set("y", i.y as i64)
@@ -1427,6 +1492,17 @@ impl World {
                                 .set("face", i.face as i64)
                                 .set("item", i.item.clone())
                                 .set("rated", i.rated.map(|q| Json::big(q as u128)))
+                                // What it is lifting out of the ground, if it
+                                // is lifting anything.
+                                .set(
+                                    "ground",
+                                    i.ground.as_ref().map(|(item, cap)| {
+                                        Json::obj()
+                                            .set("item", item.clone())
+                                            .set("title", lower::item_title(item))
+                                            .set("perSecond", Json::big(*cap as u128))
+                                    }),
+                                )
                                 .set(
                                     "capacity",
                                     (i.proto.role == Role::Storage)
@@ -1436,6 +1512,13 @@ impl World {
                                 .set("placedBy", i.by as i64)
                                 .set("editor", i.editor.map(|p| Json::Int(p as i128)))
                                 .set("hasDraft", i.draft.is_some())
+                                // Whether there is a design in there at all,
+                                // said out loud rather than inferred from
+                                // whether one was *sent*. A frame withholds
+                                // every design and a chassis has none, and a
+                                // replica rebuilding a snapshot has to be able
+                                // to tell those two apart -- see `from_json`.
+                                .set("hasDesign", i.design.is_some())
                                 .set(
                                     "draft",
                                     match (&i.draft, designs) {
@@ -1547,8 +1630,12 @@ impl World {
                             // panel can say "nothing is" or "all of it is"
                             // rather than leaving the player to work it out.
                             let on = self.worked(d);
-                            let taken: Qty =
-                                on.iter().map(|i| i.rated.unwrap_or(0)).sum();
+                            let taken: Qty = on
+                                .iter()
+                                .filter_map(|i| i.ground.as_ref())
+                                .filter(|(item, _)| *item == d.item)
+                                .map(|(_, cap)| *cap)
+                                .sum();
                             d.to_json()
                                 .set(
                                     "worked",
@@ -1606,13 +1693,22 @@ impl World {
         for e in j.at("installs").as_arr() {
             let tag = e.at("proto").as_str().ok_or("an installation has no prototype")?;
             let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
+            // A machine that says it has a design and did not send one is a
+            // frame being passed off as a snapshot. A machine that says it has
+            // none is an empty chassis, which is what every placement is since
+            // experiment 13 -- and refusing *that* was a lockout: one empty
+            // steam plant in one room and nobody could enter the campaign
+            // again, because every join rebuilds every replica from a
+            // snapshot. Defaulted to `true` so a document that predates the
+            // field is read as strictly as it used to be.
+            let claims = e.at("hasDesign").as_bool().unwrap_or(true);
             let design = match e.at("design") {
                 // A machine without its design is not a machine this replica
                 // can rebuild, and quietly substituting the catalogue's would
                 // be the worst kind of desynchronisation: one that looks
                 // right. Frames leave the designs out on purpose; snapshots
                 // never do, and this is what tells them apart.
-                Json::Null if p.role.designed() => {
+                Json::Null if p.role.designed() && claims => {
                     return Err(format!("`{tag}` arrived without its design"))
                 }
                 Json::Null => None,
@@ -1640,6 +1736,11 @@ impl World {
                 y: e.at("y").as_i128().unwrap_or(0) as i32,
                 face: e.at("face").as_u64().unwrap_or(0) as u8,
                 item: e.at("item").as_str().map(str::to_string),
+                // Not read back: what a head is lifting is derived from the
+                // ground, the design and who got there first, and `reprice`
+                // below works it out again. Trusting a sender's arithmetic
+                // would be checking that they can serialise.
+                ground: None,
                 rated: e.at("rated").as_u64(),
                 design,
                 lowered,
@@ -1652,6 +1753,9 @@ impl World {
                 by: e.at("placedBy").as_u64().unwrap_or(0) as PlayerId,
             });
         }
+        // Every head's share of the ground, worked out again from what is
+        // actually standing where.
+        w.reprice();
         for e in j.at("hauls").as_arr() {
             let tag = e.at("proto").as_str().ok_or("a transport has no prototype")?;
             let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
@@ -1704,6 +1808,25 @@ impl Build {
 
 /// A machine prototype's design, freshly parsed. Every placed machine gets its
 /// own copy, and they diverge from that moment on.
+/// A working extraction head that draws one item.
+///
+/// Not in the catalogue and not reachable from the game: the five designs
+/// these come from are what the five extraction prototypes used to be, and
+/// they are kept so that the headless proofs can build a factory without
+/// drawing one component at a time. A player designs their own -- that is the
+/// whole of experiment 13's third section.
+pub fn head_design(item: &str) -> Result<Design, String> {
+    let src = match item {
+        "IronOre" => include_str!("../../designs/heads/oremine.machine"),
+        "Coal" => include_str!("../../designs/heads/coalpit.machine"),
+        "Water" => include_str!("../../designs/heads/waterpump.machine"),
+        "Crude" => include_str!("../../designs/heads/crudewell.machine"),
+        "IronBillet" => include_str!("../../designs/heads/billetcaster.machine"),
+        other => return Err(format!("nothing here digs {other}")),
+    };
+    Design::parse(src)
+}
+
 pub fn stock_design(tag: &str) -> Result<Design, String> {
     let p = proto(tag).ok_or(format!("there is no `{tag}` in the catalogue"))?;
     let src = p.design_source().ok_or(format!("a {} has no design", p.title))?;

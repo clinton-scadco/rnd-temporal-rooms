@@ -24,7 +24,9 @@ const base = `http://127.0.0.1:${port}`;
 const here = dirname(fileURLToPath(import.meta.url));
 
 let failures = 0;
+let checks = 0;
 const ok = (cond, what) => {
+  checks++;
   if (!cond) { console.log(`  FAIL  ${what}`); failures++; }
   return cond;
 };
@@ -62,6 +64,10 @@ function makeEl(tagName) {
     tagName: String(tagName).toUpperCase(),
     className: '', textContent: '', value: '', hidden: false, title: '',
     disabled: false,
+    // Enough of a `<select>` that the bench's family filter behaves the way it
+    // does in a page: options come from the HTML written into it, and the
+    // value is whatever was selected.
+    options: [],
     style: { cssText: '', setProperty() {}, visibility: '' },
     dataset: {},
     children: [], parent: null,
@@ -99,18 +105,37 @@ function makeEl(tagName) {
       return out;
     },
     getBoundingClientRect() { return { left: 0, top: 0, width: 900, height: 600 }; },
-    getContext() { return (e._ctx ||= stubCtx()); },
+    // There is no WebGL here, and saying so is better than pretending: the
+    // machine bench asks for `webgl2`, gets nothing, and reports that it could
+    // not draw -- which is the path it is written for, and which leaves its
+    // component palette and its panels running for real.
+    getContext(kind) {
+      if (String(kind).startsWith('webgl')) return null;
+      return (e._ctx ||= stubCtx());
+    },
   };
   Object.defineProperty(e, 'innerHTML', {
     get() { return e._html; },
-    set(v) { e._html = String(v); e.children = []; e._q = new Map(); },
+    set(v) {
+      e._html = String(v);
+      e.children = [];
+      e._q = new Map();
+      if (e.tagName === 'SELECT') {
+        e.options = [...String(v).matchAll(/<option[^>]*>([^<]*)<\/option>/g)]
+          .map(m => ({ value: m[1], text: m[1] }));
+        if (e.options.length && !e.value) e.value = e.options[0].value;
+      }
+    },
   });
   return e;
 }
 
 const els = new Map();
+// The two ids the page spells as something other than a div. Everything the
+// client touches by id is a box it writes HTML into, except these.
+const TAGS = { family: 'select', seed: 'input', whoami: 'input' };
 const el = id => {
-  if (!els.has(id)) els.set(id, makeEl('div'));
+  if (!els.has(id)) els.set(id, makeEl(TAGS[id] || 'div'));
   return els.get(id);
 };
 
@@ -157,6 +182,12 @@ const post = async (path, body) => {
   return r.json();
 };
 const get = async path => (await fetch(base + path)).json();
+
+// The client modules fetch relative URLs, the way a page does. Node has no
+// origin to resolve one against, so it is given one -- and it is given it here
+// rather than around whichever block needs it, because more than one does now.
+const bare = globalThis.fetch;
+globalThis.fetch = (u, o) => bare(String(u).startsWith('http') ? u : base + u, o);
 
 async function main() {
   console.log(`prototype 3's client, against ${base}`);
@@ -273,6 +304,14 @@ async function main() {
     'a shut room is drawn as shut'
   );
 
+  // The finished designs a harness needs to build a working factory. See
+  // `mp::net::reference`: nothing in the game reads this, and a player places
+  // an empty machine and designs it.
+  const book = await get('/api/reference');
+  ok(book.ok && book.designs.length > 0, `${book.designs.length} reference designs`);
+  const designOf = (tag, draws) =>
+    (book.designs.find(d => d.proto === tag && (!draws || d.draws === draws)) || {}).design;
+
   // ---- building, through the same door the client uses
   //
   // Coal Basin comes with ground rather than with a working pit, so the head
@@ -284,11 +323,11 @@ async function main() {
   const dig = await post('/api/cmd', {
     code: 'basin', player: me.player,
     type: 'PlaceMachine',
-    payload: { proto: 'coalpit', x: coal.x, y: coal.y, face: 0, example: true },
+    payload: { proto: 'head', x: coal.x, y: coal.y, face: 0, design: designOf('head', 'Coal') },
   });
   ok(dig.ok, 'a coal head on the seam' + (dig.ok ? '' : `: ${dig.error}`));
   const dug = await get(`/api/state?code=basin&player=${me.player}`);
-  const seam = dug.world.installs.find(i => i.proto === 'coalpit');
+  const seam = dug.world.installs.find(i => i.proto === 'head');
   ok(!!seam, 'and it is standing there');
   const worked = dug.world.deposits.find(d => d.id === coal.id);
   ok(worked.taken > 0 && worked.spare < worked.yields,
@@ -297,9 +336,9 @@ async function main() {
 
   const offGround = await post('/api/cmd', {
     code: 'basin', player: me.player,
-    type: 'PlaceMachine', payload: { proto: 'oremine', x: 20, y: 20, face: 0, example: true },
+    type: 'PlaceMachine', payload: { proto: 'head', x: 20, y: 20, face: 0 },
   });
-  ok(!offGround.ok && /stand on/.test(offGround.error),
+  ok(!offGround.ok && /stand on ground/.test(offGround.error),
     `a head with nothing under it is refused: ${offGround.error}`);
 
   const put = await post('/api/cmd', {
@@ -318,7 +357,8 @@ async function main() {
 
   const nope = await post('/api/cmd', {
     code: 'basin', player: me.player,
-    type: 'PlaceMachine', payload: { proto: 'stamping', x: 20, y: 20, face: 0, example: true },
+    type: 'PlaceMachine',
+    payload: { proto: 'stamping', x: 20, y: 20, face: 0, design: designOf('stamping') },
   });
   ok(!nope.ok && nope.refused, 'a locked machine is refused rather than dropped');
   ok(String(nope.error).includes('unlocked'), 'and the refusal says why');
@@ -362,16 +402,18 @@ async function main() {
   });
 
   const cat2 = await get('/api/catalogue');
-  ok(cat2.protos.filter(p => p.example).length > 0,
-    'the catalogue says which prototypes have a worked example');
+  ok(cat2.protos.filter(p => p.designed).length > 0,
+    'the catalogue says which prototypes have an inside');
+  ok(cat2.protos.filter(p => p.needsGround).length === 1,
+    'and there is exactly one chassis that stands on ground');
 
   // ---- the shelf, end to end
   const plant = await post('/api/cmd', {
     code: 'basin', player: me.player,
     type: 'PlaceMachine',
-    payload: { proto: 'steamplant', x: 14, y: 2, face: 0, example: true },
+    payload: { proto: 'steamplant', x: 14, y: 2, face: 0, design: designOf('steamplant') },
   });
-  ok(plant.ok, 'the worked example can be placed by name');
+  ok(plant.ok, 'a machine placed with a design runs' + (plant.ok ? '' : `: ${plant.error}`));
   const now = await get(`/api/state?code=basin&player=${me.player}`);
   const machine = now.world.installs.find(i => i.proto === 'steamplant');
   const saved = await post('/api/shelf', {
@@ -406,6 +448,159 @@ async function main() {
     do: 'open', player: me.player, from: 'basin', to: 'basin', item: 'Coal', fleet: 'train',
   });
   ok(!nolane.ok, 'a lane the map does not have is refused');
+
+  // ---- a mining head, built through the client
+  //
+  // The one loop this campaign cannot do without: a room comes with ground
+  // rather than with a working pit, so the first thing anybody does in every
+  // one of the five is put a head on a seam and design what goes inside it.
+  // Everything below is that, run through the modules the page runs.
+  {
+    const room = await import(pathTo('web/room/net.js'));
+    const panels = await import(pathTo('web/room/panels.js'));
+    const machine = await import(pathTo('web/room/bench.js'));
+    room.state.code = 'basin';
+    room.state.player = me.player;
+    // The client holds one frame and draws from it, so the harness does the
+    // same: set `state.view`, then read the world out of it.
+    const look = async () =>
+      (room.state.view = await get(`/api/state?code=basin&player=${me.player}`)).world;
+    const send = (type, payload) =>
+      post('/api/cmd', { code: 'basin', player: me.player, type, payload });
+
+    // The room's palette offers the chassis, and says it needs ground.
+    let picked = null;
+    panels.renderPalette(cat2, tag => { picked = tag; });
+    const chassisButton = el('palette').children.find(b => b.dataset.proto === 'head');
+    ok(!!chassisButton, 'the room palette offers an extraction head');
+    ok(/on ground/.test(chassisButton.innerHTML), 'and says it has to stand on ground');
+    chassisButton.onclick();
+    ok(picked === 'head', 'clicking it asks for a head and nothing else');
+
+    // Down it goes, empty, on the second coal seam.
+    let world = await look();
+    const seam2 = world.deposits.filter(d => d.item === 'Coal').pop();
+    const down = await send('PlaceMachine', { proto: 'head', x: seam2.x, y: seam2.y, face: 0 });
+    ok(down.ok, 'an empty head goes down on the seam' + (down.ok ? '' : `: ${down.error}`));
+    world = await look();
+    const mine = world.installs.slice(-1)[0];
+
+    // The inspector offers to design it, rather than only to open a machine
+    // that has something in it already.
+    let asked = null;
+    panels.renderInspector(mine.id, { open: i => { asked = i.id; } });
+    const acts = el('inspect').querySelectorAll('[data-act]');
+    const open = acts.find(b => b.dataset.act === 'open');
+    ok(!!open, 'an empty chassis can be opened from the inspector');
+    ok(/design it/.test(el('inspect').innerHTML), 'and the button says so: design it');
+    open.onclick();
+    ok(asked === mine.id, 'pressing it opens this one');
+
+    // The bench, with the component palette the page would draw.
+    //
+    // This is the check the play session paid for. The family filter used to
+    // default to whichever family sorted first -- `control` -- so opening a
+    // head showed a valve and a clutch, and there was, as far as anybody could
+    // tell, nothing in the game to design a mining head out of.
+    // There is no WebGL here, so the 3D view reports that it cannot draw and
+    // everything else in the bench goes on working -- which is the half this
+    // is about.
+    try {
+      await machine.init({ onLeave() {} });
+      ok(true, 'the machine bench wires up');
+    } catch (e) {
+      ok(false, `the machine bench would not open: ${e && e.message}`);
+    }
+    const shown = () => el('parts').children
+      .filter(c => c.dataset && c.dataset.kind)
+      .map(c => c.dataset.kind);
+    const kinds = shown();
+    ok(kinds.length >= 30, `the bench offers the whole vocabulary: ${kinds.length} components`);
+    for (const need of ['inlet', 'pump', 'outlet', 'chute', 'hopper', 'motor']) {
+      ok(kinds.includes(need), `\`${need}\` is on screen without touching the filter`);
+    }
+    ok(el('family').value === 'everything', 'because the filter opens on everything');
+    // And the filter still filters.
+    el('family').value = 'source';
+    el('family').onchange();
+    const sources = shown();
+    ok(sources.includes('inlet') && !sources.includes('outlet'),
+      `choosing a family narrows it: ${sources.join(', ')}`);
+    el('family').value = 'everything';
+    el('family').onchange();
+
+    // Now design it, with the commands the bench sends: a draft, two
+    // components, the one word that says what it is drawing, a wire, a commit.
+    const step = async (type, payload, what) => {
+      const r = await send(type, payload);
+      ok(r.ok, what + (r.ok ? '' : `: ${r.error}`));
+      return r;
+    };
+    await step('OpenDesign', { id: mine.id }, 'a draft comes out');
+    world = await look();
+    ok(world.installs.find(i => i.id === mine.id).hasDraft, 'and the room says it is open');
+    await step('PlaceComponent', { id: mine.id, kind: 'inlet', x: 0, y: 0, z: 0 },
+      'a material inlet goes in');
+    await step('PlaceComponent', { id: mine.id, kind: 'outlet', x: 4, y: 0, z: 0 },
+      'and an outlet for it to leave by');
+    const form = () => post('/api/form',
+      { code: 'basin', player: me.player, id: mine.id, draft: true });
+    const draft = (await form()).design;
+    const inlet = draft.units.find(u => u.kind === 'inlet').name;
+    const outlet = draft.units.find(u => u.kind === 'outlet').name;
+    ok(/^IN\d+$/.test(inlet), `the host named it, not the client: ${inlet}`);
+    await step('TuneComponent', { id: mine.id, unit: inlet, field: 'subst', value: 'coal' },
+      'set to draw coal');
+    await step('ConnectComponent', {
+      id: mine.id, from: inlet, fromPort: 'out', to: outlet, toPort: 'solid',
+    }, 'wired to the outlet');
+    await step('CommitMachineDesign', { id: mine.id, design: (await form()).design },
+      'and committed');
+
+    world = await look();
+    const built = world.installs.find(i => i.id === mine.id);
+    ok(built.makes.includes('Coal'), `it makes coal: ${JSON.stringify(built.makes)}`);
+    ok(!built.wants.includes('Coal'), 'without asking a bay for what it is digging');
+    ok(built.ground && built.ground.perSecond > 0,
+      `and the seam gave it ${built.ground && built.ground.perSecond} a second`);
+    ok(!built.hasDraft, 'the draft is gone');
+    ok((built.ports || []).length > 0, 'and it has the port its design gave it');
+
+    panels.renderInspector(mine.id, { open() {} });
+    ok(/open the machine/.test(el('inspect').innerHTML),
+      'and the inspector now offers to open it rather than to design it');
+  }
+
+  // ---- an empty chassis does not shut the door
+  //
+  // Joining rebuilds every one of a player's five replicas from the host's
+  // snapshot. A machine that has been put down and not designed yet is the
+  // most ordinary state in the game, and a snapshot that could not carry one
+  // meant that placing an empty steam plant locked *everybody* out of the
+  // campaign until the server was restarted -- the player who placed it
+  // included, on their next refresh.
+  {
+    const empty = await post('/api/cmd', {
+      code: 'basin', player: me.player,
+      type: 'PlaceMachine', payload: { proto: 'steamplant', x: 26, y: 26, face: 0 },
+    });
+    ok(empty.ok, 'an empty steam plant is placed' + (empty.ok ? '' : `: ${empty.error}`));
+
+    const key = 'seat-not-locked-out-' + Date.now();
+    const arriving = await post('/api/enter', { name: 'Dee', key });
+    ok(arriving.ok, `a stranger can still enter: ${arriving.error || arriving.player}`);
+    const back = await post('/api/enter', { key, back: true });
+    ok(back.ok && back.rejoined, `and a refresh still comes back: ${back.error || 'ok'}`);
+
+    const frame = await get(`/api/state?code=basin&player=${arriving.player}`);
+    ok(frame.ok, 'the room answers the new arrival');
+    const dee = frame.players.find(p => p.id === arriving.player);
+    ok(dee && dee.mismatches === 0,
+      `whose replica agrees with the host: ${dee && dee.mismatches} mismatches`);
+    const chassis = frame.world.installs.slice(-1)[0];
+    ok(chassis && !chassis.macro && /designed/.test(chassis.idle || ''),
+      `and the chassis arrived as what it is: ${chassis && chassis.idle}`);
+  }
 
   // ---- the door
   //
@@ -563,8 +758,6 @@ async function main() {
   // loads: every import resolves, every id it reaches for exists in the page
   // it was written for, and its lobby wires up without throwing. A `fetch`
   // with no origin is the only thing Node cannot give it, so it is given one.
-  const bare = globalThis.fetch;
-  globalThis.fetch = (u, o) => bare(String(u).startsWith('http') ? u : base + u, o);
   try {
     await import(pathTo('web/camp/app.js'));
     ok(true, 'the client loads, and every id it reaches for is in the page');
@@ -578,13 +771,11 @@ async function main() {
     ok(typeof enterBtn.onclick === 'function', 'and the lobby is wired up');
   } catch (e) {
     ok(false, `the client would not load: ${e && e.message}`);
-  } finally {
-    globalThis.fetch = bare;
   }
 
   console.log(failures === 0
-    ? '\nthe client and the campaign agree about every field they share.'
-    : `\n${failures} disagreement(s).`);
+    ? `\n${checks} checks: the client and the campaign agree about every field they share.`
+    : `\n${failures} disagreement(s) in ${checks} checks.`);
   process.exit(failures === 0 ? 0 : 1);
 }
 

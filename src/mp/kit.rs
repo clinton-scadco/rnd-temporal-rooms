@@ -66,22 +66,35 @@ impl Role {
 /// What the prototype is, beyond a box with a name on it.
 #[derive(Clone, Copy, Debug)]
 pub enum Spec {
-    /// Draws one substance out of the ground it is standing on.
+    /// A machine that may stand on a [`Deposit`] and draw out of it.
     ///
     /// It used to be `Source { item, per_second }` -- a building that produced
     /// because the catalogue said it did, standing anywhere, at a rate nobody
     /// could argue with. That was the last magical object in the world, and
     /// note 1 of the play session went straight at it.
     ///
-    /// So the *world* now offers the opportunity -- a [`Deposit`] in the
-    /// ground, with a number on it -- and this is the machine that takes it.
-    /// It runs a design like any other machine, so how much of the seam you
-    /// actually get is a question about the head you built; and the seam caps
-    /// it, so a better head on a thin seam buys you nothing. Which of those
-    /// two is binding is the decision the room is really asking about.
+    /// So the *world* offers the opportunity -- ground, with a number on it --
+    /// and this is the thing you build to take it. How much of the seam you
+    /// actually get is a question about the head you designed; the seam caps
+    /// it, so a better head on a thin one buys you nothing. Which of the two is
+    /// binding is the decision the room is really asking about.
+    ///
+    /// # Why there is only one of these
+    ///
+    /// There were five: an ore mine, a coal pit, a water intake, a caster and
+    /// a well. Once a head became a thing you *design*, the difference between
+    /// them stopped existing -- an empty coal pit and an empty ore mine are the
+    /// same empty box, and what separates them is one word inside the design
+    /// (`draws coal` against `draws ore`). Five prototypes for one chassis was
+    /// five ways to spell the same building.
+    ///
+    /// So there is one, and what it lifts is whatever its inlets are set to
+    /// draw that the ground underneath actually has. Put a head on a coal seam
+    /// and design it to draw ore and it will tell you it is standing on the
+    /// wrong thing.
     ///
     /// [`Deposit`]: super::world::Deposit
-    Extract { item: &'static str, design: &'static str },
+    Extract,
     /// Holds this much.
     Storage { capacity: Qty },
     /// Runs whatever design it was placed with.
@@ -132,69 +145,16 @@ pub struct Proto {
 pub static PROTOS: &[Proto] = &[
     // ---- extraction --------------------------------------------------
     Proto {
-        tag: "oremine",
-        short: "Mine",
-        title: "Ore Head",
+        tag: "head",
+        short: "Head",
+        title: "Extraction Head",
         role: Role::Source,
-        w: 4,
-        h: 4,
-        spec: Spec::Extract {
-            item: "IronOre",
-            design: include_str!("../../designs/heads/oremine.machine"),
-        },
-        blurb: "Stands on an ore body. One inlet is 100 a second; the body decides whether it gets it.",
-    },
-    Proto {
-        tag: "waterpump",
-        short: "Intake",
-        title: "Water Intake",
-        role: Role::Source,
-        w: 3,
-        h: 3,
-        spec: Spec::Extract {
-            item: "Water",
-            design: include_str!("../../designs/heads/waterpump.machine"),
-        },
-        blurb: "Stands on a water table. Two inlets is 400 a second, and a compact plant drinks 160.",
-    },
-    Proto {
-        tag: "coalpit",
-        short: "Coal",
-        title: "Coal Head",
-        role: Role::Source,
-        w: 4,
-        h: 3,
-        spec: Spec::Extract {
-            item: "Coal",
-            design: include_str!("../../designs/heads/coalpit.machine"),
-        },
-        blurb: "Stands on a coal seam. One inlet is 100 a second, or two and a half compact plants.",
-    },
-    Proto {
-        tag: "billetcaster",
-        short: "Caster",
-        title: "Billet Caster",
-        role: Role::Source,
-        w: 4,
-        h: 3,
-        spec: Spec::Extract {
-            item: "IronBillet",
-            design: include_str!("../../designs/heads/billetcaster.machine"),
-        },
-        blurb: "Stands on billet stock. 100 a second, ready to be pressed into something.",
-    },
-    Proto {
-        tag: "crudewell",
-        short: "Well",
-        title: "Crude Well",
-        role: Role::Source,
-        w: 3,
-        h: 3,
-        spec: Spec::Extract {
-            item: "Crude",
-            design: include_str!("../../designs/heads/crudewell.machine"),
-        },
-        blurb: "Stands on a crude field. One inlet is 200 a second, for anyone with a refinery.",
+        // Only ever the empty box: once there is a design inside it, the
+        // footprint is the design's, like every other machine.
+        w: 2,
+        h: 2,
+        spec: Spec::Extract,
+        blurb: "Stands on ground and draws out of it. What it lifts, and how much, is what you design into it.",
     },
     // ---- storage -----------------------------------------------------
     Proto {
@@ -360,9 +320,7 @@ impl Proto {
     /// say so than make the player place one to find out.
     pub fn rate_note(&self) -> String {
         match self.spec {
-            Spec::Extract { item, .. } => {
-                format!("draws {} out of the ground", super::lower::item_title(item))
-            }
+            Spec::Extract => "empty until you design it, and it stands on ground".to_string(),
             Spec::Storage { capacity } => format!("holds {capacity}"),
             Spec::Sink { count, item } => match item {
                 Some(i) => format!("takes {} {}/s", count * super::SIM_TICK_RATE, super::lower::item_title(i)),
@@ -378,17 +336,17 @@ impl Proto {
     /// The design a freshly placed machine owns a copy of.
     pub fn design_source(&self) -> Option<&'static str> {
         match self.spec {
-            Spec::Machine { design } | Spec::Extract { design, .. } => Some(design),
+            Spec::Machine { design } => Some(design),
             _ => None,
         }
     }
 
-    /// The substance this prototype draws out of the ground, if it draws one.
-    pub fn extracts(&self) -> Option<&'static str> {
-        match self.spec {
-            Spec::Extract { item, .. } => Some(item),
-            _ => None,
-        }
+    /// Whether this prototype is a thing you stand on ground.
+    ///
+    /// It no longer says *what* it draws: that is one word inside the design,
+    /// and asking the catalogue would be asking the wrong object.
+    pub fn digs(&self) -> bool {
+        matches!(self.spec, Spec::Extract)
     }
 
     pub fn to_json(&self) -> Json {
@@ -400,15 +358,14 @@ impl Proto {
             .set("w", self.w as i64)
             .set("h", self.h as i64)
             .set("blurb", self.blurb)
+            // Whether it is something you design. The client should not have to
+            // know which roles those are.
+            .set("designed", self.role.designed())
             .set("note", self.rate_note());
         match self.spec {
-            Spec::Extract { item, .. } => j
-                .set("item", item)
-                .set("example", true)
-                // The palette has to say what it needs to stand on, or the
-                // first thing a player learns about extraction is a refusal.
-                .set("extracts", item)
-                .set("needsDeposit", true),
+            // The palette has to say that it needs ground, or the first thing
+            // anybody learns about extraction is a refusal.
+            Spec::Extract => j.set("needsGround", true),
             Spec::Storage { capacity } => j.set("capacity", Json::big(capacity as u128)),
             Spec::Sink { count, item } => j
                 .set("count", Json::big(count as u128))
@@ -424,7 +381,6 @@ impl Proto {
                 .set("speed", Json::big(speed as u128))
                 .set("base", base),
             Spec::Machine { design } => {
-                let j = j.set("example", true);
                 let d = crate::machine::design::Design::parse(design).ok();
                 let m = d.as_ref().and_then(|d| super::lower::lower(d).ok());
                 let (w, h) = m

@@ -89,27 +89,61 @@ function editorName(id) {
 
 // --------------------------------------------------------------- the palette
 
+/// The first entry of the family filter, and its default: the whole
+/// vocabulary, under one heading per family.
+///
+/// It used to default to whichever family sorted first, which is `control` --
+/// so opening an empty chassis showed a valve and a clutch and nothing else.
+/// That reads exactly like a bug, and for the machine experiment 13 added it
+/// *was* one: a player who puts an extraction head on a seam and opens it to
+/// draw a mining head is looking for an inlet and an outlet, and the two
+/// things on screen were a valve and a clutch. Nothing may be a dropdown away
+/// when it is the only way to make the game's first machine.
+const EVERYTHING = 'everything';
+
 function palette() {
   const cat = net.state.parts;
   if (!cat) return;
   const fam = $('family');
+  const fams = [...new Set(cat.parts.map(p => p.family))].sort();
   if (!fam.options.length) {
-    const fams = [...new Set(cat.parts.map(p => p.family))].sort();
-    fam.innerHTML = fams.map(f => `<option>${f}</option>`).join('');
+    fam.innerHTML = [EVERYTHING, ...fams].map(f => `<option>${f}</option>`).join('');
+    fam.value = EVERYTHING;
   }
   const box = $('parts');
   box.innerHTML = '';
-  for (const p of cat.parts.filter(p => p.family === fam.value)) {
-    const b = document.createElement('button');
-    b.title = p.blurb;
-    b.innerHTML = `<span>${p.title}</span><span class="n">${p.w}&times;${p.h}</span>`;
-    b.onclick = () => {
-      bench.holding = bench.holding === p.kind ? null : p.kind;
-      bench.face = null;
-      hint();
-      [...box.children].forEach(c => c.classList.toggle('on', c === b && bench.holding));
-    };
-    box.appendChild(b);
+  const showing = fam.value === EVERYTHING ? fams : [fam.value];
+  for (const f of showing) {
+    const parts = cat.parts.filter(p => p.family === f);
+    if (!parts.length) continue;
+    // A heading per family, so the whole vocabulary being on screen at once
+    // is still readable rather than thirty-eight buttons in a column.
+    if (showing.length > 1) {
+      const h = document.createElement('h3');
+      h.className = 'fam';
+      h.textContent = f;
+      box.appendChild(h);
+    }
+    for (const p of parts) {
+      const b = document.createElement('button');
+      b.title = p.locked
+        ? p.blurb + '\n\nnot unlocked yet -- ' + (p.opens || 'it is not available here')
+        : p.blurb;
+      b.dataset.kind = p.kind;
+      // A locked component is shown rather than hidden, the same way a locked
+      // prototype is in the room's palette: a progression nobody can look
+      // forward to is a progression nobody notices.
+      if (p.locked) b.classList.add('locked');
+      b.innerHTML = `<span>${p.title}</span><span class="n">${p.w}&times;${p.h}</span>`;
+      b.onclick = () => {
+        if (p.locked) return toast(`${p.title} has not been unlocked yet`);
+        bench.holding = bench.holding === p.kind ? null : p.kind;
+        bench.face = null;
+        hint();
+        [...box.children].forEach(c => c.classList.toggle('on', c === b && bench.holding));
+      };
+      box.appendChild(b);
+    }
   }
 }
 
@@ -146,7 +180,21 @@ function info(i) {
   const m = i.macro || {};
   const sel = bench.sel && design ? design.units.find(u => u.name === bench.sel) : null;
   const live = state && state.ok ? state.units.find(u => u.name === bench.sel) : null;
-  let html =
+  let html = '';
+  // An empty chassis is the one thing on screen that says nothing about
+  // itself, and since experiment 13 it is also the *first* thing anybody
+  // opens: a room comes with ground rather than with a working pit. So it
+  // says what it is short of.
+  if (design && !design.units.length) {
+    html += '<div class="muted" style="font-size:11px;margin-bottom:8px">' +
+      (i.role === 'source'
+        ? 'Nothing in here yet. A head that works the ground under it is an '
+          + '<b>inlet</b> (or a <b>pump</b>, for water) set to draw what is down there, '
+          + 'wired to an <b>outlet</b> for it to leave by.'
+        : 'Nothing in here yet. Take a draft, then place components and wire them up.')
+      + '</div>';
+  }
+  html +=
     `<div class="row"><span>components</span><span>${design ? design.units.length : 0}</span></div>` +
     `<div class="row"><span>connections</span><span>${design ? design.wires.length : 0}</span></div>` +
     `<div class="row"><span>cycle</span><span>${(m.cycleSeconds || 0).toFixed(1)}s</span></div>` +
