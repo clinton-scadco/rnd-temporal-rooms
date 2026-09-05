@@ -1512,6 +1512,22 @@ impl World {
                                 .set("placedBy", i.by as i64)
                                 .set("editor", i.editor.map(|p| Json::Int(p as i128)))
                                 .set("hasDraft", i.draft.is_some())
+                                // What the draft *is*, in one number.
+                                //
+                                // A frame does not carry designs, and the
+                                // committed macro below is a fact about the
+                                // machine that is running -- so nothing in a
+                                // frame changed when a component was placed in
+                                // a draft, and a client watching frames for a
+                                // reason to rebuild its window never found
+                                // one. Two players in the same draft saw each
+                                // other's edits when one of them committed.
+                                .set(
+                                    "draftHash",
+                                    i.draft.as_ref().map(|d| {
+                                        Json::big(super::hash64(d.emit().as_bytes()) as u128)
+                                    }),
+                                )
                                 // Whether there is a design in there at all,
                                 // said out loud rather than inferred from
                                 // whether one was *sent*. A frame withholds

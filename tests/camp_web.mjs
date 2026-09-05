@@ -569,6 +569,37 @@ async function main() {
     panels.renderInspector(mine.id, { open() {} });
     ok(/open the machine/.test(el('inspect').innerHTML),
       'and the inspector now offers to open it rather than to design it');
+
+    // ---- the two gestures the play session could not find
+    //
+    // Everything above is the *commands* a mining head is made of, and they
+    // were all fine. What was not fine was finding them: placing was a
+    // component chosen in a list and a click on a floor with nothing under the
+    // pointer to say where it would land, and wiring was a button that only
+    // appeared once a component was selected *and* a draft had been opened by
+    // hand, behind a menu of sentences.
+    //
+    // There is no WebGL here, so the ghost itself cannot be drawn -- but what
+    // the pointer is *for* is a sentence in the bar, and the wire is a tool
+    // with a button, and both of those are on this side of the canvas.
+    const partButton = k => el('parts').children.find(c => c.dataset && c.dataset.kind === k);
+    partButton('inlet').onclick();
+    ok(machine.bench.holding === 'inlet', 'picking a component holds it');
+    ok(/click the floor/.test(el('benchhint').textContent),
+      `and the bar says what to do with it: ${el('benchhint').textContent}`);
+    ok(/Esc/.test(el('benchhint').textContent), 'and how to put it down again');
+
+    el('benchwire').onclick();
+    ok(machine.bench.wiring, 'the wire is a tool that turns on');
+    ok(!machine.bench.holding, 'and picking it up puts the component down');
+    ok(/click the component/.test(el('benchhint').textContent),
+      `the bar says where a wire starts: ${el('benchhint').textContent}`);
+    el('benchwire').onclick();
+    ok(!machine.bench.wiring && !el('benchhint').textContent, 'and it turns off again');
+
+    const page = await (await fetch(base + '/')).text();
+    ok(/id="benchwire"/.test(page), 'the page carries the wire button');
+    ok(/id="benchhint"/.test(page), 'and somewhere to say what the pointer is for');
   }
 
   // ---- an empty chassis does not shut the door

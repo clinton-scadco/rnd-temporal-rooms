@@ -145,11 +145,20 @@ const CUBE = (() => {
   return new Float32Array(c);
 })();
 
+/// The unit cube's long diagonal, as one segment. Drawn with the same shader
+/// as the boxes: `mix(lo, hi, aPos)` at the two ends of it is the two points,
+/// so one VAO draws a line between any two places in the world.
+const SEG = new Float32Array([0, 0, 0, 1, 1, 1]);
+
 const VERDICT = {
   clear: [0.30, 0.85, 0.45, 0.75],
   watch: [0.98, 0.78, 0.22, 0.85],
   bad: [0.98, 0.32, 0.30, 0.95],
 };
+
+const GOOD = [0.27, 0.77, 0.65, 0.95];
+const BAD = [0.88, 0.42, 0.42, 0.95];
+const WIRE = [0.45, 0.70, 0.98, 0.55];
 
 export const view = {
   lod: 0,
@@ -172,6 +181,30 @@ export const view = {
   levels: 1,
 };
 
+/// What the pointer is *about* to do, drawn over the plant and sent nowhere.
+///
+/// Placement in this window used to be invisible until it had happened: a
+/// component was chosen in the palette, the floor was clicked, and the only
+/// way to find out where it had landed was to look at what came back. The 2D
+/// world view has had a ghost under the pointer since the beginning and this
+/// is that idea at the inner altitude -- a box where the thing would go, a
+/// line where the wire would run, and a colour saying whether the rules will
+/// take it. None of it is geometry and none of it is a command; it is the
+/// picture of an intention, and the document changes only when the click
+/// lands.
+///
+///   ghost    { lo, hi, ok, base, face }  the component under the pointer
+///   link     { from, to, ok }            the wire being drawn
+///   targets  [{ lo, hi }]                what that wire could legally reach
+///   wires    [[from, to]]                the connections already in the draft
+export const marks = { ghost: null, link: null, targets: [], wires: [] };
+
+/// Replace some of the marks. Anything left out is left alone.
+export function mark(m) {
+  Object.assign(marks, m);
+  need = true;
+}
+
 let gl = null;
 let prog = null;
 let uni = {};
@@ -188,11 +221,21 @@ let names = [];
 // by `app.js` so that this file still knows nothing about the document.
 let edit = null;   // { onPick, onMove, onLift, onTurn, tile }
 let held = null;   // the component under the pointer, mid-drag
+let lineVaoSeg = null;
+let lastHover = '';
 
 export function ready() { return !!gl; }
 
 /// What the pointer may do to the document. `app.js` hands this in; this file
 /// still has no idea what a component is called or how one is moved.
+///
+///   onPick(name)          something in the plant was clicked
+///   onGround(x, y)        empty floor, at the storey being worked on
+///   onHover({hit, tile})  where the pointer is, when it changes tile or thing
+///   placing()             whether the caller is holding something to place
+///   onCancel()            Escape: put down whatever is being held
+///   onTurn(d) onLift(d)   R, and PageUp/PageDown
+///   level() tile(at)      which storey, and how metres become tiles
 export function authoring(hooks) {
   edit = hooks;
 }
@@ -215,6 +258,13 @@ export async function initForm(el) {
   const lb = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, lb);
   gl.bufferData(gl.ARRAY_BUFFER, CUBE, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  lineVaoSeg = gl.createVertexArray();
+  gl.bindVertexArray(lineVaoSeg);
+  const sb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, sb);
+  gl.bufferData(gl.ARRAY_BUFFER, SEG, gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
@@ -373,11 +423,19 @@ function drag() {
   canvas.addEventListener('pointerdown', e => {
     down = { x: e.clientX, y: e.clientY, b: e.button, ox: e.clientX, oy: e.clientY };
     canvas.setPointerCapture(e.pointerId);
+    // The keys below only arrive if this canvas has the focus, and nothing
+    // else in the window wants it. Clicking in the plant is the gesture that
+    // means "I am working in here", so it is also the one that takes it.
+    canvas.focus({ preventScroll: true });
     // Left button on a machine picks it up. Anything else is the camera, so
     // the orbit controls this window has always had are untouched.
     held = null;
     if (edit && e.button === 0 && !e.shiftKey) {
-      const hit = under(e);
+      // Something held in the palette wants the floor, not what is standing
+      // on it: clicking the top of a tank while holding a condenser is how a
+      // player stacks one on the other, and picking the tank instead is the
+      // window quietly refusing to place anything.
+      const hit = edit.placing && edit.placing() ? null : under(e);
       if (hit) {
         edit.onPick(hit.name);
         // Prototype 2 hands in no `onMove`, which is how a window built for
@@ -385,22 +443,35 @@ function drag() {
         // component is placed or deleted, and never slid.
         if (edit.onMove) held = { name: hit.name, from: [hit.x, hit.y, hit.z], moved: false };
       } else if (edit.onGround) {
-        // Empty floor, at whichever storey the caller is working on. This is
-        // the other half of place-and-delete: the pointer names a tile, the
-        // caller turns it into a command.
-        const at = onPlane(e, edit.level ? edit.level() : 0);
-        const t = at && edit.tile(at);
-        if (t) edit.onGround(t.x, t.y);
+        // Empty floor, at whichever storey the caller is working on: the
+        // pointer names a tile and the caller turns it into a command. Held
+        // until the button comes back up, because the same button orbits the
+        // camera -- placing on the way *down* meant that turning the view
+        // while holding a component built one every time.
+        down.ground = true;
       }
     }
   });
   canvas.addEventListener('pointerup', e => {
+    // A click, rather than a drag: four pixels of slop, which is a mouse being
+    // held still by a hand.
+    if (down && down.ground && Math.hypot(e.clientX - down.ox, e.clientY - down.oy) < 4) {
+      const at = onPlane(e, edit.level ? edit.level() : 0);
+      const t = at && edit.tile(at);
+      if (t) edit.onGround(t.x, t.y);
+    }
     down = null;
     held = null;
     canvas.releasePointerCapture(e.pointerId);
   });
+  canvas.addEventListener('pointerleave', () => {
+    lastHover = '';
+    if (edit && edit.onHover) edit.onHover(null);
+  });
   canvas.addEventListener('pointermove', e => {
-    if (!down) return;
+    // A pointer that is not dragging anything is still saying something: it is
+    // saying where the next click would land. That is the ghost.
+    if (!down) return hover(e);
     // Dragging a held machine slides it across the storey it stands on. The
     // ground plane of *its own level*, not of the yard: a component six metres
     // up follows the pointer at six metres up, which is the difference between
@@ -415,7 +486,7 @@ function drag() {
       return;
     }
     const dx = e.clientX - down.x, dy = e.clientY - down.y;
-    down = { x: e.clientX, y: e.clientY, b: down.b, ox: down.ox, oy: down.oy };
+    down = { x: e.clientX, y: e.clientY, b: down.b, ox: down.ox, oy: down.oy, ground: down.ground };
     if (down.b === 2 || e.shiftKey) {
       // On the ground plane, screen-right is (cos yaw, -sin yaw) and
       // up-the-screen is -(sin yaw, cos yaw): the same pair the eye is built
@@ -450,7 +521,24 @@ function drag() {
     else if (k === 'pageup' || k === 'e') { edit.onLift(1); e.preventDefault(); }
     else if (k === 'pagedown' || k === 'q') { edit.onLift(-1); e.preventDefault(); }
     else if (k === 'b') { view.boxes = !view.boxes; need = true; e.preventDefault(); }
+    else if (k === 'escape' && edit.onCancel) { edit.onCancel(); e.preventDefault(); }
   });
+}
+
+/// Where the pointer is, as the two things a caller could want: whatever
+/// component is under it, and the tile it would place on at the storey being
+/// worked on. Reported only when one of those two changes, because the caller
+/// answers it by rebuilding an overlay and a mouse produces a hundred moves a
+/// second across the same tile.
+function hover(e) {
+  if (!edit || !edit.onHover) return;
+  const hit = under(e);
+  const at = onPlane(e, edit.level ? edit.level() : 0);
+  const tile = at ? edit.tile(at) : null;
+  const key = `${hit ? hit.name : ''}@${tile ? tile.x + ',' + tile.y : ''}`;
+  if (key === lastHover) return;
+  lastHover = key;
+  edit.onHover({ hit, tile, at });
 }
 
 // ---------------------------------------------------------------- picking
@@ -571,7 +659,7 @@ function draw() {
     gl.drawElementsInstanced(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0, n);
   }
   gl.bindVertexArray(null);
-  if (view.boxes) overlay(vp);
+  overlay(vp);
 }
 
 /// Green, yellow, red -- round every component, and round the room the
@@ -582,13 +670,14 @@ function draw() {
 /// space. Drawn last, without depth writes, so the boxes read as annotation
 /// over the plant rather than as more plant.
 function overlay(vp) {
-  if (!view.units.length) return;
   gl.useProgram(lineProg);
   gl.uniformMatrix4fv(lineUni.uViewProj, false, vp);
   gl.bindVertexArray(lineVao);
   gl.depthMask(false);
   const chosen = view.pick >= 0 ? names[view.pick] : null;
-  for (const u of view.units) {
+  // `b` hides the verdict boxes. It never hid the ghost or the wire being
+  // drawn, which are not annotations on the plant but the pointer's own state.
+  for (const u of view.boxes ? view.units : []) {
     const on = u.name === chosen;
     // Everything that is not clear, plus whatever is selected. A plant with
     // nothing wrong with it should look like a plant, not like a wireframe.
@@ -601,14 +690,72 @@ function overlay(vp) {
       box(u.service.lo, u.service.hi);
     }
   }
+  intent();
   gl.depthMask(true);
   gl.bindVertexArray(null);
+}
+
+/// The ghost, the wire being drawn, and the wires already drawn.
+///
+/// Depth testing is off for the whole of this. A component's outline belongs
+/// behind the plant -- it is a fact about a thing that is there -- but an
+/// intention does not: a ghost you cannot see because a tank is in front of it
+/// tells you nothing, and a connection that disappears into the pipework is
+/// exactly the connection nobody could find.
+function intent() {
+  const { ghost, link, targets, wires } = marks;
+  if (!ghost && !link && !targets.length && !wires.length) return;
+  gl.disable(gl.DEPTH_TEST);
+
+  if (wires.length || link) {
+    gl.bindVertexArray(lineVaoSeg);
+    gl.uniform4fv(lineUni.uColour, WIRE);
+    for (const w of wires) seg(w[0], w[1]);
+    if (link) {
+      gl.uniform4fv(lineUni.uColour, link.ok ? GOOD : [0.98, 0.78, 0.22, 0.9]);
+      seg(link.from, link.to);
+    }
+  }
+
+  gl.bindVertexArray(lineVao);
+  // What the wire could reach. Drawn before the ghost so that a component the
+  // pointer is over is boxed by both.
+  gl.uniform4fv(lineUni.uColour, [0.45, 0.70, 0.98, 0.85]);
+  for (const t of targets) box(t.lo, t.hi);
+
+  if (ghost) {
+    const c = ghost.ok ? GOOD : BAD;
+    gl.uniform4fv(lineUni.uColour, c);
+    // The box stands on the deck it would stand on -- the real component's
+    // plinth is left out, so the bottom face of this *is* the footprint, which
+    // is the part the rules are written in.
+    box(ghost.lo, ghost.hi);
+    if (ghost.face !== null && ghost.face !== undefined) {
+      // Which way it has been turned, before it is placed rather than after.
+      const mid = [(ghost.lo[0] + ghost.hi[0]) / 2, ghost.base + 0.1, (ghost.lo[2] + ghost.hi[2]) / 2];
+      const d = [[1, 0], [0, 1], [-1, 0], [0, -1]][ghost.face & 3];
+      const r = Math.max(ghost.hi[0] - ghost.lo[0], ghost.hi[2] - ghost.lo[2]) / 2 + 0.6;
+      gl.bindVertexArray(lineVaoSeg);
+      gl.uniform4fv(lineUni.uColour, c);
+      seg(mid, [mid[0] + d[0] * r, mid[1], mid[2] + d[1] * r]);
+      gl.bindVertexArray(lineVao);
+    }
+  }
+  gl.enable(gl.DEPTH_TEST);
 }
 
 function box(lo, hi) {
   gl.uniform3fv(lineUni.uLo, lo);
   gl.uniform3fv(lineUni.uHi, hi);
   gl.drawArrays(gl.LINES, 0, 24);
+}
+
+/// One line, between any two points: the cube's diagonal, with the box
+/// collapsed onto it.
+function seg(a, b) {
+  gl.uniform3fv(lineUni.uLo, a);
+  gl.uniform3fv(lineUni.uHi, b);
+  gl.drawArrays(gl.LINES, 0, 2);
 }
 
 /// One box, from the scene's own proxy volume: what an installation costs when

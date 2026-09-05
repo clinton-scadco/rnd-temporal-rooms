@@ -206,7 +206,7 @@ function frame(v) {
     // Only rebuild the 3D window when the document under it has changed --
     // it is a whole plant regenerated from a document, not a mesh nudged.
     const me = v.world.installs.find(i => i.id === bench.bench.id);
-    const sig = me ? JSON.stringify([me.editor, me.hasDraft, me.macro]) : '';
+    const sig = me ? JSON.stringify([me.editor, me.hasDraft, me.draftHash, me.macro]) : '';
     if (sig !== lastSig) { lastSig = sig; bench.refresh(false); }
   }
   const done = v.goal.progress.done;

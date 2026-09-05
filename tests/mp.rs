@@ -1189,6 +1189,76 @@ fn a_machine_has_one_editor() {
     assert!(r.submit(b, Act::OpenDesign { id: cell }).is_ok());
 }
 
+/// A frame says that a draft changed.
+///
+/// It did not. A frame carries no designs -- that is deliberate, and it is why
+/// `hasDraft` is a boolean -- and the only other thing in there that moves when
+/// a machine is edited is `macro`, which is the *committed* lowering and does
+/// not move until the commit. So the whole of what a client could see, while
+/// somebody put four components into a draft, was a flag that had been true
+/// since the first one.
+///
+/// The client is written to rebuild its window when the document under it
+/// changes, so a document that changed silently is a window that does not.
+/// `draftHash` is that change, in one number: cheap enough for every frame,
+/// and enough for the other player's screen to keep up with this one's.
+#[test]
+fn a_frame_says_when_a_draft_moves() {
+    let (mut r, a, _) = wired_room(11);
+    let cell = r
+        .host
+        .world
+        .installs
+        .iter()
+        .find(|i| i.proto.tag == "machining")
+        .map(|i| i.id)
+        .unwrap();
+    let hash = |r: &Room| {
+        r.host
+            .world
+            .to_json(&r.host.world.compile(), false)
+            .at("installs")
+            .as_arr()
+            .iter()
+            .find(|i| i.at("id").as_u64() == Some(cell as u64))
+            .map(|i| i.at("draftHash").clone())
+            .unwrap()
+    };
+    assert!(matches!(hash(&r), Json::Null), "a machine with no draft has no draft hash");
+
+    r.set_now(secs(20));
+    r.submit(a, Act::OpenDesign { id: cell }).unwrap();
+    let opened = hash(&r);
+    assert!(!matches!(opened, Json::Null), "an open draft has one");
+
+    r.set_now(secs(21));
+    r.submit(a, Act::PlaceComponent {
+        id: cell,
+        kind: "motor".into(),
+        x: 0,
+        y: 12,
+        z: 0,
+        face: None,
+    })
+    .unwrap();
+    let placed = hash(&r);
+    assert_ne!(
+        opened.to_string(),
+        placed.to_string(),
+        "a component went into the draft and the frame said nothing"
+    );
+
+    // And it is a fact about the document rather than about the clock: the
+    // same draft, a second later, is the same number.
+    r.set_now(secs(22));
+    assert_eq!(placed.to_string(), hash(&r).to_string(), "the hash moved on its own");
+
+    // A commit takes the draft with it, so the number goes.
+    let design = r.host.world.get(cell).unwrap().draft.clone().unwrap();
+    r.submit(a, Act::CommitMachineDesign { id: cell, design }).unwrap();
+    assert!(matches!(hash(&r), Json::Null), "the draft hash outlived the draft");
+}
+
 /// A deleted thing leaves a ghost, and restoring it is a new placement rather
 /// than a rewind.
 #[test]

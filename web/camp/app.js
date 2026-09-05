@@ -253,7 +253,7 @@ function frame(v) {
   $('viewbench').disabled = !machines.length;
   if (view === 'bench' && bench.bench.id) {
     const me = v.world.installs.find(i => i.id === bench.bench.id);
-    const sig = me ? JSON.stringify([me.editor, me.hasDraft, me.macro]) : '';
+    const sig = me ? JSON.stringify([me.editor, me.hasDraft, me.draftHash, me.macro]) : '';
     if (sig !== lastSig) { lastSig = sig; bench.refresh(false); }
   }
 }

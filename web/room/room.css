@@ -265,9 +265,21 @@ h2 {
 #benchbar .rule { width: 1px; height: 18px; background: var(--rule); }
 #benchbar .lock { color: var(--signal); font-size: 11px; }
 #benchname { font-weight: 600; }
+/* What the pointer is for. It lived in a toast -- the same red box a refusal
+   arrives in, for two and a half seconds -- so the line telling you how to
+   place the thing you had just picked up looked like an error and then left. */
+#benchhint { flex: 1; font-size: 11px; color: var(--muted); }
+#benchhint.on { color: var(--accent); }
 #benchside { grid-row: 2; grid-column: 2; background: var(--panel); border-left: 1px solid var(--rule); padding: 0 12px 16px; overflow-y: auto; }
 #benchinfo { font: 11px/1.5 var(--mono); }
-#benchinfo .row { display: flex; justify-content: space-between; }
+#benchinfo .row { display: flex; justify-content: space-between; align-items: center; }
+/* Taking a connection apart. There was no way to do it at all: the count said
+   `connections 2` and the two were not written down anywhere. */
+#benchinfo button.x {
+  padding: 0 5px; line-height: 1.3; font-size: 11px;
+  background: none; border: 1px solid var(--rule); color: var(--muted);
+}
+#benchinfo button.x:hover { color: var(--bad); border-color: var(--bad); }
 
 /* ------------------------------------------------------------------- won */
 
