@@ -31,6 +31,11 @@ const STATUS = {
   // New in experiment 07, and the one worth spotting from across the canvas: a
   // component that is not short of anything and is refusing what it was given.
   REFUSED: '--bad',
+  // New in experiment 14. Both mean the component has stopped for a reason
+  // that is nothing to do with what is arriving at its ports, which is exactly
+  // why they get their own colour rather than sharing BLOCKED's.
+  OVERHEATED: '--bad',
+  SHAKING: '--bad',
   IDLE: '--muted',
 };
 

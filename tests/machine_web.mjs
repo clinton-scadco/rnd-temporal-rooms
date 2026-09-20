@@ -172,13 +172,32 @@ const cat = doc.state.cat;
 console.log('catalogue');
 ok(cat.order.length > 30, `${cat.order.length} components`);
 ok(typeof cat.constants.reach === 'number', 'the reach limit came from Rust');
-ok(cat.briefs.length === 4, 'four briefs');
+ok(cat.briefs.length === 5, 'five briefs');
 ok(cat.substances.length > 0, 'and the substances a source can draw');
+// Experiment 14: the palette groups by century, offers frames and colours
+// temperature bands, and not one of those three lists lives in JavaScript.
+ok(cat.eras.length === 3, 'three technology families');
+ok(cat.materials.length === 3, 'three frame materials');
+ok(cat.bands.length === 5, 'five temperature bands');
+for (const m of cat.materials) {
+  ok(m.conducts > 0 && m.ceiling > 0 && m.tolerates > 0, `${m.tag} is a real trade`);
+}
+for (const b of cat.bands) {
+  ok(typeof b.duty === 'number' && !!b.note, `the ${b.tag} band says what it does`);
+}
 for (const kind of cat.order) {
   const p = cat.parts[kind];
   ok(p.w > 0 && p.h > 0, `${kind} has a footprint`);
   ok(p.ports.length > 0, `${kind} has ports`);
   ok(!!p.family, `${kind} is in a family`);
+  // And every one of them carries its physics, including the great majority
+  // whose physics is a row of zeroes.
+  ok(!!p.phys, `${kind} has physical properties`);
+  ok(cat.materials.some(m => m.tag === p.phys.material), `${kind} comes on a real frame`);
+  ok(p.phys.materials.includes(p.phys.material),
+     `${kind}'s default frame is one it may be built out of`);
+  ok(cat.eras.some(e => e.tag === p.phys.era) || p.phys.era === 'any',
+     `${kind} belongs to a century or to none`);
   // Every port's domain has to be one the browser knows how to colour, or the
   // canvas draws a wire in `undefined` and nobody finds out until it is on
   // screen.

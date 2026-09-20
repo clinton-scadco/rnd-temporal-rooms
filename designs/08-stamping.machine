@@ -25,7 +25,6 @@ crank     CR1 at 15,5
 shaft     SH1 at 10,4
 motor     MO1 at 10,7
 motor     MO2 at 13,7
-cable     CB1 at 7,10
 mains     M1  at 4,10
 
 wire I1.out -> F1.in
@@ -35,9 +34,8 @@ wire F1.out -> R1.in
 wire R1.out -> P1.in
 wire P1.out -> O1.solid
 
-wire M1.power -> CB1.in
-wire CB1.out -> MO1.power
-wire CB1.out -> MO2.power
+wire M1.power -> MO1.power
+wire M1.power -> MO2.power
 wire MO1.rotary -> SH1.in
 wire MO2.rotary -> SH1.in
 wire SH1.out -> R1.drive

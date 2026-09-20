@@ -9,6 +9,7 @@
 //! ```text
 //!   machine design
 //!     -> semantic 3D layout     volumes, mounts, orientation, interfaces
+//!     -> connection solving     every flange that can share a line, does
 //!     -> connection routing     A* over straight sections, per domain
 //!     -> structural inference   what has to hold all that up
 //!     -> procedural dressing    what a works actually looks like

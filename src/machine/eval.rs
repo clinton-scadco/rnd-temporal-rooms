@@ -1,4 +1,4 @@
-//! What the design is worth, against one of four briefs.
+//! What the design is worth, against one of five briefs.
 //!
 //! Experiment 06 had one brief and no score, on purpose: a single number would
 //! immediately be maximised and the interesting part -- that a *compact* 100 MW
@@ -7,7 +7,7 @@
 //!
 //! Experiment 07 keeps that and adds the other half of the argument. One brief
 //! proves a component set can answer one question. Four of them, answered by
-//! the same thirty-eight components, is the only evidence that the vocabulary is
+//! the same component set, is the only evidence that the vocabulary is
 //! a vocabulary rather than a very elaborate way of writing `Boiler Mk2`:
 //!
 //! ```text
@@ -15,7 +15,13 @@
 //!   crush    30/tick of 80%-pure ore powder     motor, gearbox, rotary, material
 //!   distil   25 light and 40 middle per tick    heat, phase change, fluid separation
 //!   gears    20 gears/tick from iron billet     material handling, forming, buffering
+//!   line     40/tick of crushed ore, delivered  prime movers, frames, heat, shake
 //! ```
+//!
+//! The fifth is experiment 14's, and it is deliberately the smallest brief in
+//! the file: extract ore, crush ore, move crushed ore. It asks for nothing that
+//! any one century has and another does not, which is the only way to find out
+//! whether three centuries produce three machines or three skins.
 //!
 //! Every rate here is a rational, `n/d`, taken over one orbit rather than over
 //! whatever window the player happens to be looking at. A machine with a period
@@ -27,7 +33,7 @@ use super::design::Design;
 use super::orbit::Compiled;
 use super::parts::{self, Kind};
 use super::sim::{FlowBig, Machine, Tick, Totals};
-use super::stuff::{Stuff, Subst, FORM_GEAR, FORM_NAMES, SIZE_NAMES, SIZE_POWDER};
+use super::stuff::{Stuff, Subst, FORM_GEAR, FORM_NAMES, SIZE_CRUSHED, SIZE_NAMES, SIZE_POWDER};
 use crate::json::Json;
 
 /// Experiment 06's brief, kept as the number it always was so that six designs
@@ -43,9 +49,11 @@ pub enum Brief {
     Crush,
     Distil,
     Gears,
+    Line,
 }
 
-pub const BRIEFS: [Brief; 4] = [Brief::Power, Brief::Crush, Brief::Distil, Brief::Gears];
+pub const BRIEFS: [Brief; 5] =
+    [Brief::Power, Brief::Crush, Brief::Distil, Brief::Gears, Brief::Line];
 
 /// One thing a brief asks the machine to produce, and what would count.
 ///
@@ -117,6 +125,19 @@ static DISTIL: [Target; 2] = [
     },
     target("middle", Subst::Middle, 40),
 ];
+/// Experiment 14's brief, and the whole of it. No purity, no form, no
+/// temperature: one size step down from what came out of the ground, forty a
+/// tick, at an outlet. A water wheel can do it, a steam engine can do it, and a
+/// motor can do it, and the interesting part is entirely in *how*.
+static LINE: [Target; 1] = [Target {
+    label: "crushed ore",
+    subst: Subst::Ore,
+    per_tick: 40,
+    min_purity: 0,
+    max_temp: 9,
+    form: None,
+    min_size: Some(SIZE_CRUSHED),
+}];
 static GEARS: [Target; 1] = [Target {
     label: "gears",
     subst: Subst::Iron,
@@ -134,6 +155,7 @@ impl Brief {
             Brief::Crush => "crush",
             Brief::Distil => "distil",
             Brief::Gears => "gears",
+            Brief::Line => "line",
         }
     }
 
@@ -143,6 +165,7 @@ impl Brief {
             Brief::Crush => "Crush ore",
             Brief::Distil => "Distil mixed fluid",
             Brief::Gears => "Manufacture gears",
+            Brief::Line => "Run an ore line",
         }
     }
 
@@ -165,6 +188,11 @@ impl Brief {
                 "Make at least 20 gears/tick out of iron billet, wasting as little \
                  metal and as little grid power as possible."
             }
+            Brief::Line => {
+                "Extract ore, crush it, and move it: 40/tick of crushed ore at an \
+                 outlet. Any century may answer this, and none of them answers it \
+                 the same way."
+            }
         }
     }
 
@@ -175,6 +203,7 @@ impl Brief {
             Brief::Crush => "motor, gearbox, rotary, material transformation",
             Brief::Distil => "heat, phase change, fluid separation",
             Brief::Gears => "material handling, forming, buffering",
+            Brief::Line => "prime movers, drive trains, frames, heat and vibration",
         }
     }
 
@@ -184,6 +213,7 @@ impl Brief {
             Brief::Crush => &CRUSH,
             Brief::Distil => &DISTIL,
             Brief::Gears => &GEARS,
+            Brief::Line => &LINE,
         }
     }
 
@@ -678,6 +708,7 @@ pub fn constants() -> Json {
         .set("minThrottle", parts::MIN_THROTTLE as i64)
         .set("pipeLossPct", parts::PIPE_LOSS_PCT as i64)
         .set("reach", parts::REACH as i64)
+        .set("reachPower", parts::REACH_POWER as i64)
         .set("turbineMin", parts::TURBINE_MIN as i64)
         .set("spinMax", parts::SPIN_MAX as i64)
         .set("spinUp", parts::SPIN_UP as i64)

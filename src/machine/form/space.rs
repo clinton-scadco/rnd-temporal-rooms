@@ -83,7 +83,7 @@ pub fn hot(k: Kind) -> bool {
     matches!(k, Kind::Reactor | Kind::Burner | Kind::Furnace | Kind::Heater | Kind::Crusher)
 }
 
-/// And which ones mind. Anything with a motor in it, anything with a cable on
+/// And which ones mind. Anything with a motor in it, anything with windings in
 /// it, and anything holding something that would rather not boil.
 pub fn minds_heat(k: Kind) -> bool {
     matches!(
@@ -91,7 +91,6 @@ pub fn minds_heat(k: Kind) -> bool {
         Kind::Generator
             | Kind::Motor
             | Kind::Mains
-            | Kind::Cable
             | Kind::Tank
             | Kind::Drum
             | Kind::Pump
@@ -401,6 +400,13 @@ pub fn check(plan: &Plan, routes: &[Run]) -> (Vec<Placement>, Vec<Issue>) {
     // The strictest interface in the plant, and the one the note singled out.
     // A pipe bends; a shaft does not, so the two ends of a drive have to be on
     // one axis and the player is the only one who can arrange that.
+    //
+    // "The only one" is now exactly true, and it was not before. `layout`
+    // solves every coupling it can onto one line by sliding the flanges along
+    // the faces they are already on, so what is left here is misalignment that
+    // no flange could have absorbed -- a machine standing somewhere the shaft
+    // does not reach. That is a fault with one remedy, and the remedy is to
+    // move something, which is the only kind of fault worth painting red.
     for r in routes {
         if !matches!(r.dom, Domain::Rotary | Domain::Mech) || !r.laid() {
             continue;

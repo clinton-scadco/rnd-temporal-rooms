@@ -17,6 +17,18 @@
 //!   5  building upwards has consequences the player did not have to draw
 //! ```
 //!
+//! Claim 3 grew a sixth of its own when the connection solver arrived, and the
+//! three tests at the end of section 3 are it:
+//!
+//! ```text
+//!   6  a connection that could be a straight line is one
+//! ```
+//!
+//! which sounds like a nicety and is not. The router cannot step sideways by
+//! less than two elbows, so a flange half a metre off its partner's line does
+//! not cost half a metre of pipe -- it costs a four-cornered detour. Solving
+//! the flanges onto one line before routing them is what those corners were.
+//!
 //! Claim 3 is the load-bearing one, and it is the one worth stating carefully.
 //! Experiment 08's router could not fail: when A* found nothing it drew a
 //! straight line through the plant and moved on. So "every wire has a route"
@@ -267,17 +279,22 @@ fn a_laid_run_obeys_the_rules_it_was_laid_under() {
                 );
             }
 
-            // And between two bends, for as far as the domain asked. The first
+            // And between two bends, for as far as *geometry* asks. The first
             // and last sections are the flange stubs, which have their own
             // rule above and are allowed to be shorter than this one.
+            //
+            // Geometry rather than the domain's own minimum, because since
+            // the connection solver those are two different numbers. The domain's
+            // minimum is a price the router may pay -- see
+            // `a_short_section_is_a_price_the_router_pays` below, which is the
+            // other half of this assertion and the reason it was weakened.
             for i in 2..r.path.len().saturating_sub(1) {
                 let len = r.path[i].sub(r.path[i - 1]).len();
-                let least = rule.least(r.tier);
+                let floor = rule.floor();
                 assert!(
-                    len + 1 >= least,
-                    "{path}: {} has a {len}mm section between two bends, and a {} run                      of this domain has a {least}mm minimum",
-                    r.name,
-                    r.tier.tag()
+                    len + 1 >= floor,
+                    "{path}: {} has a {len}mm section between two bends, and no run                      of this bore may have one under {floor}mm",
+                    r.name
                 );
                 // Which is the rule that matters, because it is the one that
                 // pays for the elbows: a section with a bend on each end has
@@ -291,6 +308,145 @@ fn a_laid_run_obeys_the_rules_it_was_laid_under() {
             }
         }
     }
+}
+
+/// A section shorter than its domain's minimum straight is a compromise, and
+/// compromises have to stay rare or they are not compromises, they are the
+/// style.
+///
+/// This is the second half of the rule the assertion above used to make on its
+/// own. Until the connection solver the minimum straight was the length of the
+/// shortest edge in the search graph, which made it true by construction --
+/// and made the router answer a metre of offset between two flanges with a
+/// four-cornered detour, because a detour was representable and a short
+/// section was not. Now the short section is representable and priced, so the
+/// thing to check is not that it never happens but that it is still the
+/// exception: one section in eight across every design there is, or the price
+/// is too low and the plant is full of stubs.
+#[test]
+fn a_short_section_is_a_price_the_router_pays() {
+    let (mut sections, mut short) = (0usize, 0usize);
+    let mut worst: Vec<String> = Vec::new();
+    for (path, d) in all_designs() {
+        let s = built(&d);
+        for r in s.routes.iter().filter(|r| r.laid()) {
+            let rule = form::route::rules(r.dom, r.bore);
+            for i in 2..r.path.len().saturating_sub(1) {
+                let len = r.path[i].sub(r.path[i - 1]).len();
+                sections += 1;
+                if len + 1 < rule.least(r.tier) {
+                    short += 1;
+                    worst.push(format!("{path}: {} has a {len}mm section", r.name));
+                }
+            }
+        }
+    }
+    assert!(
+        short * 8 <= sections,
+        "{short} of {sections} sections are shorter than their domain asks for, which is          more than an eighth of the repository: {worst:?}"
+    );
+}
+
+/// A transport component is a straight line, and both its ends are on it.
+///
+/// A shaft, a belt, a chute and a conveyor are drawn as a thin body down the
+/// middle of their own tiles, so unlike every other component in the plant
+/// their two ports are not on a box -- they are the two ends of the line
+/// itself. Three separate defects came out of forgetting that: a belt with its
+/// in and its out bolted to the same end of itself, a shaft whose body ran
+/// east-west while its couplings left by the two faces at right angles to it,
+/// and a line shaft solved onto one machine's axis at one end and another's at
+/// the other, which is a picture of a bent shaft.
+#[test]
+fn a_transport_component_is_a_straight_line() {
+    for (path, d) in all_designs() {
+        let plan = form::layout::plan(&d);
+        for u in plan.units.iter().filter(|u| u.arch == Arch::Run) {
+            let along = form::layout::face(u.yaw);
+            let Some(first) = u.sockets.first() else { continue };
+            for s in &u.sockets {
+                // Every port is on one of the two ends, because there are no
+                // other ends: the body is a line down the middle of its tiles.
+                assert!(
+                    s.out == along || s.out == along.neg(),
+                    "{path}: {} lies along {along} and a port leaves it by {}",
+                    u.name,
+                    s.out
+                );
+                // And all of them are on the line itself: the only thing that
+                // may differ between two ports of a run is how far along it
+                // they are.
+                let off = s.at.sub(first.at);
+                let across = match along.axis() {
+                    Some(0) => off.y.abs() + off.z.abs(),
+                    Some(1) => off.x.abs() + off.z.abs(),
+                    _ => off.x.abs() + off.y.abs(),
+                };
+                assert_eq!(
+                    across, 0,
+                    "{path}: {} is bent -- its ports are {across}mm off its own line",
+                    u.name
+                );
+            }
+            assert!(
+                u.sockets.iter().any(|s| s.out == along)
+                    && u.sockets.iter().any(|s| s.out == along.neg()),
+                "{path}: {} takes everything in and out of the same end of itself",
+                u.name
+            );
+        }
+    }
+}
+
+/// A coupling that can be straight is straight.
+///
+/// The drive solver's whole contract, on the smallest design that states it: a
+/// motor, a line shaft and a gearbox that a player has put in a row but not on
+/// the same line, because tiles are two metres wide and a shaft is not. Each
+/// of the three can reach the others' axis by sliding a flange along its own
+/// face -- so all three should end up on one, with nothing reported and no
+/// corner in the drive train.
+///
+/// The second half is the honest one. The fourth machine is a motor parked
+/// three tiles to the south, which cannot reach the shaft's line however the
+/// flanges are slid, and the plant is expected to say so rather than to draw
+/// it anyway.
+#[test]
+fn a_coupling_that_can_be_straight_is_straight() {
+    let d = Design::parse(
+        "machine \"Drive\"\n\
+         brief crush\n\
+         motor   MO1 at 0,0\n\
+         shaft   SH1 at 4,1\n\
+         gearbox GB1 at 9,1\n\
+         motor   MO2 at 0,6\n\
+         crusher C1  at 13,1\n\
+         wire MO1.rotary -> SH1.in\n\
+         wire SH1.out -> GB1.in\n\
+         wire GB1.out -> C1.drive\n\
+         wire MO2.rotary -> SH1.in\n",
+    )
+    .expect("it parses");
+    assert!(d.check().is_empty(), "{:?}", d.check().iter().map(|f| &f.what).collect::<Vec<_>>());
+    let s = built(&d);
+    for name in ["MO1.rotary -> SH1.in", "SH1.out -> GB1.in", "GB1.out -> C1.drive"] {
+        let r = s.routes.iter().find(|r| r.name == name).expect("it is routed");
+        assert_eq!(
+            r.bends, 0,
+            "{name} came out with {} corners in it, and a shaft does not bend",
+            r.bends
+        );
+        assert!(
+            !s.issues.iter().any(|i| i.of == name),
+            "{name} was solved onto one line and reported anyway: {:?}",
+            s.issues.iter().filter(|i| i.of == name).map(|i| &i.what).collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        s.issues.iter().any(|i| i.rule == "shaft alignment" && i.of == "MO2.rotary -> SH1.in"),
+        "the motor three tiles off the shaft was not reported: {:?}",
+        s.issues.iter().map(|i| &i.what).collect::<Vec<_>>()
+    );
 }
 
 /// The stub a flange at this point asked for, if there is a flange at it.

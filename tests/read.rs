@@ -424,23 +424,40 @@ fn the_library_is_still_small() {
 /// which is why fixing them moves this test. The baseline is the plant built
 /// without the material language, not the plant built with the bugs.
 ///
+/// Experiment 14's follow-up moved `09-machining` and nothing else, for the
+/// smallest possible reason: the power cable was deleted from the catalogue and
+/// so from that design. A cable was a three-tile component that carried four
+/// hundred megawatts and lost one percent of them, and the question it asked
+/// the player had one answer. Deleting it takes one `Run` out of that plant and
+/// the two connections that crossed it become one, which is a different plant
+/// by a hash and the same plant by eye. See `parts::REACH_POWER`.
+///
 /// Experiment 10 moved it again, and for a bigger reason than a list of bugs:
 /// every port in the plant is on a different face, because a port is now an
 /// interface rather than a coordinate, and every line between them is laid by
 /// a router that walks straight sections rather than cells. The plant these
 /// numbers pin is the same plant in the same materials; it is not the same
 /// pipework, and it was never going to be.
+///
+/// The connection solver moved it for the same kind of reason and a smaller
+/// one: the
+/// pipework is solved before it is routed. Where two flanges could be put on
+/// one line by sliding them along the faces they are already on, they are, and
+/// a router that no longer has to correct a metre of offset no longer answers
+/// one with a four-cornered detour. Across these eight designs that is a third
+/// of the corners gone. Same plant, same materials, same connections; fewer
+/// elbows, and the ones that are left are load bearing.
 #[test]
 fn grade_a_is_experiment_08_exactly() {
     for (name, want) in [
-        ("01-first-try", 0xa06a_6ad4u32),
-        ("03-compact", 0x5796_f30d),
-        ("07-crushline", 0x5d4d_4093),
-        ("09-machining", 0x2a0d_2586),
-        ("10-refinery", 0x4299_59f8),
-        ("11-steamcrusher", 0x44a1_290b),
-        ("13-longreach", 0xc5e3_1d20),
-        ("15-turbinehall", 0x536e_50ef),
+        ("01-first-try", 0x0ef5_7ae0u32),
+        ("03-compact", 0x8500_64c1),
+        ("07-crushline", 0xc8f3_081f),
+        ("09-machining", 0x4773_386f),
+        ("10-refinery", 0x437c_e68c),
+        ("11-steamcrusher", 0xab45_004b),
+        ("13-longreach", 0x7a49_ab15),
+        ("15-turbinehall", 0x50b6_4ae0),
     ] {
         let d = design(&format!("designs/{name}.machine"));
         let s = form::build(&d, Ask { style: Style::Works, world: 0, grade: Grade::Grey })

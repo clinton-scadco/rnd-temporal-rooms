@@ -17,10 +17,20 @@
 //!   machine kit [--png P]          the asset library: one of everything
 //!   machine read FILE [--png P]    experiment 09: one plant at all four grades
 //!   machine reads                  every design, at all four grades
-//!   machine space FILE             experiment 10: where everything is, and why
+//!   machine space FILE [--paths]   experiment 10: where everything is, and why
 //!   machine spaces                 every design, routed and judged
+//!   machine era                    experiment 14: three centuries, compared
+//!   machine heat FILE [--at T]     what is hot, what is shaking, and why
 //!   machine serve [--port N]       the designer
 //! ```
+//!
+//! `era` is experiment 14's acceptance command, in the same sense that `reuse`
+//! is experiment 07's and `space` is experiment 10's. The experiment's claim is
+//! that three technology families answering one brief produce three *machines*
+//! rather than three skins, and that is a countable claim: different component
+//! lists, different topologies, different failure modes, and -- the bit that
+//! would give the game away if it were false -- no component that exists twice
+//! with a bigger number on it. So the command counts all four.
 //!
 //! `space` is experiment 10's acceptance command, in the same sense that
 //! `reuse` is experiment 07's. The experiment's claim is that a player can
@@ -28,6 +38,14 @@
 //! decisions into geometry that makes physical sense -- so the command prints
 //! the decisions, the interfaces they produced, and every rule the result
 //! breaks. If the plant is wrong, it is wrong on this page first.
+//!
+//! Two of its columns are about the *shape* of a run rather than its legality.
+//! `over` is how much further a line went than the shortest orthogonal path
+//! between its own two flanges, and `--paths` prints the corners themselves.
+//! Between them they are how a detour is found: a run with four corners and
+//! eleven metres of `over` is a rectangle in the middle of a straight run, and
+//! a rectangle is the shape a router makes when it is being asked to correct
+//! an offset it cannot step sideways by. See `layout::align_drives`.
 //!
 //! `reuse` is experiment 07's own acceptance test and the reason it is a
 //! command rather than a paragraph. The note that asked for the experiment was
@@ -37,6 +55,7 @@
 //! countable claim, so it is counted.
 
 use temporal_rooms::machine::design::Design;
+use temporal_rooms::machine::era;
 use temporal_rooms::machine::form::{self, Grade, Style};
 use temporal_rooms::machine::parts::{self, Family};
 use temporal_rooms::machine::sim::Tick;
@@ -70,14 +89,16 @@ fn main() {
         "reads" => read_all(rest),
         "space" => space_one(rest),
         "spaces" => space_all(rest),
+        "era" => eras(),
+        "heat" => heat(rest),
         "reuse" => reuse(),
         "all" => all(),
         other if other.ends_with(".machine") => run(&args),
         other => {
             eprintln!(
                 "`{other}` is not a command. Try `run`, `why`, `compile`, `verify`, \
-                 `parts`, `reuse`, `form`, `forms`, `read`, `reads`, `space`, \
-                 `spaces` or `serve`."
+                 `parts`, `reuse`, `era`, `heat`, `form`, `forms`, `read`, `reads`, \
+                 `space`, `spaces` or `serve`."
             );
             2
         }
@@ -335,7 +356,7 @@ fn all() -> i32 {
 
 /// The vocabulary itself: what each component takes, refuses and makes.
 ///
-/// With thirty-eight of them the table in `parts.rs` is no longer something you
+/// With forty-six of them the table in `parts.rs` is no longer something you
 /// can hold in your head, and a player who has to read Rust to find out that a
 /// rolling mill will not touch cold metal has been failed by the tool.
 fn catalogue(args: &[String]) -> i32 {
@@ -376,6 +397,37 @@ fn catalogue(args: &[String]) -> i32 {
                 })
                 .collect();
             println!("  {:<11} {}", "ports", ports.join("   "));
+            // Experiment 14: the physical half of what a component is, printed
+            // only where there is something to print. Most of the catalogue has
+            // no body and no opinion about what it is made of.
+            let ph = parts::phys(kind);
+            let mut phys: Vec<String> = Vec::new();
+            if ph.era != era::Era::Any {
+                phys.push(format!("{} era", ph.era.tag()));
+            }
+            if ph.mats.len() > 1 {
+                phys.push(format!(
+                    "frame: {}",
+                    ph.mats.iter().map(|m| m.tag()).collect::<Vec<_>>().join("/")
+                ));
+            } else {
+                phys.push(format!("frame: {}", ph.mat.tag()));
+            }
+            if ph.thermal() {
+                phys.push(format!(
+                    "{} heat/tick, mass {}, range {}..{}, trips at {}, settles at {} on air",
+                    ph.heat,
+                    ph.mass,
+                    ph.lo,
+                    ph.hi,
+                    ph.ceiling(ph.mat),
+                    ph.settles_at(ph.mat, 0)
+                ));
+            }
+            if ph.vib > 0 {
+                phys.push(format!("shakes at {}", ph.vib));
+            }
+            println!("  {:<11} {}", "physical", phys.join("   "));
             if let Some(r) = p.recipe {
                 for dr in r.draws {
                     let mut line =
@@ -494,6 +546,229 @@ fn reuse() -> i32 {
         println!("  and a dedicated one has nothing left to do. The fix is smaller");
         println!("  capacities, not more components.");
     }
+    0
+}
+
+// ------------------------------------------- experiment 14: the three eras
+
+/// What is hot, what is shaking, and what either of those is costing.
+///
+/// One row per component that has a body or a drive, which in most designs is
+/// a minority of them, and that is deliberate: a panel that printed a
+/// temperature for a chute would be hiding the engine.
+fn heat(args: &[String]) -> i32 {
+    let (path, d) = match load(args) {
+        Ok(v) => v,
+        Err(e) => return bail(e),
+    };
+    let t: Tick = flag(args, "--at").and_then(|s| s.parse().ok()).unwrap_or(4_000);
+    let c = match orbit::compile(&d) {
+        Ok(c) => c,
+        Err(e) => return bail(e),
+    };
+    let m = match c.state_at(&d, t) {
+        Ok(m) => m,
+        Err(e) => return bail(e),
+    };
+
+    println!("{path} at t={t}\n");
+    println!(
+        "  {:<10} {:<13} {:<7} {:>4} {:>5} {:>6} {:>11} {:>6} {:>5}",
+        "component", "kind", "frame", "air", "temp", "band", "duty", "shakes", "rated"
+    );
+    println!("  {}", "-".repeat(82));
+    let mut any = false;
+    for i in 0..m.len() {
+        let ph = parts::phys(m.kinds[i]);
+        if !ph.thermal() && m.shake[i] == 0 {
+            continue;
+        }
+        any = true;
+        let mat = m.mats[i];
+        // A tripped component is latched out whatever its temperature says, and
+        // it is on its way back down through the bands while it is latched, so
+        // printing WARM next to a duty of nought would be true and useless.
+        let band = if m.st[i].tripped {
+            "TRIPPED"
+        } else if ph.thermal() {
+            m.band(i).tag()
+        } else {
+            "--"
+        };
+        println!(
+            "  {:<10} {:<13} {:<7} {:>4} {:>5} {:>6} {:>10}% {:>6} {:>5}",
+            m.names[i],
+            m.kinds[i].tag(),
+            mat.tag(),
+            m.clear[i],
+            if ph.thermal() { m.temp(i).to_string() } else { "--".into() },
+            band,
+            m.duty(i) / 10,
+            m.shake[i],
+            mat.tol(),
+        );
+    }
+    if !any {
+        println!("  nothing in this design has a body or a drive.");
+    }
+
+    // The three sentences that are worth saying about the machine as a whole.
+    let eras = d.eras();
+    println!();
+    println!(
+        "  built in: {}",
+        if eras.is_empty() {
+            "no century in particular -- every component here is era-neutral".to_string()
+        } else {
+            eras.iter().map(|e| e.title()).collect::<Vec<_>>().join(" + ")
+        }
+    );
+    let hot: Vec<&str> = (0..m.len())
+        .filter(|&i| {
+            parts::phys(m.kinds[i]).thermal() && (m.st[i].tripped || !m.band(i).well())
+        })
+        .map(|i| m.names[i].as_str())
+        .collect();
+    let shaking: Vec<&str> = (0..m.len())
+        .filter(|&i| m.shake[i] > m.mats[i].tol())
+        .map(|i| m.names[i].as_str())
+        .collect();
+    println!(
+        "  out of its range: {}",
+        if hot.is_empty() { "nothing".to_string() } else { hot.join(", ") }
+    );
+    println!(
+        "  shaking apart:    {}",
+        if shaking.is_empty() { "nothing".to_string() } else { shaking.join(", ") }
+    );
+    println!(
+        "  body heat to air: {:.1}/tick, which is not on the scoreboard and is not free",
+        c.totals_at(t).body_heat as f64 / t.max(1) as f64
+    );
+    if hot.is_empty() && shaking.is_empty() {
+        0
+    } else {
+        1
+    }
+}
+
+/// Experiment 14's acceptance command: three centuries, one brief, side by side.
+fn eras() -> i32 {
+    println!("THE THREE FAMILIES\n");
+    for e in era::ERAS {
+        let mine: Vec<&'static parts::Part> = parts::KINDS
+            .iter()
+            .filter(|&&k| parts::phys(k).era == e)
+            .map(|&k| parts::part(k))
+            .collect();
+        println!("  {:<24} {}", e.title(), e.blurb());
+        println!("  {:<24} fails: {}", "", e.fails());
+        println!(
+            "  {:<24} {}",
+            "",
+            mine.iter().map(|p| p.tag).collect::<Vec<_>>().join(", ")
+        );
+        println!();
+    }
+    let neutral = parts::KINDS.iter().filter(|&&k| parts::phys(k).era == era::Era::Any).count();
+    println!(
+        "  {neutral} of {} components belong to no century at all, including the crusher.",
+        parts::KINDS.len()
+    );
+    println!("  There is one crusher. That is the experiment.\n");
+
+    println!("MATERIALS\n");
+    println!(
+        "  {:<8} {:>10} {:>10} {:>12}",
+        "frame", "conducts", "ceiling", "carries shake"
+    );
+    for m in era::MATS {
+        println!(
+            "  {:<8} {:>9}% {:>10} {:>12}",
+            m.tag(),
+            m.cond(),
+            m.ceiling(),
+            m.tol()
+        );
+    }
+    println!();
+    println!("BANDS\n");
+    for b in [
+        era::Band::Cold,
+        era::Band::Normal,
+        era::Band::Warm,
+        era::Band::Hot,
+        era::Band::Overheated,
+    ] {
+        println!("  {:<12} {:>4}%   {}", b.tag(), b.duty() / 10, b.note());
+    }
+
+    // And then the same brief, answered three ways, from disk.
+    let mut rows: Vec<(String, Design, orbit::Compiled)> = Vec::new();
+    for path in design_paths() {
+        let Ok(src) = std::fs::read_to_string(&path) else { continue };
+        let Ok(d) = Design::parse(&src) else { continue };
+        if d.brief != eval::Brief::Line {
+            continue;
+        }
+        let Ok(c) = orbit::compile(&d) else { continue };
+        rows.push((short(&path), d, c));
+    }
+    if rows.is_empty() {
+        println!("\n  no design on disk claims the `line` brief.");
+        return 1;
+    }
+
+    println!("\nONE BRIEF, THREE MACHINES\n");
+    println!(
+        "  {:<16} {:>8} {:>7} {:>6} {:>7} {:>7} {:>6} {:>6}",
+        "design", "made", "plot", "parts", "grid", "fuel", "water", "wasted"
+    );
+    println!("  {}", "-".repeat(80));
+    for (name, d, c) in &rows {
+        let r = eval::report(d, c);
+        println!(
+            "  {:<16} {:>8.2} {:>7} {:>6} {:>7.1} {:>7.1} {:>6.1} {:>6.1}",
+            name,
+            r.headline().value(),
+            r.area(),
+            r.components,
+            r.grid.value(),
+            r.fuel.value(),
+            r.water.value(),
+            r.wasted.value()
+        );
+    }
+
+    println!();
+    for (name, d, _) in &rows {
+        let mut kinds: Vec<&str> =
+            d.units.iter().map(|u| u.kind.tag()).collect::<std::collections::BTreeSet<_>>()
+                .into_iter().collect();
+        kinds.sort();
+        println!("  {:<16} {}", name, kinds.join(" "));
+    }
+
+    // The claim, counted. Two designs that answer the same brief with the same
+    // parts list are two spellings of one machine.
+    println!();
+    let mut shared = 0usize;
+    let mut total = 0usize;
+    for (i, (_, a, _)) in rows.iter().enumerate() {
+        for (_, b, _) in rows.iter().skip(i + 1) {
+            let ka: std::collections::BTreeSet<&str> =
+                a.units.iter().map(|u| u.kind.tag()).collect();
+            let kb: std::collections::BTreeSet<&str> =
+                b.units.iter().map(|u| u.kind.tag()).collect();
+            shared += ka.intersection(&kb).count();
+            total += ka.union(&kb).count();
+        }
+    }
+    println!(
+        "  across every pair, {shared} of {total} distinct components are shared -- \
+         and the ones that are"
+    );
+    println!("  shared are the ore path, which is the half that should be.");
     0
 }
 
@@ -800,21 +1075,38 @@ fn space_one(args: &[String]) -> i32 {
 
     // ---------------------------------------------------------- connections
     println!(
-        "\n  {:<26}{:<11}{:<7}{:>7}{:>7}  {}",
-        "connection", "domain", "tier", "metres", "bends", "elevation"
+        "\n  {:<26}{:<11}{:<7}{:>7}{:>7}{:>7}  {}",
+        "connection", "domain", "tier", "metres", "over", "bends", "elevation"
     );
     println!("  {}", "-".repeat(78));
     for r in &scene.routes {
         let rule = form::route::rules(r.dom, r.bore);
+        // How much further than it had to go. A run that cannot be a straight
+        // line still has a shortest orthogonal path, and the difference
+        // between that and what was laid is the whole of what a viewer means
+        // by "why does it go round like that".
+        let over = if r.laid() {
+            (r.length - r.path[0].taxi(r.path[r.path.len() - 1])) / 1000
+        } else {
+            0
+        };
         println!(
-            "  {:<26}{:<11}{:<7}{:>7}{:>7}  {}",
+            "  {:<26}{:<11}{:<7}{:>7}{:>7}{:>7}  {}",
             r.name,
             r.dom.tag(),
             r.tier.tag(),
             r.length / 1000,
+            over,
             r.bends,
             rule.layer.tag()
         );
+        // `--paths` prints the corners themselves, which is the only way to
+        // see a route double back on itself rather than infer it from a bend
+        // count.
+        if args.iter().any(|a| a == "--paths") && r.laid() {
+            let pts: Vec<String> = r.path.iter().map(|p| format!("{p}")).collect();
+            println!("      {}", pts.join(" -> "));
+        }
     }
     println!(
         "\n  {} of {} connections laid under the full rules, {} relaxed, {} refused",

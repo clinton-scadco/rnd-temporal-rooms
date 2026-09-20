@@ -1,0 +1,96 @@
+# Experiment 14, the second answer: the same ore line, built in about 1880.
+#
+# The engine can go where you want it, which sounds like a small thing and is
+# the whole difference. A water wheel has to be in the river; a steam engine is
+# wherever the coal can be got to. So this plant is not laid out around a
+# prime mover, it is laid out around a *boiler house*:
+#
+#   coal -> burner -> exchanger -> steam engine -> gearbox -> line shaft
+#                        ^                |
+#                        |                v
+#                     jacket <------- condensate
+#                        ^                |
+#                        +--- waste heat -+-> radiator
+#
+# Two things here are experiment 14 and nothing else.
+#
+# 1. The engine cannot be built without a cooling decision. It puts 500 heat a
+#    tick into a cast-iron body that trips at 220 and sheds its own temperature
+#    to the air, so left alone it climbs past its ceiling and trips. What keeps
+#    it under 100 degrees is three separate decisions: a radiator on the waste
+#    port, a jacket on the same port, and a clear tile of air around the engine
+#    -- which costs plot and nothing else, and is the cheapest of the three.
+#
+# 2. The waste heat is not thrown away. It goes into the feedwater, which is the
+#    second diagram in the note that asked for this experiment: the condensate
+#    comes off the engine at band 1, passes through the jacket on its way back
+#    to the boiler, and arrives two bands warmer carrying heat the engine was
+#    trying to get rid of. Closing that loop is also why the valve on the makeup
+#    line is a real setting with a cliff on both sides of it. An engine vents a
+#    sixth of its steam up the stack, so the loop runs at a deficit; twelve a
+#    tick covers most of it and the engine settles at 60% of rating. Open the
+#    valve to fourteen and the plant does not get faster, it *floods*: the
+#    surplus fills the feedwater line, which blocks the condensate, which stops
+#    the engine, which stops the boiler, and the whole thing deadlocks with
+#    every buffer full. That is the second era's other failure mode and it is
+#    the one nobody expects. This plant draws twelve units of water a tick
+#    where the first-era one draws four hundred.
+#
+# The drive train is one gearbox and two shafts and nothing is isolated from
+# anything, because steel rates 9, cast iron rates 7, and a crusher shakes at 7.
+# There are no belts in this file. That is not a saving of five tiles each, it
+# is the reason the whole machine can be a tight block instead of a long line.
+#
+# What it costs: 20 coal a tick, forever, and a machine that stops if the fire
+# goes out.
+
+machine "Steam Ore Line"
+brief line
+
+inlet     I1  at 0,0    draws ore
+crusher   C1  at 4,0
+crusher   C2  at 9,0
+screw     SC1 at 14,0
+outlet    O1  at 18,0
+
+shaft     SH1 at 5,5
+shaft     SH2 at 11,5
+gearbox   GB1 at 4,7   ratio 2
+
+steamengine SE1 at 4,10
+jacket    JK1 at 0,12
+radiator  RD1 at 12,11
+
+exchanger HX1 at 4,15
+burner    BU1 at 9,15
+
+valve     V1  at 1,19   limit 12
+skip      SK1 at 9,11
+pump      P1  at 4,19   draws water
+inlet     F1  at 9,19   draws coal
+
+wire F1.out -> BU1.fuel
+wire BU1.heat -> HX1.heat
+wire HX1.steam -> SE1.steam
+
+wire SE1.exhaust -> SK1.vapour
+wire SE1.waste -> JK1.heat
+wire SE1.waste -> RD1.heat
+wire SE1.condensate -> HX1.water
+wire SE1.condensate -> JK1.water
+wire JK1.out -> HX1.water
+
+wire P1.water -> V1.in
+wire V1.out -> HX1.water
+
+wire SE1.rotary -> GB1.in
+wire GB1.out -> SH1.in
+wire SH1.out -> SH2.in
+wire SH1.out -> C1.drive
+wire SH1.out -> C2.drive
+wire SH2.out -> SC1.drive
+
+wire I1.out -> C1.in
+wire C1.out -> C2.in
+wire C2.out -> SC1.in
+wire SC1.out -> O1.solid

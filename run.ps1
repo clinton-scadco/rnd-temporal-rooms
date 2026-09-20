@@ -29,8 +29,12 @@ param(
     #   -Machine read designs/x.machine [--png sheet.png]
     #   -Machine reads                 every design, at all four grades
     # Experiment 10 hands the third dimension to the player and reports on it:
-    #   -Machine space designs/x.machine   placement, ports, routing, clashes
+    #   -Machine space designs/x.machine [--paths]  placement, ports, routing,
+    #                                      clashes, and every corner of every run
     #   -Machine spaces                    every design, routed and judged
+    # Experiment 14 gives components a frame, a temperature and a century:
+    #   -Machine era                       three families, one brief, compared
+    #   -Machine heat designs/x.machine    what is hot, what is shaking, and why
     # Anything that builds a plant takes --grade a|b|c|d as well as --style and
     # --seed.
     [switch]$Machine,

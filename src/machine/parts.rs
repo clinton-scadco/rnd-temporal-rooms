@@ -1,4 +1,4 @@
-//! The vocabulary: thirty-eight components in eight families, seven connection
+//! The vocabulary: forty-six components in eight families, seven connection
 //! domains, and the numbers that make one design better than another.
 //!
 //! Experiment 06 had eight components and one brief. They were the right eight
@@ -15,13 +15,32 @@
 //! ```text
 //!   source     where matter and energy enter: reactor, burner, pump, inlet, mains
 //!   sink       where it leaves: outlet as product, skip as waste, radiator as heat
-//!   transport  distance, and what it costs: five pipes and a shaft
+//!   transport  distance, and what it costs: four pipes, a screw, a shaft, a belt
 //!   store      inertia: hopper, tank, drum, flywheel
 //!   control    deterministic thresholds: valve, clutch
-//!   heat       exchanger, preheater, condenser, furnace, heater
-//!   mechanical turbine, generator, motor, gearbox, crank
+//!   heat       exchanger, preheater, condenser, furnace, heater, fan, jacket
+//!   mechanical turbine, generator, motor, gearbox, crank, water wheel, pulley,
+//!              steam engine
 //!   process    crusher, mill, separator, rolling mill, press, lathe, column
 //! ```
+//!
+//! # Experiment 14: the last eight, and why they are not upgrades
+//!
+//! Eight components arrived with experiment 14, and not one of them is a better
+//! version of something already here. They are the *other two* ways to turn a
+//! crusher:
+//!
+//! ```text
+//!   waterwheel    200 water/tick -> 60 rotary at speed 1        water era
+//!   pulley        a ratio, in timber, that slips above 90       water era
+//!   belt          a long rotary span that does not carry shake  water era
+//!   mechpump      40 rotary -> 120 water, because water is not free
+//!   steamengine   120 steam -> 180 rotary, and 500 heat nobody asked for
+//!   fan           15 heat per MW, and it stops when the grid does
+//!   jacket        waste heat into hot water, instead of into the sky
+//! ```
+//!
+//! The crusher is untouched. That is the whole point: see `era`.
 //!
 //! # A component is a transformation with constraints
 //!
@@ -384,6 +403,28 @@ pub const SHAFT_LOSS_PCT: u64 = 1;
 /// how you buy distance, and the price of distance is the loss.
 pub const REACH: i32 = 6;
 
+/// How far a *power* connection reaches, which is a great deal further.
+///
+/// Experiment 14 deleted the power cable, and this constant is why it could.
+/// A cable was a three-tile component that carried four hundred megawatts, lost
+/// one percent, and asked the player a question with one answer: yes, run the
+/// cable. That is not a design decision, it is stationery, and a plant built
+/// out of it reads as a cable tray with some machinery caught in it.
+///
+/// Plumbing stays a decision, because it genuinely is one -- a heat main is a
+/// route, a bore and a loss, and where it goes changes the plant. Wiring is
+/// not. So electricity crosses the plot and the pipes do not, and the rule is
+/// one line rather than a component.
+pub const REACH_POWER: i32 = 24;
+
+/// How far a connection in this domain reaches.
+pub fn reach(dom: Domain) -> i32 {
+    match dom {
+        Domain::Electrical => REACH_POWER,
+        _ => REACH,
+    }
+}
+
 // --------------------------------------------------- experiment 10: upwards
 
 /// One tile of the designer's grid, in millimetres, and therefore one step of
@@ -416,7 +457,7 @@ pub fn height(k: Kind) -> u32 {
         Outlet => 1800,
         Skip => 2200,
         Radiator => 2800,
-        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft | Cable => 1000,
+        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft => 1000,
         Hopper => 4600,
         Tank => 7000,
         Drum => 3000,
@@ -438,6 +479,16 @@ pub fn height(k: Kind) -> u32 {
         Press => 6000,
         Lathe => 2200,
         Column => 15000,
+        // A water wheel is the tallest thing in a first-era plant and a
+        // coupling is the shortest thing in a third-era one, which is most of
+        // what those two plants look like from the road.
+        WaterWheel => 7200,
+        Pulley => 2200,
+        Belt => 1000,
+        MechPump => 1600,
+        SteamEngine => 3800,
+        Fan => 1800,
+        Jacket => 2000,
     }
 }
 
@@ -453,11 +504,14 @@ pub fn lift(k: Kind) -> u32 {
     match k {
         // On the slab.
         Heater | Mains | Outlet | Skip | Lathe | Column | Valve | Clutch => 0,
-        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft | Cable => 0,
+        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft => 0,
+        // A wheel stands in the race it is turned by, and a belt is a run like
+        // any other.
+        WaterWheel | Belt => 0,
         // On legs, because something has to fit underneath.
         Inlet | Hopper | Separator => 2400,
         // On a steel frame, at working height.
-        Radiator | Condenser => 3200,
+        Radiator | Condenser | Fan => 3200,
         // Everything else is heavy, and heavy things get a plinth.
         _ => 400,
     }
@@ -528,7 +582,6 @@ pub enum Kind {
     Chute,
     Screw,
     Shaft,
-    Cable,
     // store
     Hopper,
     Tank,
@@ -556,9 +609,19 @@ pub enum Kind {
     Press,
     Lathe,
     Column,
+    // Experiment 14. Appended rather than filed alphabetically, because
+    // `part()` indexes this enum's own discriminant and every design on disk
+    // was written against the order above.
+    WaterWheel,
+    Pulley,
+    Belt,
+    MechPump,
+    SteamEngine,
+    Fan,
+    Jacket,
 }
 
-pub const KINDS: [Kind; 38] = [
+pub const KINDS: [Kind; 44] = [
     Kind::Reactor,
     Kind::Burner,
     Kind::Heater,
@@ -574,7 +637,6 @@ pub const KINDS: [Kind; 38] = [
     Kind::Chute,
     Kind::Screw,
     Kind::Shaft,
-    Kind::Cable,
     Kind::Hopper,
     Kind::Tank,
     Kind::Drum,
@@ -597,6 +659,13 @@ pub const KINDS: [Kind; 38] = [
     Kind::Press,
     Kind::Lathe,
     Kind::Column,
+    Kind::WaterWheel,
+    Kind::Pulley,
+    Kind::Belt,
+    Kind::MechPump,
+    Kind::SteamEngine,
+    Kind::Fan,
+    Kind::Jacket,
 ];
 
 pub struct Part {
@@ -681,8 +750,6 @@ static SCREW: Recipe = Recipe { draws: &SCREW_DRAWS, makes: &SCREW_MAKES, rate: 
 
 static SHAFT_PORTS: [Port; 2] =
     [p("in", ROTARY, IN, 400, 400), p("out", ROTARY, OUT, 400, 400)];
-static CABLE_PORTS: [Port; 2] =
-    [p("in", ELEC, IN, 400, 400), p("out", ELEC, OUT, 400, 400)];
 
 // ------------------------------------------------------------------- stores
 
@@ -877,9 +944,117 @@ static COLUMN_PORTS: [Port; 5] = [
     p("heavy", FLUID, OUT, 80, 160),
 ];
 
+// ----------------------------------------------------- experiment 14: eras
+
+/// The head of water a wheel is fed with, and what comes back out of the
+/// tailrace. Nothing is consumed: a water wheel borrows the water and gives it
+/// back lower down, which is why a mill pond is a thing and a mill *reservoir*
+/// is not.
+static WATERWHEEL_PORTS: [Port; 3] = [
+    p("water", FLUID, IN, 200, 400),
+    p("rotary", ROTARY, OUT, 80, 80),
+    // The tailrace is a boundary port, so the water leaves whether or not
+    // anybody plumbed it anywhere. That is what a tailrace is, and the
+    // alternative -- a wheel that jams because nothing was wired to the bottom
+    // of it -- would be a rule about this crate rather than about millwork.
+    ext("tail", FLUID, OUT, 200, 200),
+];
+static WATERWHEEL_DRAWS: [Draw; 1] =
+    [needs(0, 10, &[Need::OneOf(&[Subst::Water])])];
+static WATERWHEEL_MAKES: [Make; 2] = [
+    make(1, 3, MADE, &[Effect::Become(Subst::Torque), Effect::Speed(WHEEL_SPEED)]),
+    make(2, 10, 0, &[]),
+];
+static WATERWHEEL: Recipe =
+    Recipe { draws: &WATERWHEEL_DRAWS, makes: &WATERWHEEL_MAKES, rate: 20, floor: 0 };
+
+/// The speed a wheel turns at: one band, and no argument about it. A crusher
+/// takes 2 or less and is delighted; a mill wants 4 and will not be fed by a
+/// river without a pulley train in between.
+pub const WHEEL_SPEED: u8 = 1;
+
+static PULLEY_PORTS: [Port; 2] =
+    [p("in", ROTARY, IN, 120, 120), p("out", ROTARY, OUT, 120, 120)];
+/// A timber pulley loses three times what a gearbox does, and above this many
+/// rotary a tick the belt on it simply slips.
+pub const PULLEY_LOSS_PCT: u64 = 6;
+pub const PULLEY_SLIP: u64 = 90;
+
+static BELT_PORTS: [Port; 2] =
+    [p("in", ROTARY, IN, 100, 100), p("out", ROTARY, OUT, 100, 100)];
+pub const BELT_LOSS_PCT: u64 = 8;
+
+static MECHPUMP_PORTS: [Port; 2] =
+    [p("drive", ROTARY, IN, 40, 40), p("water", FLUID, OUT, 120, 240)];
+static MECHPUMP_DRAWS: [Draw; 1] = [needs(0, 4, &[Need::MinSpeed(1)])];
+static MECHPUMP_MAKES: [Make; 1] = [make(1, 12, MADE, &[])];
+static MECHPUMP: Recipe =
+    Recipe { draws: &MECHPUMP_DRAWS, makes: &MECHPUMP_MAKES, rate: 10, floor: 0 };
+
+/// A reciprocating engine: steam in, shaft out, condensate back, and a great
+/// deal of heat into its own casting.
+///
+/// Unlike a turbine it has no threshold -- it will turn over on one stroke --
+/// and unlike a turbine it turns slowly, which is what a crusher wants and what
+/// a generator refuses. The fourth port is the experiment: `waste` is not
+/// produced by the recipe, it is filled by the thermal pass in `sim`, and what
+/// a player wires it to is the difference between a plant that runs and a plant
+/// that trips.
+static STEAMENGINE_PORTS: [Port; 5] = [
+    p("steam", GAS, IN, 120, 120),
+    p("rotary", ROTARY, OUT, 200, 200),
+    p("condensate", FLUID, OUT, 120, 240),
+    p("exhaust", GAS, OUT, 20, 40),
+    p("waste", HEAT, OUT, 240, 240),
+];
+static STEAMENGINE_DRAWS: [Draw; 1] =
+    [needs(0, 6, &[Need::OneOf(&[Subst::Water]), Need::MinTemp(1)])];
+/// Six of steam in, five of water back and one out of the stack.
+///
+/// The one unit is not flavour. A closed loop that returns every drop it took
+/// cannot be topped up -- there is nowhere for the makeup to go, and a plant
+/// built that way fills its own feedwater line and stops. Losing a sixth of the
+/// steam to the atmosphere is both what a reciprocating engine does and what
+/// makes the makeup valve on a steam design a real setting rather than a
+/// decoration. It is also why a steam plant needs somewhere to exhaust: wire
+/// nothing to that port and the engine backs up and stops turning.
+static STEAMENGINE_MAKES: [Make; 3] = [
+    make(1, 9, MADE, &[Effect::Become(Subst::Torque), Effect::Speed(ENGINE_SPEED)]),
+    make(2, 5, 0, &[Effect::Temp(1)]),
+    make(3, 1, 0, &[]),
+];
+static STEAMENGINE: Recipe =
+    Recipe { draws: &STEAMENGINE_DRAWS, makes: &STEAMENGINE_MAKES, rate: 20, floor: 0 };
+
+/// Slower than a turbine and faster than a river.
+pub const ENGINE_SPEED: u8 = 3;
+
+/// Forced air: the fast cooling option, and the one that stops when the grid
+/// does.
+static FAN_PORTS: [Port; 2] =
+    [p("power", ELEC, IN, 20, 20), p("heat", HEAT, IN, 300, 600)];
+/// Heat shifted per MW.
+pub const FAN_PER_MW: u64 = 15;
+
+/// A water jacket: the same heat, taken away as hot water instead of as
+/// nothing. What comes out the far side is two bands warmer than what went in,
+/// which is a preheater's feed and, at the right grade, an exchanger's.
+static JACKET_PORTS: [Port; 3] = [
+    p("heat", HEAT, IN, 240, 240),
+    p("water", FLUID, IN, 120, 240),
+    p("out", FLUID, OUT, 120, 240),
+];
+static JACKET_DRAWS: [Draw; 2] = [
+    needs(0, 2, &[Need::MinTemp(1)]),
+    needs(1, 1, &[Need::OneOf(&[Subst::Water])]),
+];
+static JACKET_MAKES: [Make; 1] = [make(2, 1, 1, &[Effect::Warmer(2)])];
+static JACKET: Recipe =
+    Recipe { draws: &JACKET_DRAWS, makes: &JACKET_MAKES, rate: 120, floor: 0 };
+
 // ------------------------------------------------------------------- the table
 
-static PARTS: [Part; 38] = [
+static PARTS: [Part; 44] = [
     Part { kind: Kind::Reactor, tag: "reactor", title: "Fuel / Heat Source",
         blurb: "burns fuel at its throttle whether or not the heat is wanted",
         family: Family::Source, w: 4, h: 4, ports: &REACTOR_PORTS, recipe: None },
@@ -928,9 +1103,6 @@ static PARTS: [Part; 38] = [
         blurb: "carries 400 rotary/tick at 99%, and reaches four tiles further",
         family: Family::Transport, w: 4, h: 1, ports: &SHAFT_PORTS, recipe: None },
 
-    Part { kind: Kind::Cable, tag: "cable", title: "Power Cable",
-        blurb: "carries 400 MW/tick at 99%, so one grid connection can feed a whole plant",
-        family: Family::Transport, w: 3, h: 1, ports: &CABLE_PORTS, recipe: None },
     Part { kind: Kind::Hopper, tag: "hopper", title: "Hopper",
         blurb: "holds 2000 of a material; in pulse mode it fills quietly and empties hard",
         family: Family::Store, w: 3, h: 3, ports: &HOPPER_PORTS, recipe: None },
@@ -1001,7 +1173,222 @@ static PARTS: [Part; 38] = [
     Part { kind: Kind::Column, tag: "column", title: "Distillation Column",
         blurb: "splits hot crude into light, middle and heavy; more stages, better split",
         family: Family::Process, w: 3, h: 6, ports: &COLUMN_PORTS, recipe: None },
+
+    Part { kind: Kind::WaterWheel, tag: "waterwheel", title: "Water Wheel",
+        blurb: "200 water/tick becomes 60 rotary at speed 1, and the water runs on",
+        family: Family::Mechanical, w: 4, h: 4, ports: &WATERWHEEL_PORTS, recipe: Some(&WATERWHEEL) },
+    Part { kind: Kind::Pulley, tag: "pulley", title: "Pulley Pair",
+        blurb: "a ratio in timber: 6% to get it, and it slips above 90 rotary/tick",
+        family: Family::Mechanical, w: 2, h: 2, ports: &PULLEY_PORTS, recipe: None },
+    Part { kind: Kind::Belt, tag: "belt", title: "Belt Drive",
+        blurb: "carries 100 rotary/tick at 92%, and -- the point of it -- no vibration",
+        family: Family::Transport, w: 5, h: 1, ports: &BELT_PORTS, recipe: None },
+    Part { kind: Kind::MechPump, tag: "mechpump", title: "Mechanical Pump",
+        blurb: "40 rotary/tick lifts 120 water, because a mill pond does not fill itself",
+        family: Family::Source, w: 2, h: 2, ports: &MECHPUMP_PORTS, recipe: Some(&MECHPUMP) },
+    Part { kind: Kind::SteamEngine, tag: "steamengine", title: "Steam Engine",
+        blurb: "120 steam/tick becomes 180 rotary at speed 3, condensate, and 500 heat",
+        family: Family::Mechanical, w: 4, h: 3, ports: &STEAMENGINE_PORTS, recipe: Some(&STEAMENGINE) },
+    Part { kind: Kind::Fan, tag: "fan", title: "Cooling Fan",
+        blurb: "15 heat/tick per MW, up to 300 -- and none at all without power",
+        family: Family::Heat, w: 2, h: 2, ports: &FAN_PORTS, recipe: None },
+    Part { kind: Kind::Jacket, tag: "jacket", title: "Water Jacket",
+        blurb: "240 waste heat into 120 water, two bands warmer, instead of into the sky",
+        family: Family::Heat, w: 3, h: 2, ports: &JACKET_PORTS, recipe: Some(&JACKET) },
 ];
+
+// ------------------------------------------- experiment 14: the other table
+
+use super::era::{Era, Mat, Phys};
+
+const WOOD: Mat = Mat::Wood;
+const IRON: Mat = Mat::CastIron;
+const STEEL: Mat = Mat::Steel;
+
+static ONLY_WOOD: [Mat; 1] = [WOOD];
+static ONLY_STEEL: [Mat; 1] = [STEEL];
+static WOOD_IRON: [Mat; 2] = [WOOD, IRON];
+static IRON_STEEL: [Mat; 2] = [IRON, STEEL];
+static STEEL_IRON: [Mat; 2] = [STEEL, IRON];
+static ALL_THREE: [Mat; 3] = [STEEL, IRON, WOOD];
+static WOOD_FIRST: [Mat; 3] = [WOOD, IRON, STEEL];
+
+/// A component with no body worth heating and no opinion about what it is made
+/// of. Most of the catalogue, and saying so once is better than saying so
+/// thirty times.
+const fn inert(kind: Kind, power: i64) -> Phys {
+    Phys {
+        kind,
+        era: Era::Any,
+        power,
+        torque: 0,
+        speed: 0,
+        heat: 0,
+        mass: 0,
+        lo: 0,
+        hi: 0,
+        max: 0,
+        mat: STEEL,
+        mats: &ONLY_STEEL,
+        vib: 0,
+    }
+}
+
+/// The physical properties of all forty-six, in the order `KINDS` is in.
+///
+/// # How to read a row, and how the numbers were chosen
+///
+/// `heat` is heat units into the body per tick at full output, and `mass` is
+/// heat units per degree. A body sheds `temp * cond / 100` a tick, so a
+/// component left to the air settles at `heat * 100 / cond` -- which for the
+/// thirty-eight components that were here before experiment 14 is *deliberately
+/// inside their operating range on the steel they come on*. That is not a
+/// coincidence or a kindness. Those components were measured across thirteen
+/// experiments and eighteen shipped designs, and an experiment about thermal
+/// limits that silently re-scored all of them would have proved nothing except
+/// that it had changed the subject. They run warm. They do not run hot.
+///
+/// What runs hot is the steam engine, at 500 a tick into a cast-iron body that
+/// trips at 220, which is to say: it cannot be built without a cooling decision.
+/// And what runs *cold* is the whole first era, which has no thermal problem at
+/// all and a vibration problem instead.
+static PHYS: [Phys; 44] = [
+    // ------------------------------------------------------------- sources
+    // A reactor, a burner and a furnace are hot, and none of them has a body
+    // temperature: their heat is the product, it goes out of a port, and it is
+    // already accounted for everywhere in this crate. Giving them a second,
+    // secret heat would be double counting dressed as physics.
+    inert(Kind::Reactor, REACTOR_HEAT as i64),
+    inert(Kind::Burner, 400),
+    inert(Kind::Heater, -60),
+    inert(Kind::Mains, 400),
+    inert(Kind::Pump, 200),
+    inert(Kind::Inlet, 100),
+    // --------------------------------------------------------------- sinks
+    inert(Kind::Outlet, 0),
+    inert(Kind::Skip, 0),
+    inert(Kind::Radiator, -500),
+    // ----------------------------------------------------------- transport
+    inert(Kind::HeatPipe, 0),
+    inert(Kind::SteamPipe, 0),
+    inert(Kind::FluidPipe, 0),
+    inert(Kind::Chute, 0),
+    // Transmission runs the length of a plant and does almost no work, so it
+    // carries no body temperature: what it carries is shake, and what decides
+    // whether it survives that is the frame.
+    Phys { kind: Kind::Screw, era: Era::Any, power: -20, torque: 2, speed: 1,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: STEEL, mats: &ALL_THREE, vib: 1 },
+    // The line shaft is the component the first era is built around and the
+    // third era does not own one of. It is here, unchanged, in all three
+    // materials -- which is the whole of "better bearings" as a mechanic: the
+    // same shaft, on a frame that will carry what is bolted to it.
+    Phys { kind: Kind::Shaft, era: Era::Any, power: 400, torque: 6, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: STEEL, mats: &ALL_THREE, vib: 0 },
+    // -------------------------------------------------------------- stores
+    Phys { kind: Kind::Hopper, era: Era::Any, power: 0, torque: 0, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: STEEL, mats: &ALL_THREE, vib: 0 },
+    inert(Kind::Tank, 0),
+    inert(Kind::Drum, 0),
+    Phys { kind: Kind::Flywheel, era: Era::Any, power: 0, torque: 9, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: STEEL, mats: &ALL_THREE, vib: 2 },
+    // ------------------------------------------------------------- control
+    inert(Kind::Valve, 0),
+    Phys { kind: Kind::Clutch, era: Era::Any, power: 0, torque: 5, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: STEEL, mats: &STEEL_IRON, vib: 1 },
+    // ---------------------------------------------------------------- heat
+    inert(Kind::Exchanger, 0),
+    inert(Kind::Preheater, 0),
+    inert(Kind::Condenser, 0),
+    inert(Kind::Furnace, 0),
+    // ---------------------------------------------------------- mechanical
+    Phys { kind: Kind::Turbine, era: Era::Electric, power: 120, torque: 3, speed: DRIVE_SPEED,
+        heat: 90, mass: 120, lo: 0, hi: 90, max: 200,
+        mat: STEEL, mats: &ONLY_STEEL, vib: 2 },
+    Phys { kind: Kind::Generator, era: Era::Electric, power: 200, torque: 4, speed: GENERATOR_MIN_SPEED,
+        heat: 45, mass: 90, lo: 0, hi: 60, max: 140,
+        mat: STEEL, mats: &ONLY_STEEL, vib: 1 },
+    Phys { kind: Kind::Motor, era: Era::Electric, power: -60, torque: 4, speed: DRIVE_SPEED,
+        heat: 45, mass: 90, lo: 0, hi: 60, max: 140,
+        mat: STEEL, mats: &STEEL_IRON, vib: 1 },
+    Phys { kind: Kind::Gearbox, era: Era::Any, power: 300, torque: 8, speed: 0,
+        heat: 36, mass: 90, lo: 0, hi: 60, max: 160,
+        mat: STEEL, mats: &STEEL_IRON, vib: 2 },
+    Phys { kind: Kind::Crank, era: Era::Any, power: 92, torque: 6, speed: 2,
+        heat: 30, mass: 80, lo: 0, hi: 60, max: 140,
+        mat: STEEL, mats: &STEEL_IRON, vib: 4 },
+    // ------------------------------------------------------------- process
+    // The one component this experiment is most careful not to touch. There is
+    // one crusher. It shakes at 7 in every century, which is why the first era
+    // cannot bolt it to a timber shaft and the third era does not have to think
+    // about it.
+    Phys { kind: Kind::Crusher, era: Era::Any, power: -50, torque: 8, speed: 2,
+        heat: 60, mass: 120, lo: 0, hi: 70, max: 170,
+        mat: STEEL, mats: &STEEL_IRON, vib: 7 },
+    Phys { kind: Kind::Mill, era: Era::Any, power: -80, torque: 5, speed: 4,
+        heat: 75, mass: 130, lo: 0, hi: 70, max: 170,
+        mat: STEEL, mats: &STEEL_IRON, vib: 5 },
+    Phys { kind: Kind::Separator, era: Era::Any, power: -40, torque: 3, speed: 3,
+        heat: 30, mass: 80, lo: 0, hi: 60, max: 140,
+        mat: STEEL, mats: &STEEL_IRON, vib: 3 },
+    Phys { kind: Kind::RollMill, era: Era::Any, power: -60, torque: 7, speed: 3,
+        heat: 60, mass: 120, lo: 0, hi: 70, max: 170,
+        mat: STEEL, mats: &ONLY_STEEL, vib: 6 },
+    Phys { kind: Kind::Press, era: Era::Any, power: -60, torque: 8, speed: 0,
+        heat: 54, mass: 110, lo: 0, hi: 70, max: 170,
+        mat: STEEL, mats: &ONLY_STEEL, vib: 8 },
+    Phys { kind: Kind::Lathe, era: Era::Electric, power: -20, torque: 2, speed: 5,
+        heat: 30, mass: 80, lo: 0, hi: 60, max: 140,
+        mat: STEEL, mats: &ONLY_STEEL, vib: 2 },
+    inert(Kind::Column, 0),
+    // ------------------------------------------------- experiment 14: eras
+    // Cold, slow, strong, and made of trees. A water wheel has no thermal
+    // problem whatsoever and every other kind of problem: one band of speed,
+    // sixty rotary, and a frame that rates 4 in a plant full of things that
+    // shake at 7.
+    Phys { kind: Kind::WaterWheel, era: Era::Water, power: 60, torque: 9, speed: WHEEL_SPEED,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: WOOD, mats: &WOOD_IRON, vib: 2 },
+    Phys { kind: Kind::Pulley, era: Era::Water, power: 90, torque: 4, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: WOOD, mats: &WOOD_IRON, vib: 1 },
+    // Slack, and therefore the only drive component in the catalogue that
+    // passes torque without passing shake. Everything about the first era's
+    // layout follows from that one line.
+    Phys { kind: Kind::Belt, era: Era::Water, power: 100, torque: 3, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: WOOD, mats: &ONLY_WOOD, vib: 0 },
+    Phys { kind: Kind::MechPump, era: Era::Water, power: -40, torque: 3, speed: 1,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: WOOD, mats: &WOOD_FIRST, vib: 2 },
+    // The centre of the experiment. 500 heat a tick into a body that trips at
+    // 220 and sheds its own temperature to the air. Left alone it does not
+    // reach 500 -- the HOT band takes a quarter off its output, which takes a
+    // quarter off the heat, which is a stabilising loop and one of the nicer
+    // things to fall out of this model -- but it settles well past its ceiling
+    // and trips. Every steam design in this repository is, underneath, an
+    // answer to that one number.
+    Phys { kind: Kind::SteamEngine, era: Era::Steam, power: 180, torque: 8, speed: ENGINE_SPEED,
+        heat: 500, mass: 200, lo: 40, hi: 120, max: 220,
+        mat: IRON, mats: &IRON_STEEL, vib: 5 },
+    Phys { kind: Kind::Fan, era: Era::Electric, power: -20, torque: 0, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: STEEL, mats: &ONLY_STEEL, vib: 1 },
+    Phys { kind: Kind::Jacket, era: Era::Steam, power: 0, torque: 0, speed: 0,
+        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
+        mat: IRON, mats: &IRON_STEEL, vib: 0 },
+];
+
+/// The physical properties of one kind.
+pub fn phys(kind: Kind) -> &'static Phys {
+    let p = &PHYS[kind as usize];
+    debug_assert_eq!(p.kind, kind, "the physical table is out of order at {kind:?}");
+    p
+}
 
 pub fn part(kind: Kind) -> &'static Part {
     let p = &PARTS[kind as usize];
@@ -1040,6 +1427,18 @@ impl Kind {
     }
     pub fn recipe(self) -> Option<&'static Recipe> {
         part(self).recipe
+    }
+    pub fn phys(self) -> &'static Phys {
+        phys(self)
+    }
+    pub fn era(self) -> Era {
+        phys(self).era
+    }
+    /// Which port carries the heat this component would rather be without, if
+    /// it has one. Only the steam engine does, and only because it is the only
+    /// component whose waste heat is worth a decision.
+    pub fn waste_port(self) -> Option<usize> {
+        part(self).ports.iter().position(|p| p.name == "waste")
     }
 }
 

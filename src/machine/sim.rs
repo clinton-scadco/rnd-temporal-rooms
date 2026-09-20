@@ -44,6 +44,7 @@
 //! inspector can say the sentence that teaches the player the mechanic.
 
 use super::design::{Design, Link, Tune};
+use super::era::{self, Band, Mat};
 use super::parts::{self, Dir, Kind, Need, Recipe};
 use super::stuff::{Buf, Domain, Stuff, Subst};
 use std::collections::BTreeMap;
@@ -76,6 +77,15 @@ pub enum Status {
     Filling,
     /// What arrived is not something this component will accept.
     Refused,
+    /// Experiment 14: tripped on its own body temperature, and it will not
+    /// restart until it is back inside its operating range. Distinct from
+    /// `Stalled` on purpose -- a stalled turbine starts the moment the gas
+    /// arrives, and an overheated engine does not start when the steam does.
+    Overheated,
+    /// Experiment 14: bolted to a frame that will not carry what it is being
+    /// shaken by. Nothing about this one is transient: it is wrong in the
+    /// document, and it is wrong every tick until the document changes.
+    Shaking,
 }
 
 impl Status {
@@ -90,6 +100,8 @@ impl Status {
             Status::Venting => "VENTING",
             Status::Filling => "FILLING",
             Status::Refused => "REFUSED",
+            Status::Overheated => "OVERHEATED",
+            Status::Shaking => "SHAKING",
         }
     }
     /// Whether this is the status of a component that is doing its job.
@@ -170,6 +182,14 @@ pub struct Delta {
     pub heat_wasted: u64,
     /// Utilisation summed over components, in per mille each.
     pub util_sum: u64,
+    /// Experiment 14: heat radiated off warm castings into the air.
+    ///
+    /// Deliberately *not* added to `heat_wasted`. That column has meant one
+    /// thing since experiment 06 -- heat the design threw away on purpose,
+    /// through a radiator or out of a leaking pipe -- and folding a motor's
+    /// body warmth into it would have quietly re-scored eighteen designs that
+    /// had not changed. This is reported beside it, not inside it.
+    pub body_heat: u64,
     /// Matter drawn in from outside.
     pub took: Flow,
     /// Product leaving through a boundary port.
@@ -190,6 +210,7 @@ impl Delta {
 pub struct Totals {
     pub power: u128,
     pub heat_wasted: u128,
+    pub body_heat: u128,
     pub util_sum: u128,
     pub ticks: u128,
     pub took: FlowBig,
@@ -201,6 +222,7 @@ impl Totals {
     pub fn add(&mut self, d: &Delta) {
         self.power += d.power as u128;
         self.heat_wasted += d.heat_wasted as u128;
+        self.body_heat += d.body_heat as u128;
         self.util_sum += d.util_sum as u128;
         self.ticks += 1;
         merge(&mut self.took, &d.took, 1);
@@ -211,6 +233,7 @@ impl Totals {
     pub fn plus(mut self, o: &Totals) -> Totals {
         self.power += o.power;
         self.heat_wasted += o.heat_wasted;
+        self.body_heat += o.body_heat;
         self.util_sum += o.util_sum;
         self.ticks += o.ticks;
         merge_big(&mut self.took, &o.took, 1);
@@ -223,6 +246,7 @@ impl Totals {
         let mut t = Totals {
             power: self.power * k,
             heat_wasted: self.heat_wasted * k,
+            body_heat: self.body_heat * k,
             util_sum: self.util_sum * k,
             ticks: self.ticks * k,
             ..Default::default()
@@ -237,6 +261,7 @@ impl Totals {
         let mut t = Totals {
             power: self.power - o.power,
             heat_wasted: self.heat_wasted - o.heat_wasted,
+            body_heat: self.body_heat - o.body_heat,
             util_sum: self.util_sum - o.util_sum,
             ticks: self.ticks - o.ticks,
             took: self.took.clone(),
@@ -276,6 +301,19 @@ pub struct UnitState {
     pub age: u64,
     /// Turbines only, `0..=SPIN_MAX`.
     pub spin: u32,
+    /// Experiment 14: heat units held in the component's own body.
+    ///
+    /// Divided by the part's thermal mass this is its temperature in degrees
+    /// above ambient, held exactly. It is an integer for the same reason every
+    /// other quantity in this crate is one: `orbit` compiles a design by
+    /// noticing its state repeat, and a state with a float in it repeats
+    /// approximately, which is to say never.
+    pub warmth: u64,
+    /// Experiment 14: tripped on temperature, and latched there until the body
+    /// is back inside its operating range. The hysteresis is the point -- a
+    /// component that cut out at the threshold and cut back in one degree below
+    /// it would chatter, and chatter is not a failure mode a player can read.
+    pub tripped: bool,
     /// Stores only: emptying rather than filling.
     pub draining: bool,
     /// Fair-share rotation, one per port, kept modulo that port's wire count so
@@ -297,6 +335,9 @@ pub struct UnitState {
     pub shipped: Vec<u64>,
     /// Thrown away by this component this tick, in its own units.
     pub waste: u64,
+    /// Experiment 14: heat that left the body for the air this tick. Reported
+    /// rather than scored -- see `Delta::body_heat`.
+    pub body: u64,
     /// Per mille of what this component is rated to do.
     pub util: u32,
 }
@@ -311,6 +352,21 @@ pub struct Machine {
     out_wires: Vec<Vec<Vec<usize>>>,
     in_wires: Vec<Vec<Vec<usize>>>,
     pub st: Vec<UnitState>,
+    /// Experiment 14: what each component's frame is made of, how much clear
+    /// air it was given, and how hard the drive it is bolted to shakes.
+    ///
+    /// All three are facts about the *document* rather than about the tick, so
+    /// they are worked out once when the machine is built and never again. The
+    /// third is the interesting one: vibration travels through rigid rotary
+    /// couplings and stops at a belt, so `shake[i]` is the worst thing anywhere
+    /// in the rigid cluster component `i` belongs to -- which is why a crusher
+    /// three shafts away is still the crusher that pulls a timber mill apart.
+    pub mats: Vec<Mat>,
+    pub clear: Vec<u32>,
+    pub shake: Vec<u8>,
+    /// Which rigid cluster each component belongs to, as the index of one
+    /// member of it.
+    pub group: Vec<usize>,
     /// How much crossed each wire during the tick just simulated, and what it
     /// was. Per wire and not per port, because "which of my three pipes is
     /// actually carrying anything" is the question a player asks first.
@@ -350,6 +406,8 @@ impl Machine {
                     buf: ports.iter().map(|p| Buf::empty(p.dom.rest())).collect(),
                     age: 0,
                     spin: 0,
+                    warmth: 0,
+                    tripped: false,
                     draining: false,
                     cursor: vec![0; np],
                     status: Status::Idle,
@@ -360,18 +418,27 @@ impl Machine {
                     made: vec![0; np],
                     shipped: vec![0; np],
                     waste: 0,
+                    body: 0,
                     util: 0,
                 }
             })
             .collect();
+        let kinds: Vec<Kind> = d.units.iter().map(|u| u.kind).collect();
+        let mats: Vec<Mat> = d.units.iter().map(|u| u.tune.mat).collect();
+        let clear: Vec<u32> = (0..n).map(|i| d.clearance(i)).collect();
+        let (shake, group) = shake_loads(&kinds, &links);
         Ok(Machine {
             names: d.units.iter().map(|u| u.name.clone()).collect(),
-            kinds: d.units.iter().map(|u| u.kind).collect(),
+            kinds,
             tunes: d.units.iter().map(|u| u.tune).collect(),
             links,
             out_wires,
             in_wires,
             st,
+            mats,
+            clear,
+            shake,
+            group,
             flow: vec![0; nlinks],
             carried: vec![Stuff::fresh(Subst::Heat); nlinks],
             tick: 0,
@@ -565,29 +632,298 @@ impl Machine {
     fn run_units(&mut self, d: &mut Delta) {
         for i in 0..self.st.len() {
             let kind = self.kinds[i];
-            match kind {
-                Kind::Reactor => self.reactor(i, d),
-                Kind::Mains => self.source(i, Subst::Power, d),
-                Kind::Pump => self.source(i, self.tunes[i].subst, d),
-                Kind::Inlet => self.source(i, self.tunes[i].subst, d),
-                Kind::Hopper | Kind::Tank | Kind::Drum | Kind::Flywheel => self.store(i),
-                Kind::Outlet | Kind::Skip | Kind::Radiator => self.dump(i),
-                Kind::HeatPipe => self.conduit(i, parts::PIPE_LOSS_PCT, d),
-                Kind::SteamPipe | Kind::FluidPipe | Kind::Chute => self.conduit(i, 0, d),
-                Kind::Shaft | Kind::Cable => self.conduit(i, parts::SHAFT_LOSS_PCT, d),
-                Kind::Valve | Kind::Clutch => self.limiter(i),
-                Kind::Gearbox => self.gearbox(i, d),
-                Kind::Turbine => self.turbine(i, d),
-                Kind::Generator => self.generator(i),
-                Kind::Furnace => self.furnace(i),
-                Kind::Column => self.column(i),
-                _ => {
-                    let r = parts::part(kind).recipe.expect("every other kind is a recipe");
-                    self.recipe(i, r);
-                }
+            // Experiment 14's two gates, and they come first because both of
+            // them mean the component does not run at all this tick. A
+            // derating would have been softer and would have taught nobody
+            // anything: the whole argument of Need since experiment 07 is that
+            // a machine which stops and says why is a better teacher than one
+            // which quietly runs at forty percent.
+            match self.halt(i) {
+                Some(why) => self.halted(i, why),
+                None => match kind {
+                    Kind::Reactor => self.reactor(i, d),
+                    Kind::Mains => self.source(i, Subst::Power, d),
+                    Kind::Pump => self.source(i, self.tunes[i].subst, d),
+                    Kind::Inlet => self.source(i, self.tunes[i].subst, d),
+                    Kind::Hopper | Kind::Tank | Kind::Drum | Kind::Flywheel => self.store(i),
+                    Kind::Outlet | Kind::Skip | Kind::Radiator => self.dump(i),
+                    Kind::HeatPipe => self.conduit(i, parts::PIPE_LOSS_PCT, d),
+                    Kind::SteamPipe | Kind::FluidPipe | Kind::Chute => self.conduit(i, 0, d),
+                    Kind::Shaft => self.conduit(i, parts::SHAFT_LOSS_PCT, d),
+                    Kind::Belt => self.conduit(i, parts::BELT_LOSS_PCT, d),
+                    Kind::Valve | Kind::Clutch => self.limiter(i),
+                    Kind::Gearbox => self.gearbox(i, d),
+                    Kind::Pulley => self.pulley(i, d),
+                    Kind::Turbine => self.turbine(i, d),
+                    Kind::Generator => self.generator(i),
+                    Kind::Furnace => self.furnace(i),
+                    Kind::Column => self.column(i),
+                    Kind::Fan => self.fan(i, d),
+                    _ => {
+                        let r = parts::part(kind).recipe.expect("every other kind is a recipe");
+                        self.recipe(i, r);
+                    }
+                },
             }
             self.perish(i, d);
+            self.thermal(i);
+            d.body_heat += self.st[i].body;
             d.util_sum += self.st[i].util as u64;
+        }
+    }
+
+    // --------------------------------------------- experiment 14: the body
+
+    /// The component's body temperature, in degrees above ambient.
+    pub fn temp(&self, i: usize) -> u32 {
+        let ph = parts::phys(self.kinds[i]);
+        if ph.mass == 0 {
+            0
+        } else {
+            (self.st[i].warmth / ph.mass) as u32
+        }
+    }
+
+    /// Which band that temperature falls in, on the frame it was built on.
+    pub fn band(&self, i: usize) -> Band {
+        parts::phys(self.kinds[i]).band(self.temp(i), self.mats[i])
+    }
+
+    // ------------------------------------------------- who is waiting on whom
+
+    /// The neighbour most likely to be the reason this component is short.
+    ///
+    /// The port the component itself named, if it named one, and otherwise
+    /// whichever input is wired at all. Then the wire into that port that
+    /// carried the *least* — because with three feeders on one port, the one
+    /// that delivered nothing is the one worth looking at.
+    pub fn supplier(&self, i: usize) -> Option<usize> {
+        let ports = parts::part(self.kinds[i]).ports;
+        let look: Vec<usize> = match self.st[i].stop {
+            Stop::Short(p) => vec![p],
+            _ => (0..ports.len()).filter(|&p| ports[p].dir == Dir::In).collect(),
+        };
+        let mut best: Option<(u64, usize)> = None;
+        for p in look {
+            for &w in self.feeders(i, p) {
+                let got = self.flow[w];
+                if best.is_none_or(|(b, _)| got < b) {
+                    best = Some((got, self.links[w].from));
+                }
+            }
+        }
+        best.map(|(_, u)| u)
+    }
+
+    /// And the neighbour most likely to be the reason it has nowhere to put
+    /// what it made.
+    pub fn consumer(&self, i: usize) -> Option<usize> {
+        let ports = parts::part(self.kinds[i]).ports;
+        let look: Vec<usize> = match self.st[i].stop {
+            Stop::Full(p) => vec![p],
+            _ => (0..ports.len()).filter(|&p| ports[p].dir == Dir::Out).collect(),
+        };
+        let mut best: Option<(u64, usize)> = None;
+        for p in look {
+            for &w in self.drains(i, p) {
+                let took = self.flow[w];
+                if best.is_none_or(|(b, _)| took < b) {
+                    best = Some((took, self.links[w].to));
+                }
+            }
+        }
+        best.map(|(_, u)| u)
+    }
+
+    /// Follow the wires until the trail stops, and return what is at the end.
+    ///
+    /// This exists because of the single most common complaint about a plant of
+    /// twenty components: fifteen of them say STARVED, none of them says why,
+    /// and the one that is actually broken is somewhere in the middle saying
+    /// something else entirely.
+    ///
+    /// STARVED means somebody upstream is not supplying. BLOCKED means somebody
+    /// downstream is not taking. Both are *symptoms*, and both point in a known
+    /// direction, so a cascade is a path and the fault is at the end of it. The
+    /// walk stops at the first component that is neither — which is either the
+    /// real fault (refused, stalled, overheated, shaking, idle) or a component
+    /// running flat out, which is its own answer: there is simply less of the
+    /// stuff than this wanted.
+    ///
+    /// `None` when the component is the end of its own trail, which is the case
+    /// worth saying nothing about.
+    pub fn root_cause(&self, i: usize) -> Option<usize> {
+        let mut seen = vec![false; self.len()];
+        seen[i] = true;
+        let mut at = i;
+        // Bounded by the component count: a cycle cannot outrun the `seen` set,
+        // and neither can a chain.
+        for _ in 0..self.len() {
+            let next = match self.st[at].status {
+                Status::Starved => self.supplier(at),
+                Status::Blocked => self.consumer(at),
+                _ => break,
+            };
+            match next {
+                Some(n) if !seen[n] => {
+                    seen[n] = true;
+                    at = n;
+                }
+                _ => break,
+            }
+        }
+        (at != i).then_some(at)
+    }
+
+    /// The input ports this component genuinely cannot run without.
+    ///
+    /// A recipe says so itself. For the hand-written ones it is every input
+    /// that is not a boundary — a skip has three and is waiting for none of
+    /// them, and saying it was waiting for all three would be worse than saying
+    /// nothing.
+    pub fn needed_inputs(&self, i: usize) -> Vec<usize> {
+        let part = parts::part(self.kinds[i]);
+        if let Some(r) = part.recipe {
+            let mut v: Vec<usize> = r.draws.iter().map(|d| d.port).collect();
+            v.dedup();
+            return v;
+        }
+        match self.kinds[i] {
+            Kind::Outlet | Kind::Skip | Kind::Radiator => Vec::new(),
+            _ => part
+                .ports
+                .iter()
+                .enumerate()
+                .filter(|(_, q)| q.dir == Dir::In)
+                .map(|(p, _)| p)
+                .collect(),
+        }
+    }
+
+    /// Which component in `i`'s rigid cluster is the one doing the shaking, so
+    /// that a panel can name it rather than describe it.
+    pub fn shaker(&self, i: usize) -> Option<usize> {
+        if self.shake[i] == 0 {
+            return None;
+        }
+        (0..self.len())
+            .find(|&j| self.group[j] == self.group[i] && parts::phys(self.kinds[j]).vib == self.shake[i])
+    }
+
+    /// Per mille of rated output this component may do this tick.
+    ///
+    /// One thousand for anything without a body, which is most of the
+    /// catalogue and every design written before experiment 14 -- so the whole
+    /// mechanic is arithmetically invisible until somebody builds something
+    /// that gets hot.
+    pub fn duty(&self, i: usize) -> u64 {
+        if !parts::phys(self.kinds[i]).thermal() {
+            return 1000;
+        }
+        if self.st[i].tripped {
+            return 0;
+        }
+        self.band(i).duty()
+    }
+
+    /// A rated figure, derated by the band the body is in.
+    fn derate(&self, i: usize, rated: u64) -> u64 {
+        let q = self.duty(i);
+        if q >= 1000 {
+            return rated;
+        }
+        rated * q / 1000
+    }
+
+    /// Why this component is not going to run at all this tick, if it is not.
+    ///
+    /// Two reasons, and they are the two experiment 14 added. Both are checked
+    /// before anything else because both mean the same thing: the machine is
+    /// there, it is wired correctly, its inputs have arrived, and it is not
+    /// going to move.
+    fn halt(&self, i: usize) -> Option<Status> {
+        if self.shake[i] > self.mats[i].tol() {
+            return Some(Status::Shaking);
+        }
+        if parts::phys(self.kinds[i]).thermal() && self.st[i].tripped {
+            return Some(Status::Overheated);
+        }
+        None
+    }
+
+    fn halted(&mut self, i: usize, why: Status) {
+        let s = &mut self.st[i];
+        s.util = 0;
+        s.status = why;
+        s.stop = Stop::None;
+    }
+
+    /// Heat in, heat out, and a body somewhere in between.
+    ///
+    /// Run after the component, so the heat is made by the work that was
+    /// actually done and the band it decides governs the *next* tick. That
+    /// ordering is not an implementation detail. It is what makes a temperature
+    /// something a player watches climb towards a threshold rather than
+    /// something that has already happened by the time it is drawn.
+    fn thermal(&mut self, i: usize) {
+        let kind = self.kinds[i];
+        let ph = parts::phys(kind);
+        self.st[i].body = 0;
+        if !ph.thermal() {
+            return;
+        }
+        self.st[i].warmth += ph.heat * self.st[i].util as u64 / 1000;
+
+        // Out through the waste port, if there is one, the player wired it to
+        // something, and the body is warm enough for what comes off it to be
+        // worth anything. Unwired, it is not a hole in the casing: the heat
+        // stays in the body and the air is the only way out.
+        //
+        // The temperature floor is not fussiness. Without it a cold machine
+        // pushes grade-0 heat into the pipe on the first tick, and a jacket
+        // downstream -- which will not touch heat that cold -- ends up holding
+        // a full buffer of it forever, refusing, while the genuinely hot heat
+        // that arrives later has nowhere to blend into. One tick of startup
+        // poisons the cooling loop for the rest of the run.
+        if let Some(p) = kind.waste_port() {
+            if !self.out_wires[i][p].is_empty() && self.temp(i) >= era::GRADE_MIN {
+                let port = &parts::part(kind).ports[p];
+                let room = port.cap - self.st[i].buf[p].qty;
+                let take = self
+                    .st[i]
+                    .warmth
+                    .min(port.rate)
+                    .min(room)
+                    .min(era::wasteable(self.temp(i)));
+                let grade = era::grade(self.temp(i));
+                let heat = Stuff::with(
+                    Subst::Heat,
+                    super::stuff::Qual { temp: grade, purity: 100, ..Default::default() },
+                );
+                if take > 0 && self.st[i].buf[p].takes(&heat) {
+                    self.st[i].warmth -= take;
+                    self.st[i].buf[p].put(heat, take);
+                    self.st[i].made[p] += take;
+                }
+            }
+        }
+
+        // And to the air, which is free, weak, and the only cooling a design
+        // gets without deciding to have any.
+        let out = era::shed(self.temp(i), self.mats[i], self.clear[i]).min(self.st[i].warmth);
+        self.st[i].warmth -= out;
+        self.st[i].body = out;
+
+        // The latch. Trips at the ceiling, clears only once the body is back
+        // inside the operating range.
+        let t = self.temp(i);
+        let mat = self.mats[i];
+        if self.st[i].tripped {
+            if t <= ph.hi {
+                self.st[i].tripped = false;
+            }
+        } else if ph.band(t, mat) == Band::Overheated {
+            self.st[i].tripped = true;
         }
     }
 
@@ -625,7 +961,7 @@ impl Machine {
     /// A component that is a row in the part table: draw, check, make.
     ///
     /// This is where experiment 07 earns the rewrite. Fourteen of the
-    /// thirty-eight components are this function and a table entry, so adding a
+    /// components are this function and a table entry, so adding a
     /// press or a separator is a change to `parts.rs` and nothing else -- and
     /// every one of them starves, blocks, refuses and explains itself the same
     /// way, because it is all the same twenty lines.
@@ -639,7 +975,12 @@ impl Machine {
     /// that a table row could not have said.
     fn recipe(&mut self, i: usize, r: &'static Recipe) {
         let part = parts::part(self.kinds[i]);
-        let mut n = r.rate;
+        // Experiment 14: a warm component is a slower component, and a cold one
+        // is a component that has not been run in. The band is the only thing
+        // that changes here, and `derate` is 1:1 for everything without a body,
+        // which is most of the catalogue and all of the older designs.
+        let rated = self.derate(i, r.rate);
+        let mut n = rated;
         let mut stop = Stop::None;
 
         // What each input would supply, and whether it will do.
@@ -707,10 +1048,14 @@ impl Machine {
             }
         }
 
+        let capped = rated < r.rate && n == rated && n > 0;
         let s = &mut self.st[i];
         s.util = (n * 1000 / r.rate) as u32;
         s.stop = stop;
-        s.status = if n == r.rate {
+        s.status = if n == r.rate || capped {
+            // Doing everything its temperature allows is not the same as being
+            // short of anything, and calling it STARVED would send the player
+            // looking for a supply problem that is not there.
             Status::Running
         } else {
             match stop {
@@ -967,12 +1312,13 @@ impl Machine {
     fn gearbox(&mut self, i: usize, d: &mut Delta) {
         let ports = parts::part(Kind::Gearbox).ports;
         let ratio = self.tunes[i].ratio;
+        let rate = self.derate(i, ports[0].rate);
         let s = &mut self.st[i];
         let have = s.buf[0].qty;
         let mut what = s.buf[0].stuff;
         what.q.speed = geared(what.q.speed, ratio);
         let room = if s.buf[1].takes(&what) { ports[1].cap - s.buf[1].qty } else { 0 };
-        let take = have.min(room * 100 / (100 - parts::GEARBOX_LOSS_PCT)).min(ports[0].rate);
+        let take = have.min(room * 100 / (100 - parts::GEARBOX_LOSS_PCT)).min(rate);
         let net = (take - take * parts::GEARBOX_LOSS_PCT / 100).min(room);
         let (_, got) = s.buf[0].take(take);
         s.buf[1].put(what, net);
@@ -992,6 +1338,7 @@ impl Machine {
 
     fn turbine(&mut self, i: usize, d: &mut Delta) {
         let ports = parts::part(Kind::Turbine).ports;
+        let rate = self.derate(i, ports[0].rate);
         let s = &mut self.st[i];
         let have = s.buf[0].qty;
         let out = Stuff::with(
@@ -1009,7 +1356,7 @@ impl Machine {
             intake * parts::TURBINE_EFF / 100 * spin as u64 / parts::SPIN_MAX as u64
         };
 
-        let mut intake = if stalled { 0 } else { have.min(ports[0].rate) };
+        let mut intake = if stalled { 0 } else { have.min(rate) };
         let mut made = rotary_of(intake);
         if made > room {
             // Back-pressure: take only as much gas as the shaft can pass on.
@@ -1042,9 +1389,9 @@ impl Machine {
         s.util = (used * 1000 / ports[0].rate) as u32;
         s.status = if stalled {
             Status::Stalled
-        } else if room == 0 || used < have.min(ports[0].rate) {
+        } else if room == 0 || used < have.min(rate) {
             Status::Blocked
-        } else if used < ports[0].rate {
+        } else if used < rate {
             Status::Starved
         } else {
             Status::Running
@@ -1061,9 +1408,10 @@ impl Machine {
     /// component all six of them end at.
     fn generator(&mut self, i: usize) {
         let ports = parts::part(Kind::Generator).ports;
+        let rate = self.derate(i, ports[0].rate);
         let s = &mut self.st[i];
         let slow = s.buf[0].qty > 0 && s.buf[0].stuff.q.speed < parts::GENERATOR_MIN_SPEED;
-        let intake = if slow { 0 } else { s.buf[0].qty.min(ports[0].rate) };
+        let intake = if slow { 0 } else { s.buf[0].qty.min(rate) };
         let (_, used) = s.buf[0].take(intake);
         let mw = used * parts::GENERATOR_EFF / 100;
         s.buf[1].put(Stuff::fresh(Subst::Power), mw);
@@ -1073,11 +1421,91 @@ impl Machine {
         s.stop = if slow { Stop::Unmet(0, 0) } else { Stop::None };
         s.status = if slow {
             Status::Refused
-        } else if used < ports[0].rate {
+        } else if used < rate {
             Status::Starved
         } else {
             Status::Running
         };
+    }
+
+    /// A pair of pulleys and the belt over them: a ratio, in timber, that lets
+    /// go if it is asked for too much.
+    ///
+    /// The gearbox's poor relation on purpose. It costs three times as much to
+    /// pass power through, and above `PULLEY_SLIP` it simply does not pass it:
+    /// the belt slips, the surplus is gone, and nothing downstream gets any of
+    /// it. That is the first era's ceiling, and it is not a number on a
+    /// scoreboard -- it is the reason a water-driven plant is a row of small
+    /// machines on one long shaft rather than one large machine.
+    fn pulley(&mut self, i: usize, d: &mut Delta) {
+        let ports = parts::part(Kind::Pulley).ports;
+        let ratio = self.tunes[i].ratio;
+        let s = &mut self.st[i];
+        let have = s.buf[0].qty;
+        let mut what = s.buf[0].stuff;
+        what.q.speed = geared(what.q.speed, ratio);
+        let room = if s.buf[1].takes(&what) { ports[1].cap - s.buf[1].qty } else { 0 };
+        let grip = parts::PULLEY_SLIP.min(ports[0].rate);
+        let take = have.min(room * 100 / (100 - parts::PULLEY_LOSS_PCT)).min(grip);
+        let net = (take - take * parts::PULLEY_LOSS_PCT / 100).min(room);
+        let (_, got) = s.buf[0].take(take);
+        // Whatever was offered above the grip does not queue on the pulley. A
+        // belt that is slipping is losing the surplus to friction, every tick,
+        // for as long as the drive keeps offering it.
+        let slipped = if have > grip { s.buf[0].take(have - grip).1 } else { 0 };
+        s.buf[1].put(what, net);
+        s.used[0] = got;
+        s.made[1] = net;
+        s.waste = got - net + slipped;
+        s.util = (net * 1000 / ports[1].rate) as u32;
+        s.status = if have == 0 {
+            Status::Idle
+        } else if slipped > 0 {
+            Status::Venting
+        } else if net == 0 {
+            Status::Blocked
+        } else {
+            Status::Running
+        };
+        d.heat_wasted += got - net + slipped;
+    }
+
+    /// Forced air: heat out, for power in, and none at all without it.
+    ///
+    /// The one cooling component that can fail. A radiator is a lump of metal
+    /// and works whether or not anything else does; a fan is a motor, and a
+    /// design that cools its engine with one has coupled its engine to its
+    /// grid connection whether it meant to or not. That coupling is the whole
+    /// reason it is a separate component and not a bigger radiator.
+    fn fan(&mut self, i: usize, d: &mut Delta) {
+        let ports = parts::part(Kind::Fan).ports;
+        let s = &mut self.st[i];
+        let mw = s.buf[0].qty.min(ports[0].rate);
+        let can = mw * parts::FAN_PER_MW;
+        let moved = s.buf[1].qty.min(can).min(ports[1].rate);
+        // Power is drawn for the air actually moved, rounded up, so a fan with
+        // nothing to cool is not billed for standing still.
+        let spent = (moved + parts::FAN_PER_MW - 1) / parts::FAN_PER_MW;
+        let (_, used) = s.buf[0].take(spent);
+        let (what, got) = s.buf[1].take(moved);
+        s.used[0] = used;
+        s.used[1] = got;
+        s.waste = got;
+        s.util = (got * 1000 / ports[1].rate) as u32;
+        s.status = if got > 0 {
+            Status::Running
+        } else if s.buf[1].qty > 0 && mw == 0 {
+            Status::Starved
+        } else {
+            Status::Idle
+        };
+        if got > 0 {
+            if what.subst == Subst::Heat {
+                d.heat_wasted += got;
+            } else {
+                bump(&mut d.lost, what, got);
+            }
+        }
     }
 
     /// Heat in, hotter material out -- and past its melting point it comes out
@@ -1236,12 +1664,67 @@ impl Machine {
             v.extend_from_slice(&s.age.to_le_bytes());
             v.push(s.spin as u8);
             v.push(s.draining as u8);
+            // Experiment 14. A body temperature is part of the future -- it is
+            // what decides next tick's duty -- so it belongs here, and it is an
+            // integer precisely so that it can. `warmth` is bounded by the
+            // point at which shedding matches generation, so the state space
+            // stays finite and an orbit can still close on it.
+            v.extend_from_slice(&s.warmth.to_le_bytes());
+            v.push(s.tripped as u8);
             for c in &s.cursor {
                 v.push(*c as u8);
             }
         }
         v
     }
+}
+
+/// How hard the drive each component is bolted to shakes.
+///
+/// Vibration travels through rigid rotary couplings -- shafts, gearboxes,
+/// couplings, clutches, pulleys -- and stops dead at a belt, because a belt is
+/// slack. So the question "will this hold together" is not about one component,
+/// it is about the *rigid cluster* it belongs to: the worst offender anywhere
+/// in it is what every frame in it has to carry.
+///
+/// That one rule is the difference between the three eras being three drive
+/// trains and the three eras being three sprites. A crusher shakes at 7. Timber
+/// rates 4. Steel rates 9. So the third era bolts a motor straight on and never
+/// thinks about it, the second era gets away with cast iron, and the first era
+/// has to put a belt between the crusher and everything it owns -- which is not
+/// a stat, it is a shape on the ground.
+/// Returns the load on each component and which rigid cluster it is in, so a
+/// panel can both judge a frame and name the thing that is shaking it.
+pub fn shake_loads(kinds: &[Kind], links: &[Link]) -> (Vec<u8>, Vec<usize>) {
+    let n = kinds.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut Vec<usize>, mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    for l in links {
+        if parts::part(kinds[l.from]).ports[l.from_port].dom != era::SHAKE_DOMAIN {
+            continue;
+        }
+        if kinds[l.from] == Kind::Belt || kinds[l.to] == Kind::Belt {
+            continue;
+        }
+        let (a, b) = (find(&mut parent, l.from), find(&mut parent, l.to));
+        if a != b {
+            parent[a] = b;
+        }
+    }
+    let mut worst = vec![0u8; n];
+    for i in 0..n {
+        let r = find(&mut parent, i);
+        worst[r] = worst[r].max(parts::phys(kinds[i]).vib);
+    }
+    let group: Vec<usize> = (0..n).map(|i| find(&mut parent, i)).collect();
+    let load = group.iter().map(|&r| worst[r]).collect();
+    (load, group)
 }
 
 /// What a ratio does to a speed band. Positive gears down, negative gears up,

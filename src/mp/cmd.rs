@@ -47,6 +47,7 @@ use super::kit::{proto, Role};
 use super::world::{Id, Install, PlayerId, World};
 use crate::json::Json;
 use crate::machine::design::{Design, Tune, Unit, Wire};
+use crate::machine::era::Mat;
 use crate::machine::parts::{self, Kind};
 use crate::machine::stuff::Subst;
 use crate::model::Tick;
@@ -942,6 +943,13 @@ fn tune(u: &mut Unit, field: &str, value: &str) -> Result<(), String> {
         "subst" => {
             u.tune.subst = Subst::by_tag(value).ok_or(format!("there is no `{value}` to draw"))?
         }
+        // Experiment 14. A machine carried into a room keeps the frames it was
+        // designed with, and a player editing it in the room can change them,
+        // because a frame is a setting like any other.
+        "frame" => {
+            u.tune.mat =
+                Mat::by_tag(value).ok_or(format!("`{value}` is not wood, iron or steel"))?
+        }
         other => return Err(format!("`{other}` is not a setting")),
     }
     Ok(())
@@ -1065,6 +1073,11 @@ fn settings(u: &Unit) -> Vec<(&'static str, String)> {
             out.push(("stages", u.tune.stages.to_string()))
         }
         _ => {}
+    }
+    // The frame is orthogonal to all of the above -- a gearbox has a ratio and
+    // a frame -- so it is tested on its own rather than as a match arm.
+    if u.tune.mat != d.mat {
+        out.push(("frame", u.tune.mat.tag().to_string()));
     }
     // Pulse is not exclusive with any of the above: only the four stores have
     // it, and none of them have anything else to set.

@@ -8,7 +8,7 @@
 //!
 //! ```text
 //!   GET  /                    the designer
-//!   GET  /api/catalogue       the eight components, their ports and numbers
+//!   GET  /api/catalogue       every component, its ports, numbers and physics
 //!   GET  /api/designs         what is on disk
 //!   GET  /api/design?name=X   one of them, as a document and as source
 //!   POST /api/open            source in, document out
@@ -168,6 +168,14 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
                         .set("substances", super::design::substances())
                         .set("briefs", eval::briefs())
                         .set("constants", eval::constants())
+                        // Experiment 14. The palette needs all three to be
+                        // able to group a component by century, offer the
+                        // frames it comes in, and colour a temperature band --
+                        // and none of them belong in JavaScript, for the same
+                        // reason the catalogue does not.
+                        .set("eras", super::era::eras())
+                        .set("materials", super::era::mats())
+                        .set("bands", super::era::bands())
                         .to_string(),
                 )
             }

@@ -67,15 +67,15 @@
 //! ```
 //!
 //! which makes six of the note's nine rules true by construction rather than
-//! by penalty -- there is no path in the search space that bends twice in a
-//! metre, so no amount of bad luck can produce one.
+//! by penalty -- there is no path in the search space where two elbows are
+//! drawn through each other, so no amount of bad luck can produce one.
 //!
 //! ```text
 //!   socket direction              the first and last sections are the flange
 //!                                 normal, and nothing else is offered
 //!   minimum straight before bend  the gate cells: the first bend is `stub`
 //!                                 from the flange, and so is the last
-//!   allowed bend radius           `straight` is at least twice the radius,
+//!   allowed bend radius           `floor` is twice the radius and a diameter,
 //!                                 so every corner can afford its own elbow
 //!   pipe diameter                 the bore, from the port's rate
 //!   clearance from equipment      a cost inside it, forbidden through it
@@ -107,6 +107,37 @@
 //! says so. What it does not do is invent geometry. That is the whole point of
 //! the tier: a plant with a hole in it is a plant the player can fix, and a
 //! plant with a pipe through a turbine is a plant that has lied to them.
+//!
+//! # One rule turned out to be two, and only one of them is a rule
+//!
+//! Everything above held, and the plant still came out with rectangles in it:
+//! a run that had to correct a metre of offset would leave the flange, travel
+//! four metres the wrong way, turn twice, and come back past where it started.
+//! Three left turns where a right turn was wanted, and a shape no fitter would
+//! ever build.
+//!
+//! The cause was in the table above, in the line that made the minimum
+//! straight true by construction, and it is worth stating as a general lesson
+//! about constraint solvers: *a constraint the search cannot violate is a
+//! constraint the search will route around, and going round can be much worse
+//! than the thing being prevented.* A one-metre section is a slightly awkward
+//! pipe; the detour that avoids it is a picture of nothing.
+//!
+//! So the minimum straight is now two numbers rather than one:
+//!
+//! ```text
+//!   floor    two bend radii and a diameter -- the elbows have to fit, and
+//!            the search graph has no shorter edge in it
+//!   straight what the domain would like: a shaft runs four metres, a chute
+//!            two and a half, because that is what those things look like
+//! ```
+//!
+//! The first is geometry and stays a constraint. The second is style and
+//! became a price, charged per half-metre a section falls short of it, and set
+//! so that one short section beats two extra corners and loses to four. Along
+//! with putting the flanges on one line before they are routed at all -- see
+//! `layout::align_drives` -- it took two corners in five out of the whole
+//! repository, and two thirds of the routes that had to be squeezed.
 
 use super::kit::{Mat, Mesh};
 use super::layout::{Layer, Plan, Socket};
@@ -207,20 +238,52 @@ pub struct Rules {
 }
 
 impl Rules {
-    /// The shortest section a run may contain, under one tier's rules.
+    /// The shortest section a run may contain, whatever else is true.
     ///
-    /// Two floors, and only one of them is negotiable. The domain's own
-    /// minimum is a *style*: shafts run four metres straight because that is
-    /// what a line shaft looks like, and a tight route is allowed to argue
-    /// with it. The other is geometry -- a section with a bend on each end has
-    /// to give up the radius twice and still be a section -- and nothing is
-    /// allowed to argue with that, because the result is not a shorter run, it
-    /// is two elbows drawn through each other.
+    /// This one is geometry, not taste: a section with a bend on each end has
+    /// to give up the radius twice and still be a section, and a section that
+    /// cannot is not a shorter run, it is two elbows drawn through each other.
+    /// Nothing in the search is allowed to argue with it, which is why it is
+    /// the length of the shortest edge in the graph rather than a term in the
+    /// cost of one.
+    ///
+    /// Twice the radius, plus the diameter it was derived from.
+    pub fn floor(&self) -> Mm {
+        (self.bend * 8) / 3
+    }
+
+    /// The shortest section a run *wants* to contain, under one tier's rules.
+    ///
+    /// This one is style. A shaft runs four metres straight because that is
+    /// what a line shaft looks like, not because a shorter one could not be
+    /// built, and for most domains it is the number that matters -- the floor
+    /// above is a few hundred millimetres and this is a few thousand.
+    ///
+    /// # Why it stopped being a rule
+    ///
+    /// Until the connection solver arrived this *was* the shortest edge in
+    /// the graph, which made the minimum straight true by construction and
+    /// looked like the right trade. It was not, and the reason is worth
+    /// writing down, because it is the defect this pass exists to remove.
+    ///
+    /// A section shorter than the minimum was unrepresentable. So when a run
+    /// had to correct a metre of offset -- two flanges nearly but not quite in
+    /// line, which is most of the pipework in a plant laid out on two-metre
+    /// tiles -- the router could not simply step sideways by a metre. It had
+    /// to find a path whose every section was long, and there is always one:
+    /// overshoot, turn, come back. The result was the four-cornered detour
+    /// that put a rectangle in the middle of a straight run, and it was in
+    /// nearly every design in the repository.
+    ///
+    /// A metre-long jog is a slightly awkward pipe. A rectangle is a pipe
+    /// nobody would build. So the minimum is a *price* now, charged per
+    /// half-metre the section is short of it, and the search may pay it when
+    /// the alternative is going round the houses. Which is the general shape
+    /// of the fix: keep geometry as a constraint, and make style expensive.
     pub fn least(&self, tier: Tier) -> Mm {
         match tier {
             Tier::Clean => self.straight,
-            // Twice the radius, plus the diameter it was derived from.
-            _ => ((self.bend * 8) / 3).max(self.straight / 2),
+            _ => (self.straight / 2).max(self.floor()),
         }
     }
 }
@@ -365,6 +428,20 @@ fn treat(d: Domain) -> Treat {
 }
 
 // -------------------------------------------------------------- the grid
+
+/// What a section costs for every half-metre it falls short of its domain's
+/// minimum straight.
+///
+/// Set against the two things it is competing with. A bend costs `turn`, which
+/// is thirty for a pipe and two hundred and sixty for a shaft, and a cell of
+/// travel costs ten. So the cheapest detour that avoids a short section -- out,
+/// across, back -- is two extra corners and at least eight extra cells, and it
+/// is worth about a hundred and forty on a pipe. At thirty a cell short, a jog
+/// of a metre where two and a half were wanted costs ninety, and wins; a jog
+/// of half a metre where four were wanted costs two hundred and ten, and does
+/// not. That is the right way round: a short section is a compromise and a
+/// rectangle is a mistake, but a *very* short section is a mistake too.
+const PINCH: u32 = 30;
 
 /// Half a metre. Fine enough that a pipe threads between two machines, coarse
 /// enough that a forty-metre plant is a hundred thousand cells.
@@ -650,7 +727,10 @@ fn attempt(
     let ease = if tier == Tier::Tight { 2 } else { 1 };
     let stub_a = g.cells(sa.stub / ease);
     let stub_b = g.cells(sb.stub / ease);
-    let straight = g.cells(rule.least(tier));
+    // What a section wants to be, and what it has to be. The gap between the
+    // two is where the short jogs live.
+    let want = g.cells(rule.least(tier));
+    let floor = g.cells(rule.floor()).min(want);
 
     // Two flanges pointing at each other on one axis are *coupled*, and a
     // coupling is not a routing problem. This is the commonest connection in
@@ -690,7 +770,7 @@ fn attempt(
     // line was made to approach a flange along the flange's own axis for four
     // metres, which is a fine rule for a pipe rack and an impossible one for a
     // machine with two metres of yard beside it.
-    let cells = search(g, a1, sa.out, stub_a, b1, sb.out, stub_b, straight, rule, tier)?;
+    let cells = search(g, a1, sa.out, stub_a, b1, sb.out, stub_b, (want, floor), rule, tier)?;
 
     // Socket, gate, corners, gate, socket -- then let `simplify` collapse the
     // ones that turned out to be collinear.
@@ -809,7 +889,8 @@ fn search(
     // it, which is part of the same section as an arrival along that axis.
     away: P3,
     run_out: i32,
-    straight: i32,
+    // How long a section wants to be, and the shortest one geometry allows.
+    (want, floor): (i32, i32),
     rule: &Rules,
     tier: Tier,
 ) -> Option<Vec<(i32, i32, i32)>> {
@@ -873,41 +954,44 @@ fn search(
                 let Some(cost) = step_cost(g, next, rule, tier) else { break };
                 run += cost;
                 at = next;
-                // The goal is a corner like any other, except that it may only
-                // be arrived at along the flange normal.
+                let is_goal = at == goal;
+                if is_goal && d == away {
+                    break;
+                }
+                // What this section owes, and what it has already been paid.
+                //
                 // Continuing straight out of the flange is *one section with
                 // the stub*, so what it owes is the minimum less what the stub
-                // has already paid. Anything else owes the whole minimum.
+                // has already paid; the same is true at the far end, where a
+                // line that carries straight on through the gate into the
+                // flange is one section with the stub beyond it. Anything else
+                // owes the whole minimum.
                 //
                 // Leaving this out was worth one bad corner in every design:
                 // a line would leave a flange, run half a metre, and turn --
                 // a straight section a fifth of the length of the elbow that
                 // was then drawn on the end of it.
-                let mut need = straight;
-                if at_start && d == from {
-                    need = (straight - run_in).max(1);
-                }
-                let long_enough = i >= need;
-                let is_goal = at == goal;
-                if is_goal && d == away {
-                    break;
-                }
-                // Arriving at the far gate is a corner like any other, and
-                // the section into it owes the same minimum -- less the stub
-                // beyond it, when the line carries straight on through into
-                // the flange. Letting the goal be reached by any edge at all
-                // was worth one short section on the far end of every run,
-                // which is the end a viewer is looking at.
-                if is_goal {
-                    let owed = if d == away.neg() { (straight - run_out).max(1) } else { straight };
-                    if i < owed {
+                let paid = if at_start && d == from {
+                    run_in
+                } else if is_goal && d == away.neg() {
+                    run_out
+                } else {
+                    0
+                };
+                // Geometry first: a section shorter than this cannot be drawn
+                // at all, whatever it would save. There is no path in the
+                // search space that contains one, which is what keeps the
+                // staircases of experiment 08 unrepresentable.
+                if i + paid < floor {
+                    if is_goal {
                         break;
                     }
-                } else if !long_enough {
                     continue;
                 }
+                // And then style, as a price rather than a rule. See `least`.
+                let short = (want - paid - i).max(0) as u32 * PINCH;
                 let nk = key(at, dir_of(d));
-                let nd = d0 + run + turn;
+                let nd = d0 + run + turn + short;
                 if nd < dist[nk] {
                     dist[nk] = nd;
                     prev[nk] = k as u32;

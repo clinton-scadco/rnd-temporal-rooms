@@ -259,6 +259,7 @@ export function renderInspector() {
   }
 
   placement(box, u);
+  bodyPane(box, snap);
   tunables(box, u, p);
 
   // Ports, with what is in them and what crossed them.
@@ -386,8 +387,53 @@ function cell(text, cls) { return el('td', cls, text); }
 function severity(status) {
   if (status === 'RUNNING' || status === 'FILLING') return 'ok';
   if (status === 'BLOCKED' || status === 'STALLED') return 'bad';
+  if (status === 'OVERHEATED' || status === 'SHAKING') return 'bad';
   if (status === 'IDLE') return '';
   return 'warn';
+}
+
+/// Experiment 14: the component as an object rather than as a transformation.
+///
+/// Only drawn when there is something to say. Most of the catalogue has no
+/// body temperature and is bolted to nothing, and a temperature reading under
+/// a chute would be noise dressed as instrumentation.
+function bodyPane(box, snap) {
+  const b = snap && snap.body;
+  if (!b) return;
+  if (!b.thermal && !b.shaken) return;
+
+  const wrap = el('div', 'body');
+  if (b.thermal) {
+    const bands = (state.cat.bands || []).find(x => x.tag === b.band);
+    const row = el('div', 'field');
+    row.appendChild(el('label', null, `${b.temp}\u00b0`));
+    const badge = el('span', 'status ' + (b.tripped ? 'bad' : bands && bands.well ? 'ok' : 'warn'),
+      b.tripped ? 'TRIPPED' : b.band);
+    row.appendChild(badge);
+    wrap.appendChild(row);
+
+    // The bar is the operating range rather than nought to a hundred, because
+    // what a player needs to see is how close this is to a threshold, not how
+    // close it is to an arbitrary maximum.
+    const bar = el('div', 'bar' + (b.tripped || (bands && !bands.well) ? ' warn' : ''));
+    const fill = el('i');
+    fill.style.width = Math.min(100, Math.round(b.temp * 100 / Math.max(1, b.ceiling))) + '%';
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+    wrap.appendChild(el('p', 'hint',
+      `range ${b.lo}\u2013${b.hi}, trips at ${b.ceiling}` +
+      (b.duty < 1000 ? ` \u2014 ${b.duty / 10}% of rating` : '') +
+      (b.shed ? ` \u2014 shedding ${b.shed}/tick to the air` : '')));
+  }
+  if (b.shaken) {
+    const over = b.shaken > b.tolerates;
+    wrap.appendChild(el('p', over ? 'hint bad' : 'hint',
+      `shaken at ${b.shaken}` +
+      (b.shakenBy ? ` by ${b.shakenBy}` : '') +
+      `, and ${b.materialTitle.toLowerCase()} carries ${b.tolerates}` +
+      (over ? ' \u2014 put a belt in the drive, or a stiffer frame under it' : '')));
+  }
+  box.appendChild(wrap);
 }
 
 /// The components with a decision in them. Everything else is what it is.
@@ -413,6 +459,27 @@ function tunables(box, u, p) {
     inp.addEventListener('change', () => retune(u.name, { [key]: Number(inp.value) }));
     return inp;
   };
+
+  // Experiment 14's control, and the only one that is offered by most of the
+  // catalogue rather than by nine components. The list comes from Rust: a
+  // timber press is not a trade-off, it is a category error, and the place
+  // that knows so is the part table.
+  const mats = (p.phys && p.phys.materials) || [];
+  if (mats.length > 1) {
+    const sel = document.createElement('select');
+    for (const tag of mats) {
+      const m = (state.cat.materials || []).find(x => x.tag === tag);
+      const o = document.createElement('option');
+      o.value = tag;
+      o.textContent = m
+        ? `${m.title} \u2014 sheds ${m.conducts}%, carries ${m.tolerates}`
+        : tag;
+      sel.appendChild(o);
+    }
+    sel.value = u.frame;
+    sel.addEventListener('change', () => retune(u.name, { frame: sel.value }));
+    field('frame', sel);
+  }
 
   if (u.kind === 'reactor') {
     const min = state.cat.constants.minThrottle;
@@ -555,12 +622,24 @@ export function renderHolding() {
     box.appendChild(el('p', 'hint ok', 'every component is doing its job'));
     return;
   }
+  // Causes first, then the components that are only starved or blocked because
+  // of one of them. The server has already sorted it that way; this draws the
+  // line so the difference is visible rather than merely true.
+  let said = false;
   for (const h of snap.holding) {
-    const row = el('div', 'holdrow' + (h.status === 'STALLED' || h.status === 'BLOCKED' ? ' bad' : ''));
+    if (!h.cause && !said) {
+      said = true;
+      const n = snap.holding.filter(x => !x.cause).length;
+      box.appendChild(el('p', 'hint',
+        `and ${n} more waiting on ${n === 1 ? 'that' : 'those'} — fix the top of this list first`));
+    }
+    const row = el('div', 'holdrow'
+      + (h.status === 'STALLED' || h.status === 'BLOCKED' ? ' bad' : '')
+      + (h.cause ? '' : ' symptom'));
     const b = el('b', null, `${h.name} · ${h.status}`);
     b.style.color = statusColour(h.status);
     row.appendChild(b);
-    row.appendChild(el('span', null, h.why));
+    row.appendChild(el('span', null, h.because ? `waiting on ${h.because}` : h.why));
     row.addEventListener('click', () => select({ what: 'unit', name: h.name }));
     row.style.cursor = 'pointer';
     box.appendChild(row);
@@ -633,6 +712,11 @@ export function emit() {
     if (u.face !== null && u.face !== undefined) {
       s += `  face ${['east', 'south', 'west', 'north'][u.face & 3]}`;
     }
+    // Experiment 14: the frame, written only when it is not the one the
+    // component comes on -- the same rule `Design::emit` follows in Rust, so
+    // the preview and the file agree.
+    const comes = (part(u.kind).phys || {}).material;
+    if (u.frame && comes && u.frame !== comes) s += `  frame ${u.frame}`;
     if (u.kind === 'reactor' && u.throttle !== 100) s += `  throttle ${u.throttle}`;
     if (u.kind === 'pump' && u.draws !== 'water') s += `  draws ${u.draws}`;
     if (u.kind === 'inlet' && u.draws !== 'ore') s += `  draws ${u.draws}`;

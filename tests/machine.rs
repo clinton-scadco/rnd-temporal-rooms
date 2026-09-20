@@ -47,9 +47,21 @@ const KIT: &[&str] = &[
     "designs/12-onemotor.machine",
 ];
 
+/// Experiment 14's three: one brief, three centuries. They are a separate list
+/// because they are a separate claim -- the others show that one vocabulary
+/// answers four questions, and these show that one question has three answers
+/// that are not each other. `tests/era.rs` is where that is tested; they are
+/// here so that the general properties -- settles, survives being written down,
+/// conserves matter -- are asserted about them too.
+const ERAS: &[&str] = &[
+    "designs/19-waterline.machine",
+    "designs/20-steamline.machine",
+    "designs/21-electricline.machine",
+];
+
 /// Everything on disk, which is what the general claims are made about.
 fn every() -> Vec<&'static str> {
-    DESIGNS.iter().chain(KIT.iter()).copied().collect()
+    DESIGNS.iter().chain(KIT.iter()).chain(ERAS.iter()).copied().collect()
 }
 
 fn load(path: &str) -> Design {
@@ -421,7 +433,7 @@ fn nothing_appears_from_nowhere() {
                         | Kind::FluidPipe
                         | Kind::Chute
                         | Kind::Shaft
-                        | Kind::Cable
+                        | Kind::Belt
                         | Kind::Tank
                         | Kind::Drum
                         | Kind::Hopper

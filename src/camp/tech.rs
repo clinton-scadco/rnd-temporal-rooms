@@ -26,7 +26,7 @@
 //!   column                   the crude chain, which nobody has touched yet
 //! ```
 //!
-//! Twenty-six of the thirty-eight components are there from the first minute,
+//! Twenty-six of the catalogue are there from the first minute,
 //! because a first room with six parts in it is a tutorial rather than a
 //! factory. The twelve that are not are the twelve that change what a machine
 //! can *be*.

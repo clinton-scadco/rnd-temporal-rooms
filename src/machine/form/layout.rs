@@ -13,6 +13,42 @@
 //!   a clearance     how much room around it is not available to pipework
 //! ```
 //!
+//! and then, because two of those are decisions no single component can make
+//! on its own, it *solves* the last one against the document:
+//!
+//! ```text
+//!   plan  -> volumes, orientation
+//!         -> a face and a point for every port
+//!         -> align_drives   every coupling that can be one line, is
+//!         -> align_lines    and so is every other connection that can be
+//! ```
+//!
+//! # Why the last two passes exist
+//!
+//! A port used to be placed by one component looking at one partner, and that
+//! is as far as a single socket can see. It cannot tell whether the partner
+//! can reach the line it just chose, it does not know what the next machine
+//! along the same shaft is going to ask for, and it has no idea that the
+//! router it is about to hand the job to cannot step sideways by less than the
+//! length of two elbows.
+//!
+//! That last one is the sting. A metre of offset between two flanges is not a
+//! metre of extra pipe -- it is a detour, because a section shorter than the
+//! bend radius twice over cannot be drawn, so the line has to leave, travel
+//! far enough to turn twice, and come back. Half the corners in the repository
+//! were bought with offsets of a metre or less, and every one of them was an
+//! offset nobody had asked for: it was the residue of two components rounding
+//! the same decision in two different directions.
+//!
+//! So the flanges are put on one line before the router ever sees them. What
+//! that buys is on the `spaces` table -- two corners in five across the whole
+//! repository, two thirds of the squeezed routes, and the four-cornered
+//! detours the note about experiment 10 called "visual errors that will
+//! actively undermine the mechanic". What it does *not* buy is a clean bill of health for a
+//! design that is genuinely out of line: a motor three metres south of the
+//! shaft it drives cannot be solved onto it, and `space` still says so in one
+//! red line.
+//!
 //! # The third dimension was inferred; now it is authored
 //!
 //! Experiment 08 took a two-dimensional document and *inferred* elevation from
@@ -83,6 +119,22 @@
 //! Those five lines are why a stranger can read the flow of a plant they have
 //! never seen: not because the pipes are labelled, but because everything in a
 //! domain agrees about where it lives.
+//!
+//! # And which way a machine faces is the drive's decision
+//!
+//! One rule in `yaw_of` is worth pulling out of it, because it reads like a
+//! detail and behaves like a grammar. A component with no authored rotation
+//! faces along the flow through it, weighted by what each of its ports
+//! carries -- except that if anything is *coupled* to it, only the couplings
+//! get a say.
+//!
+//! A cable bends. A pipe bends. A shaft does not. So a motor fed by a
+//! three-hundred-unit cable and driving a twenty-unit gearbox faces the
+//! gearbox, not the mains, because the cable can be routed round the answer
+//! and the shaft cannot. Before that rule, a motor would turn to face the
+//! grid and present its shaft to a face ninety degrees away from the thing
+//! bolted to it -- which no amount of solving afterwards can fix, since a
+//! flange slides along its face and never leaves it.
 
 use super::seed::hash;
 use super::{p3, Mm, P3, TILE, Vol};
@@ -91,8 +143,8 @@ use crate::machine::parts::{self, Dir, Kind};
 use crate::machine::stuff::Domain;
 
 /// What sort of object a component is, once you stop caring what it does. This
-/// is the only place the thirty-eight kinds are collapsed, and it is why the
-/// asset library is twenty-five meshes rather than thirty-eight models.
+/// is the only place the forty-four kinds are collapsed, and it is why the
+/// asset library is twenty-five meshes rather than forty-four models.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Arch {
     /// A vertical pressure vessel: reactor, tank, drum on end.
@@ -416,20 +468,26 @@ pub fn shape(k: Kind) -> (Arch, Mount, Mm) {
     (arch(k), mount(k), parts::height(k) as Mm)
 }
 
-/// What sort of object each of the thirty-eight is.
+/// What sort of object each of the forty-six is.
+///
+/// The eight experiment 14 added are eight more rows here and nothing else in
+/// the visual pipeline: a water wheel is a wheel, a steam engine is a skid, a
+/// belt is a run. That is the point of having archetypes rather than models --
+/// a new century's worth of machinery arrives, and the thing that draws plants
+/// does not have to be told anything it does not already know.
 pub fn arch(k: Kind) -> Arch {
     use Arch::*;
     use Kind::*;
     match k {
         Reactor | Tank => Vessel,
-        Burner | Furnace | Gearbox | Crusher | Lathe => Skid,
-        Heater | Pump | Generator | Motor => Can,
+        Burner | Furnace | Gearbox | Crusher | Lathe | SteamEngine => Skid,
+        Heater | Pump | Generator | Motor | MechPump => Can,
         Mains | Outlet | Skip => Pad,
         Inlet | Hopper | Separator => Bin,
-        Radiator => Bank,
-        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft | Cable => Run,
-        Drum | Exchanger | Preheater | Condenser | Mill => Shell,
-        Flywheel | Crank => Wheel,
+        Radiator | Fan => Bank,
+        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft | Belt => Run,
+        Drum | Exchanger | Preheater | Condenser | Mill | Jacket => Shell,
+        Flywheel | Crank | WaterWheel | Pulley => Wheel,
         Valve | Clutch => Inline,
         Kind::Turbine => Arch::Turbine,
         RollMill | Press => Portal,
@@ -557,6 +615,22 @@ pub fn nozzle(arch: Arch, dom: Domain, dir: Dir) -> &'static [Side] {
     use Side::*;
     let out = dir == Dir::Out;
     match (arch, dom) {
+        // A fitting in a line, and a component that *is* a line, take the line
+        // in at one end and pass it out of the other -- whatever the line is
+        // made of. This row is first because it used to be last, and the
+        // drive-train row above it was catching belts and shafts: both ends of
+        // a five-metre belt were offered both ends of the belt, both of them
+        // picked whichever was nearer the machine they were wired to, and a
+        // third of the transport components in the repository came out with
+        // their in and their out bolted to the same end of themselves.
+        (Inline | Run, _) => {
+            if out {
+                &[Front]
+            } else {
+                &[Back]
+            }
+        }
+
         // A shaft leaves the end of the barrel. There is no other answer, and
         // pretending otherwise is what made experiment 08's drive trains look
         // like they had been assembled in the dark.
@@ -616,16 +690,6 @@ pub fn nozzle(arch: Arch, dom: Domain, dir: Dir) -> &'static [Side] {
         (Bank, Heat) if out => &[Top, Front],
         (Bank, Heat) => &[Back, Left, Right, Top],
 
-        // A fitting in a line, and a component that *is* a line, both take the
-        // line in one end and pass it out of the other.
-        (Inline | Run, _) => {
-            if out {
-                &[Front]
-            } else {
-                &[Back]
-            }
-        }
-
         // Electricity is not fussy, but it is consistent: up and over.
         (_, Electrical) => &[Top, Left, Right, Back, Front],
         // Material falls, wherever it is.
@@ -657,13 +721,69 @@ pub fn nozzle(arch: Arch, dom: Domain, dir: Dir) -> &'static [Side] {
 /// cooling water trickling in from one side -- and now that the tube ends are
 /// pinned to that axis, getting it wrong no longer merely looks odd, it puts
 /// the steam outlet on a face with nothing in front of it.
-fn yaw_of(d: &Design, i: usize) -> u8 {
+fn yaw_of(d: &Design, i: usize, arch: Arch) -> u8 {
     // Experiment 10: if the player turned it, it is turned. Inference is what
     // happens to a component nobody has an opinion about, which is still most
     // of them.
     if let Some(f) = d.units[i].face {
         return f & 3;
     }
+    // What the drive says first, and what everything else says only if there
+    // is no drive. A cable bends, a pipe bends, a shaft does not -- so on a
+    // machine with a coupling on it, the coupling is the connection that gets
+    // to choose which way the machine is pointing, and the rest of the
+    // document has to route around the answer.
+    //
+    // This is worth a corner on nearly every motor in the repository. A motor
+    // is fed by a cable whose port carries three hundred and drives a gearbox
+    // through a port that carries twenty, so weighting by rate alone turned
+    // the motor to face the mains -- and then pinned its shaft to a face
+    // ninety degrees from the gearbox bolted to the end of it.
+    let flow = flow_of(d, i, true).or_else(|| flow_of(d, i, false));
+    // A transport component *is* a straight line drawn down its own tiles, and
+    // a line shaft four tiles long lies east-west whatever the flow through it
+    // thinks. Letting inference turn it a quarter was worth a bent shaft in
+    // every design that had one: the body ran one way, the couplings left by
+    // the two faces at right angles to it, and every machine bolted to either
+    // end was then reported as misaligned by a pass that was quite right.
+    //
+    // So a run's yaw is its footprint's own axis, and the flow decides only
+    // which end of it is the front.
+    if arch == Arch::Run {
+        let u = &d.units[i];
+        let (ax, az) = flow.unwrap_or((1, 0));
+        return if u.w() >= u.h() {
+            if ax >= 0 {
+                0
+            } else {
+                2
+            }
+        } else if az >= 0 {
+            1
+        } else {
+            3
+        };
+    }
+    let (ax, az) = match flow {
+        Some(v) => v,
+        None => return 0,
+    };
+    if ax.abs() >= az.abs() {
+        if ax >= 0 {
+            0
+        } else {
+            2
+        }
+    } else if az >= 0 {
+        1
+    } else {
+        3
+    }
+}
+
+/// The vector from everything that feeds a component to everything it feeds,
+/// weighted by rate, in tiles. `None` when nothing is wired to it at all.
+fn flow_of(d: &Design, i: usize, drives: bool) -> Option<(i64, i64)> {
     let me = centre_tile(&d.units[i]);
     let (mut ax, mut az, mut n) = (0i64, 0i64, 0i64);
     for w in &d.wires {
@@ -672,9 +792,19 @@ fn yaw_of(d: &Design, i: usize) -> u8 {
             (Some(a), Some(b)) => (a, b),
             _ => continue,
         };
+        let port = parts::part(d.units[from].kind).port_index(&w.from_port);
+        if drives
+            && !port.is_some_and(|k| {
+                matches!(
+                    parts::part(d.units[from].kind).ports[k].dom,
+                    Domain::Rotary | Domain::Mech
+                )
+            })
+        {
+            continue;
+        }
         // How much this wire is worth having an opinion about.
-        let w8 = parts::part(d.units[from].kind)
-            .port_index(&w.from_port)
+        let w8 = port
             .map(|k| parts::part(d.units[from].kind).ports[k].rate.max(1) as i64)
             .unwrap_or(1);
         if from == i {
@@ -690,19 +820,9 @@ fn yaw_of(d: &Design, i: usize) -> u8 {
         }
     }
     if n == 0 {
-        return 0;
+        return None;
     }
-    if ax.abs() >= az.abs() {
-        if ax >= 0 {
-            0
-        } else {
-            2
-        }
-    } else if az >= 0 {
-        1
-    } else {
-        3
-    }
+    Some((ax, az))
 }
 
 fn centre_tile(u: &Unit) -> (i32, i32) {
@@ -757,7 +877,7 @@ pub fn plan(d: &Design) -> Plan {
             kind: u.kind,
             arch,
             mount,
-            yaw: yaw_of(d, i),
+            yaw: yaw_of(d, i, arch),
             turned: u.face.is_some(),
             tile: (u.x, u.y, u.w(), u.h()),
             level: u.z,
@@ -774,6 +894,10 @@ pub fn plan(d: &Design) -> Plan {
     for i in 0..units.len() {
         units[i].sockets = sockets(d, &units, i);
     }
+    // And the connections come third, because where a flange sits on its face
+    // is the one thing neither of its two ends can decide on its own.
+    align_drives(d, &mut units);
+    align_lines(d, &mut units);
 
     let plot = units.iter().fold(None::<Vol>, |acc, u| {
         let v = Vol::new(
@@ -793,7 +917,6 @@ pub fn plan(d: &Design) -> Plan {
 fn run_height(k: Kind) -> Mm {
     match k {
         Kind::Shaft => SHAFT_Y,
-        Kind::Cable => RACK_Y - 800,
         Kind::HeatPipe | Kind::SteamPipe => RACK_Y,
         Kind::FluidPipe => FLUID_Y,
         Kind::Chute | Kind::Screw => FEED_Y,
@@ -841,7 +964,11 @@ fn sockets(d: &Design, units: &[Placed], i: usize) -> Vec<Socket> {
         // two machines' centres, which is a decision each end can make on its
         // own and still agree about. Whatever is left after each of them
         // clamps it to its own face is real misalignment, and `space` says so.
-        if matches!(port.dom, Domain::Rotary | Domain::Mech) {
+        // A transport component is exempt: its two ports are the two ends of
+        // one line, so a guess made for one of them is a bend in the middle of
+        // the other. Where the line goes is `align_drives`' decision, and it
+        // makes it for the whole run at once.
+        if matches!(port.dom, Domain::Rotary | Domain::Mech) && me.arch != Arch::Run {
             if let Some(peer) = peers[pi] {
                 at = onto_axis(me, side, at, peer);
             }
@@ -1072,12 +1199,526 @@ fn onto_axis(me: &Placed, side: Side, at: P3, peer: &Placed) -> P3 {
     }
 }
 
+// --------------------------------------------------------- the drive solver
+
+/// One coupling: two components that have to end up on one line.
+struct Drive {
+    a: usize,
+    b: usize,
+    /// The axis the shaft itself runs along. The other two are the ones the
+    /// two ends have to agree about.
+    along: u8,
+}
+
+/// Every coupling in the plant, put on one line.
+///
+/// `onto_axis` is a guess each end makes on its own, and a guess is the best a
+/// single socket can do: it knows one partner, it does not know whether that
+/// partner can reach the line it has chosen, and it has no idea what the
+/// *next* coupling along the same shaft is about to ask for. The result was
+/// half a metre of offset on connections that had every right to be straight
+/// -- and half a metre is not a small error, because the router cannot jog
+/// half a metre. It has to go round, and going round is the four-cornered
+/// detour that made a drive train look like a maze.
+///
+/// So the drive train is solved rather than guessed. The observation that
+/// makes it a solve rather than a sort is this one:
+///
+/// > A component has one drive line, not one per port.
+///
+/// The in and the out of a gearbox are the same shaft passing through it, so
+/// a motor, the shaft it turns, the gearbox on the end of that and the crusher
+/// under the gearbox are not four independent decisions -- they are one line,
+/// and either all four of them are on it or somebody is out of line. That
+/// makes each connected run of couplings a single unknown per axis, each
+/// component an interval it can reach, and the whole problem one intersection:
+///
+/// ```text
+///   for each axis across the shaft
+///     group the components the couplings connect
+///     intersect what they can reach, busiest first
+///     a component that would empty the intersection is dropped, and reported
+///     everything left moves to one value in what remains
+/// ```
+///
+/// Dropping rather than failing is the important half. A design with three
+/// motors bolted to one shaft cannot have all three in line and no amount of
+/// solving will change that; what the player wants to be told is *which* one
+/// is off, which is exactly what falls out of the greedy order -- the busiest
+/// component keeps its line, and the odd one out is the one `space` paints
+/// red.
+///
+/// A transport component gets a third thing out of this. Its body is a thin
+/// line loose inside a strip of its own tiles, so it does not merely choose
+/// where its flange sits on a fixed body -- it *moves*, and the shaft slides
+/// across its tiles to meet the machine rather than the machine being asked to
+/// reach a line drawn down the middle of nothing in particular.
+fn align_drives(d: &Design, units: &mut [Placed]) {
+    let mut edges: Vec<Drive> = Vec::new();
+    for w in &d.wires {
+        let (Some(i), Some(j)) = (index_of(units, &w.from), index_of(units, &w.to)) else {
+            continue;
+        };
+        if i == j {
+            continue;
+        }
+        let (Some(pi), Some(pj)) = (
+            parts::part(units[i].kind).port_index(&w.from_port),
+            parts::part(units[j].kind).port_index(&w.to_port),
+        ) else {
+            continue;
+        };
+        let (Some(a), Some(b)) = (units[i].socket(pi), units[j].socket(pj)) else { continue };
+        if !matches!(a.dom, Domain::Rotary | Domain::Mech) {
+            continue;
+        }
+        // Two flanges at right angles are a drive that wants a gearbox nobody
+        // placed. Sliding either of them along its own face cannot make that
+        // one straight, so it is left alone for `space` to report.
+        let (Some(ax), Some(bx)) = (a.out.axis(), b.out.axis()) else { continue };
+        if ax != bx {
+            continue;
+        }
+        edges.push(Drive { a: i, b: j, along: ax });
+    }
+    if edges.is_empty() {
+        return;
+    }
+    for c in 0..3u8 {
+        // Only the couplings that actually run across this axis: a shaft
+        // pointing east says nothing about where east-west things sit.
+        let here: Vec<&Drive> = edges.iter().filter(|e| e.along != c).collect();
+        if here.is_empty() {
+            continue;
+        }
+        for group in groups(units.len(), &here) {
+            solve(units, &group, c);
+        }
+    }
+}
+
+/// The components each set of couplings ties together, busiest first.
+///
+/// Busiest first because the greedy intersection below drops whoever it cannot
+/// fit, and the one thing it must never drop is the shaft in the middle: a
+/// line with four machines hung off it is the line, and a machine that cannot
+/// reach it is the exception. Ties go to document order, so the same design
+/// always drops the same component.
+fn groups(n: usize, edges: &[&Drive]) -> Vec<Vec<usize>> {
+    let mut of: Vec<usize> = (0..n).collect();
+    fn root(of: &mut Vec<usize>, mut i: usize) -> usize {
+        while of[i] != i {
+            of[i] = of[of[i]];
+            i = of[i];
+        }
+        i
+    }
+    let mut deg = vec![0usize; n];
+    for e in edges {
+        deg[e.a] += 1;
+        deg[e.b] += 1;
+        let (ra, rb) = (root(&mut of, e.a), root(&mut of, e.b));
+        if ra != rb {
+            of[ra.max(rb)] = ra.min(rb);
+        }
+    }
+    let mut out: Vec<Vec<usize>> = Vec::new();
+    let mut seen: Vec<Option<usize>> = vec![None; n];
+    for i in 0..n {
+        if deg[i] == 0 {
+            continue;
+        }
+        let r = root(&mut of, i);
+        match seen[r] {
+            Some(k) => out[k].push(i),
+            None => {
+                seen[r] = Some(out.len());
+                out.push(vec![i]);
+            }
+        }
+    }
+    for g in out.iter_mut() {
+        g.sort_by_key(|&i| (std::cmp::Reverse(deg[i]), i));
+    }
+    out
+}
+
+/// One group of coupled components, put on one line on one axis.
+fn solve(units: &mut [Placed], group: &[usize], c: u8) {
+    let mut span: Option<(Mm, Mm)> = None;
+    let mut kept: Vec<usize> = Vec::new();
+    let (mut sum, mut n) = (0i64, 0i64);
+    for &i in group {
+        let (lo, hi) = reach(&units[i], c);
+        let next = match span {
+            None => (lo, hi),
+            Some((a, b)) => (a.max(lo), b.min(hi)),
+        };
+        if next.0 > next.1 {
+            // It cannot reach the line the rest of them are on. It keeps the
+            // place it had, and the run into it is reported as out of line --
+            // which is true, and is a thing the player can fix by moving it.
+            continue;
+        }
+        span = Some(next);
+        kept.push(i);
+        sum += line_of(&units[i], c) as i64;
+        n += 1;
+    }
+    let Some((lo, hi)) = span else { return };
+    if kept.len() < 2 {
+        return;
+    }
+    let want = (sum / n.max(1)) as Mm;
+    let to = lane_between(lo, hi, want);
+    for &i in &kept {
+        slide(&mut units[i], c, to);
+    }
+}
+
+fn index_of(units: &[Placed], name: &str) -> Option<usize> {
+    units.iter().position(|u| u.name == name)
+}
+
+fn coord(p: P3, c: u8) -> Mm {
+    match c {
+        0 => p.x,
+        1 => p.y,
+        _ => p.z,
+    }
+}
+
+fn with_coord(p: P3, c: u8, v: Mm) -> P3 {
+    match c {
+        0 => p3(v, p.y, p.z),
+        1 => p3(p.x, v, p.z),
+        _ => p3(p.x, p.y, v),
+    }
+}
+
+/// Where a component's drive line is now.
+fn line_of(u: &Placed, c: u8) -> Mm {
+    u.sockets
+        .iter()
+        .find(|s| matches!(s.dom, Domain::Rotary | Domain::Mech) && s.out.axis() != Some(c))
+        .map(|s| coord(s.at, c))
+        .unwrap_or(coord(u.vol.centre(), c))
+}
+
+/// How far a component's drive line can travel on one axis without leaving the
+/// machine it belongs to.
+///
+/// Three different answers, and the difference between them is most of why
+/// this is a solver rather than a rule. A flange on a wall slides along that
+/// wall. A flange on a *transport component* does not slide at all -- it is on
+/// the end of a line, and the line itself moves, taking the whole strip of
+/// tiles it was drawn on as play. And a height is the narrowest of the three,
+/// because every shaft in the plant wants to be at one height and only a
+/// machine tall enough to have one can offer any choice about it.
+fn reach(u: &Placed, c: u8) -> (Mm, Mm) {
+    let here = line_of(u, c);
+    let edge = 200;
+    if u.arch == Arch::Run {
+        if c == 1 {
+            return (here, here);
+        }
+        let half = coord(u.vol.size(), c) / 2;
+        let (t0, t1) = match c {
+            0 => (u.tile.0 * TILE, (u.tile.0 + u.tile.2) * TILE),
+            _ => (u.tile.1 * TILE, (u.tile.1 + u.tile.3) * TILE),
+        };
+        let (lo, hi) = (t0 + half, t1 - half);
+        return if lo <= hi { (lo, hi) } else { (here, here) };
+    }
+    let (lo, hi) = (coord(u.vol.lo, c) + edge, coord(u.vol.hi, c) - edge);
+    if lo > hi {
+        return (here, here);
+    }
+    (lo, hi)
+}
+
+/// The lane nearest `want` that lies between `lo` and `hi`, or `want` itself
+/// when the gap between them is too narrow to hold a lane at all.
+///
+/// On a lane because the router's cells are, and a coupling a quarter of a
+/// metre off the grid is a coupling with a jog in it. Off one only when the
+/// alternative is not solving the coupling at all.
+fn lane_between(lo: Mm, hi: Mm, want: Mm) -> Mm {
+    let want = want.clamp(lo, hi);
+    let below = lane(want);
+    let mut best: Option<Mm> = None;
+    for v in [below, below + LANE] {
+        if v < lo || v > hi {
+            continue;
+        }
+        if best.is_none_or(|b: Mm| (v - want).abs() < (b - want).abs()) {
+            best = Some(v);
+        }
+    }
+    best.unwrap_or(want)
+}
+
+/// Move a component's drive line onto the solved one -- and, if the component
+/// is a run, move the run.
+fn slide(u: &mut Placed, c: u8, to: Mm) {
+    if u.arch == Arch::Run {
+        // The body goes where the line goes: a run *is* its own connection, so
+        // a shaft whose couplings are half a metre off the middle of the thing
+        // drawing them is not a near miss, it is a picture of a bent shaft.
+        let d = to - coord(u.vol.centre(), c);
+        u.vol = Vol::new(
+            with_coord(u.vol.lo, c, coord(u.vol.lo, c) + d),
+            with_coord(u.vol.hi, c, coord(u.vol.hi, c) + d),
+        );
+        u.clear = u.vol.grow_flat(CLEAR);
+        for s in u.sockets.iter_mut() {
+            if s.out.axis() == Some(c) {
+                continue;
+            }
+            s.at = with_coord(s.at, c, to);
+        }
+        return;
+    }
+    // Every drive flange on the machine, because they are all on the one line
+    // -- except one that faces along this very axis, which is not on the line,
+    // it is looking down it.
+    let (lo, hi) = (coord(u.vol.lo, c), coord(u.vol.hi, c));
+    for s in u.sockets.iter_mut() {
+        if !matches!(s.dom, Domain::Rotary | Domain::Mech) || s.out.axis() == Some(c) {
+            continue;
+        }
+        s.at = with_coord(s.at, c, to.clamp(lo, hi));
+    }
+}
+
+/// Every other connection, put on one line where it can be.
+///
+/// The drive solver above exists because a shaft cannot bend. This one exists
+/// because of what the router does when a pipe nearly does not have to.
+///
+/// A metre of offset between two flanges is not a metre of extra pipe. An
+/// 858mm lagged main needs three and a half metres between two elbows, so it
+/// cannot step sideways by one: it has to leave, travel far enough to turn
+/// twice, and come back. That was eleven metres of detour on the reactor's
+/// heat main in nine designs out of twenty-one, and every one of them was
+/// bought with the same single metre -- the top of the vessel and the end of
+/// the exchanger disagreeing about where the middle of the plant was.
+///
+/// So where a flange is free to slide on its own face, and its partner is free
+/// on the same axis, the two of them are put on one line:
+///
+/// ```text
+///   a top nozzle is free across the plan     x and z
+///   a nozzle on a wall is free up and along  y and the other horizontal
+///   a transport component is free across its own tiles, and takes both its
+///     ends with it
+/// ```
+///
+/// The intersection of those two freedoms is what can be solved. For a vessel
+/// venting upwards into the side of a shell it is one axis, and one axis is
+/// enough: the climb becomes straight, the run across becomes straight, and
+/// six corners become three.
+///
+/// # What it will not do
+///
+/// It moves a flange, so it is careful in three ways that the drive solver
+/// does not have to be. It never moves one onto another nozzle on the same
+/// face -- two lines leaving one square inch of shell is the defect the slot
+/// spreading in `on_face` exists to prevent. It never moves one so that the
+/// straight off it ends up inside another machine, because that is a lost
+/// connection, and a lost connection is worse than a detour by a distance no
+/// number of corners could make up. And it will not touch the *height* of a
+/// material port, because in at the top and out at the bottom is not a style
+/// choice: it is the sentence "an ore line falls downhill", and a chute solved
+/// flat is a chute that does not work.
+fn align_lines(d: &Design, units: &mut [Placed]) {
+    // Which flange has been solved on which axis. Per axis, because a flange
+    // put on a line east-west still has its height to give.
+    let mut done: Vec<Vec<[bool; 3]>> =
+        units.iter().map(|u| vec![[false; 3]; u.sockets.len()]).collect();
+    // What a flange may not be slid into. Taken once: a transport component
+    // may move under this pass, but only across its own tiles, and a stub that
+    // was clear of it before is clear of it after.
+    let bodies: Vec<Vol> = units.iter().map(|u| u.vol).collect();
+    for w in &d.wires {
+        let (Some(i), Some(j)) = (index_of(units, &w.from), index_of(units, &w.to)) else {
+            continue;
+        };
+        if i == j {
+            continue;
+        }
+        let (Some(pi), Some(pj)) = (
+            parts::part(units[i].kind).port_index(&w.from_port),
+            parts::part(units[j].kind).port_index(&w.to_port),
+        ) else {
+            continue;
+        };
+        let (Some(ka), Some(kb)) = (
+            units[i].sockets.iter().position(|s| s.port == pi),
+            units[j].sockets.iter().position(|s| s.port == pj),
+        ) else {
+            continue;
+        };
+        let (a, b) = (units[i].sockets[ka], units[j].sockets[kb]);
+        // The couplings are already solved, to a stricter rule than this one.
+        if matches!(a.dom, Domain::Rotary | Domain::Mech) {
+            continue;
+        }
+        let (Some(fa), Some(fb)) = (a.out.axis(), b.out.axis()) else { continue };
+        for c in 0..3u8 {
+            // A flange cannot move along its own normal: that is not sliding
+            // it across the face, it is pushing it through the wall.
+            if c == fa || c == fb {
+                continue;
+            }
+            // How high a material port sits on its face is not a style
+            // choice -- in at the top and out at the bottom is the sentence
+            // "an ore line falls downhill", and solving it flat is a chute
+            // that does not work. The exception is a conveyor or a screw,
+            // whose height is a fact about the plant rather than a preference:
+            // there it is the machine that should meet the line, and a
+            // machine that does not is a metre and a half of step that a
+            // half-metre-wide chute has to go round.
+            if c == 1
+                && a.dom == Domain::Material
+                && units[i].arch != Arch::Run
+                && units[j].arch != Arch::Run
+            {
+                continue;
+            }
+            let (Some(ra), Some(rb)) =
+                (slack(&units[i], ka, c, &done[i]), slack(&units[j], kb, c, &done[j]))
+            else {
+                continue;
+            };
+            let (lo, hi) = (ra.0.max(rb.0), ra.1.min(rb.1));
+            if lo > hi {
+                continue;
+            }
+            // Whichever of the two is already on a line the other can reach:
+            // one flange moving is better than two, and a flange that has not
+            // moved is one nobody has to check again.
+            let (va, vb) = (coord(units[i].sockets[ka].at, c), coord(units[j].sockets[kb].at, c));
+            let to = if vb >= ra.0 && vb <= ra.1 {
+                vb
+            } else if va >= rb.0 && va <= rb.1 {
+                va
+            } else {
+                lane_between(lo, hi, (va + vb) / 2)
+            };
+            if nudge(&mut units[i], ka, c, to, &bodies, i) {
+                mark(&mut done[i], &units[i], ka, c);
+            }
+            if nudge(&mut units[j], kb, c, to, &bodies, j) {
+                mark(&mut done[j], &units[j], kb, c);
+            }
+        }
+    }
+}
+
+/// How far one flange can slide on one axis: the face it is on, inset by its
+/// own radius, or the whole strip of tiles when the component is a run.
+///
+/// `None` when it has already been solved against something else and moving it
+/// again would unsolve that.
+fn slack(u: &Placed, k: usize, c: u8, done: &[[bool; 3]]) -> Option<(Mm, Mm)> {
+    let s = &u.sockets[k];
+    if u.arch == Arch::Run {
+        // Moving a run moves both its ends, so a run with one end already on
+        // somebody's line has no freedom left on that axis: sliding it to
+        // please the second connection would take the first one with it, and
+        // the first one's partner is not coming.
+        if done.iter().any(|f| f[c as usize]) {
+            let v = coord(s.at, c);
+            return Some((v, v));
+        }
+        let (lo, hi) = reach(u, c);
+        return if lo <= hi { Some((lo, hi)) } else { None };
+    }
+    if done[k][c as usize] {
+        let v = coord(s.at, c);
+        return Some((v, v));
+    }
+    let m = (s.bore / 2 + 150).max(250);
+    let (lo, hi) = (coord(u.vol.lo, c) + m, coord(u.vol.hi, c) - m);
+    if lo > hi {
+        let v = coord(s.at, c);
+        return Some((v, v));
+    }
+    Some((lo, hi))
+}
+
+/// Remember that a flange is on somebody's line -- and, for a run, that all of
+/// its flanges are, because they moved together.
+fn mark(done: &mut [[bool; 3]], u: &Placed, k: usize, c: u8) {
+    if u.arch == Arch::Run {
+        for f in done.iter_mut() {
+            f[c as usize] = true;
+        }
+        return;
+    }
+    done[k][c as usize] = true;
+}
+
+/// Slide one flange, unless sliding it would spoil something.
+///
+/// Reports whether it moved, which is also whether it is now spoken for.
+fn nudge(u: &mut Placed, k: usize, c: u8, to: Mm, bodies: &[Vol], mine: usize) -> bool {
+    let was = u.sockets[k].at;
+    if coord(was, c) == to {
+        return true;
+    }
+    let now = with_coord(was, c, to);
+    // Not onto a neighbour. Two nozzles on one face need to be a pipe's width
+    // apart or they are one nozzle drawn twice.
+    let flange = u.sockets[k];
+    let clash = u.sockets.iter().enumerate().any(|(n, o)| {
+        n != k && o.out == flange.out && o.at.taxi(now) < (o.bore + flange.bore) / 2 + 200
+    });
+    if clash {
+        return false;
+    }
+    // And not into a wall. The straight off a flange belongs to the pipework;
+    // a flange slid until that straight is inside the next machine along has
+    // not been tidied, it has been lost.
+    let stub = Vol::new(now, now.add(flange.out.mul(flange.stub))).grow(flange.bore / 2);
+    if bodies.iter().enumerate().any(|(n, v)| n != mine && v.hits(stub)) {
+        return false;
+    }
+    if u.arch == Arch::Run {
+        let d = to - coord(u.vol.centre(), c);
+        u.vol = Vol::new(
+            with_coord(u.vol.lo, c, coord(u.vol.lo, c) + d),
+            with_coord(u.vol.hi, c, coord(u.vol.hi, c) + d),
+        );
+        u.clear = u.vol.grow_flat(CLEAR);
+        for s in u.sockets.iter_mut() {
+            if s.out.axis() == Some(c) {
+                continue;
+            }
+            s.at = with_coord(s.at, c, to);
+        }
+        return true;
+    }
+    u.sockets[k].at = now;
+    true
+}
+
 /// The point on the face, spread across it if it has company, and snapped to
 /// the lanes the router lays pipe along.
 fn on_face(me: &Placed, side: Side, f: P3, y: Mm, slot: i32, n: i32) -> P3 {
     let c = me.vol.centre();
     let s = me.vol.size();
-    let off = if n <= 1 { 0 } else { (slot * 2 - (n - 1)) * (s.x.min(s.z) / (2 * n + 2)) };
+    // Two ports on one face of a machine are spread along it so they are not
+    // the same nozzle drawn twice. Two ports on one end of a *run* are not:
+    // the body is eight hundred millimetres of line, everything on it is on
+    // the line, and spreading them puts the drive half a metre beside the
+    // screw it is supposed to be turning.
+    let off = if n <= 1 || me.arch == Arch::Run {
+        0
+    } else {
+        (slot * 2 - (n - 1)) * (s.x.min(s.z) / (2 * n + 2))
+    };
     if !side.horizontal() {
         // Top and bottom nozzles spread across the *plan* instead of up a
         // wall, and along whichever way the machine is longer.

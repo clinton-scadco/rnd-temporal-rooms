@@ -113,9 +113,15 @@ export function wireProblem(a, ai, b, bi) {
   // a design, so the only rule left is the domain.
   if (pa.type !== pb.type) return `${pa.name} carries ${pa.type}, ${pb.name} takes ${pb.type}`;
   const g = gap(a, b);
-  const reach = state.cat.constants.reach;
+  // Experiment 14: how far a connection reaches depends on the domain, because
+  // plumbing is a design decision and wiring is not.
+  const reach = pa.type === 'electrical'
+    ? state.cat.constants.reachPower
+    : state.cat.constants.reach;
   if (g > reach) {
-    return `${g} tiles apart — a connection reaches ${reach}. Move them together, stack them, or put a pipe in between`;
+    return pa.type === 'electrical'
+      ? `${g} tiles apart — even a power connection only reaches ${reach}`
+      : `${g} tiles apart — a ${pa.type} connection reaches ${reach}. Move them together, stack them, or put a pipe in between`;
   }
   if (state.design.wires.some(w =>
       w.from === a.name && w.fromPort === pa.name && w.to === b.name && w.toPort === pb.name)) {
@@ -146,13 +152,15 @@ export function uniqueName(kind) {
     reactor: 'R', burner: 'BN', heater: 'EH', mains: 'M', pump: 'W', inlet: 'I',
     outlet: 'O', skip: 'SK', radiator: 'RD',
     heatpipe: 'HP', steampipe: 'SP', fluidpipe: 'FP', chute: 'CH', screw: 'SC',
-    shaft: 'SH', cable: 'CB',
+    shaft: 'SH',
     hopper: 'HO', tank: 'TK', drum: 'DR', flywheel: 'FW',
     valve: 'V', clutch: 'CL',
     exchanger: 'HX', preheater: 'PH', condenser: 'CD', furnace: 'F',
     turbine: 'T', generator: 'G', motor: 'MO', gearbox: 'GB', crank: 'CR',
     crusher: 'C', mill: 'MI', separator: 'S', rollmill: 'RM', press: 'P',
     lathe: 'L', column: 'CO',
+    waterwheel: 'WW', pulley: 'PU', belt: 'B', mechpump: 'MP',
+    steamengine: 'SE', fan: 'FN', jacket: 'JK',
   }[kind] || 'U';
   for (let i = 1; ; i++) {
     const name = stem + i;
@@ -161,10 +169,14 @@ export function uniqueName(kind) {
 }
 
 export function place(kind, x, y, z) {
+  const p = part(kind);
   const u = {
     name: uniqueName(kind), kind, x, y, z: z || 0, face: null,
     throttle: 100, pulse: false, high: 1200, low: 0,
     draws: kind === 'inlet' ? 'ore' : 'water', ratio: 4, limit: 100, stages: 2,
+    // Experiment 14: a component arrives on the frame it comes on, which the
+    // catalogue says and this file does not have an opinion about.
+    frame: (p && p.phys && p.phys.material) || 'steel',
   };
   state.design.units.push(u);
   changed(true);
@@ -347,6 +359,12 @@ export async function catalogue() {
     briefs: res.briefs || [],
     families: [...new Set(res.parts.map(p => p.family))],
     constants: res.constants,
+    // Experiment 14: the three centuries, the three frames and the five
+    // bands. Kept as the server sent them, because the browser's job is to
+    // draw the vocabulary rather than to have one.
+    eras: res.eras || [],
+    materials: res.materials || [],
+    bands: res.bands || [],
   };
   return state.cat;
 }

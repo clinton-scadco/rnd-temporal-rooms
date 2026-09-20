@@ -14,7 +14,7 @@
 //! which is enough to draw it thick and label it.
 //!
 //! The explanations are the point of the experiment as much as the simulation
-//! is, and experiment 07 leans on them harder than 06 did. With thirty-eight
+//! is, and experiment 07 leans on them harder than 06 did. With forty-four
 //! components and five properties there is now a whole class of design that is
 //! wired correctly, is not short of anything, and still produces nothing --
 //! because the ore arriving at the mill is lumps, or the metal arriving at the
@@ -22,6 +22,7 @@
 //! puzzle with the solution torn out.
 
 use super::design::Design;
+use super::era;
 use super::eval::Report;
 use super::parts::{self, Dir, Kind, Need};
 use super::sim::{need_of, Machine, Status, Stop};
@@ -180,7 +181,46 @@ fn unit(d: &Design, m: &Machine, i: usize) -> Json {
         .set("waste", s.waste as i64)
         .set("ports", Json::Arr(ports))
         .set("detail", detail)
+        .set("body", body(m, i))
         .set("why", Json::arr(why(d, m, i)))
+}
+
+/// Experiment 14: the component as a physical object rather than as a
+/// transformation -- what it is made of, how hot it is, and how hard the drive
+/// it is bolted to is shaking it.
+///
+/// Every component has one of these, including the ones with no body
+/// temperature at all, because "this has no thermal behaviour" is a thing a
+/// panel should be able to say plainly rather than by leaving a gap.
+fn body(m: &Machine, i: usize) -> Json {
+    let ph = parts::phys(m.kinds[i]);
+    let mat = m.mats[i];
+    let temp = m.temp(i);
+    Json::obj()
+        .set("era", ph.era.tag())
+        .set("material", mat.tag())
+        .set("materialTitle", mat.title())
+        .set("clear", m.clear[i] as i64)
+        .set("thermal", ph.thermal())
+        .set("temp", temp as i64)
+        .set("band", m.band(i).tag())
+        .set("duty", m.duty(i) as i64)
+        .set("tripped", m.st[i].tripped)
+        .set("lo", ph.lo as i64)
+        .set("hi", ph.hi as i64)
+        .set("ceiling", ph.ceiling(mat) as i64)
+        .set("grade", era::grade(temp) as i64)
+        .set("shed", m.st[i].body as i64)
+        .set("shakes", ph.vib as i64)
+        .set("shaken", m.shake[i] as i64)
+        .set("tolerates", mat.tol() as i64)
+        .set(
+            "shakenBy",
+            match m.shaker(i) {
+                Some(j) if j != i => Json::Str(m.names[j].clone()),
+                _ => Json::Null,
+            },
+        )
 }
 
 // ------------------------------------------------------------ the sentences
@@ -250,8 +290,7 @@ pub fn why(d: &Design, m: &Machine, i: usize) -> Vec<String> {
         | Kind::SteamPipe
         | Kind::FluidPipe
         | Kind::Chute
-        | Kind::Shaft
-        | Kind::Cable => {
+        | Kind::Shaft => {
             out.push(format!("carrying {}/tick of {}", s.made[1], part.ports[1].rate));
             out.push(format!("holding: {}", held(m, i, 0)));
             if s.waste > 0 {
@@ -415,7 +454,225 @@ pub fn why(d: &Design, m: &Machine, i: usize) -> Vec<String> {
         }
         _ => out.extend(recipe_why(m, i)),
     }
+    out.extend(chain_why(m, i));
+    out.extend(body_why(m, i));
     out.push(format!("utilisation: {:.1}%", pct(s.util)));
+    out
+}
+
+/// Who else this component is waiting on, and who is actually at fault.
+///
+/// The complaint this answers is a real one and it is about legibility rather
+/// than physics: a plant of twenty components produces fifteen lines of STARVED
+/// and BLOCKED, every one of them true, and not one of them says which
+/// component to go and look at. STARVED means somebody upstream is not
+/// supplying and BLOCKED means somebody downstream is not taking, so both of
+/// them are *directions*, and following them is something the panel can do
+/// rather than something the player should have to.
+///
+/// Three sentences at most, and usually none: a component that is running is
+/// not waiting on anybody.
+fn chain_why(m: &Machine, i: usize) -> Vec<String> {
+    let part = parts::part(m.kinds[i]);
+    let s = &m.st[i];
+    let mut out = Vec::new();
+
+    // The one that is never obvious and is always somebody's first mistake:
+    // a component that cannot run because nothing was ever wired to it.
+    for p in m.needed_inputs(i) {
+        if m.feeders(i, p).is_empty() {
+            out.push(format!(
+                "nothing is wired to {} — it needs {} and will never run without it",
+                part.ports[p].name, part.ports[p].dom
+            ));
+        }
+    }
+    if !out.is_empty() {
+        return out;
+    }
+
+    // Name the neighbour, and what it actually delivered or took. "short of
+    // drive" is true; "SH1 delivered 46 of the 50 this wants" is actionable.
+    let flows = |wires: &[usize]| -> (u64, Vec<String>) {
+        let total: u64 = wires.iter().map(|&w| m.flow[w]).sum();
+        let who: Vec<String> = wires
+            .iter()
+            .map(|&w| {
+                let l = m.links[w];
+                m.names[if l.to == i { l.from } else { l.to }].clone()
+            })
+            .collect();
+        (total, who)
+    };
+    let say = |who: &[String]| -> String {
+        match who.len() {
+            0 => String::new(),
+            1 => who[0].clone(),
+            2 => format!("{} and {}", who[0], who[1]),
+            n => format!("{} and {} others", who[0], n - 1),
+        }
+    };
+
+    match s.status {
+        Status::Starved => {
+            if let Stop::Short(p) = s.stop {
+                let (got, who) = flows(m.feeders(i, p));
+                if !who.is_empty() {
+                    out.push(format!(
+                        "{} arrived from {} last tick — that is what is holding this back",
+                        got,
+                        say(&who)
+                    ));
+                }
+            }
+        }
+        Status::Blocked => {
+            // Whichever output is actually full, rather than all of them.
+            let p = match s.stop {
+                Stop::Full(p) => Some(p),
+                _ => (0..part.ports.len()).find(|&p| {
+                    part.ports[p].dir == Dir::Out
+                        && !m.drains(i, p).is_empty()
+                        && s.buf[p].qty >= part.ports[p].cap
+                }),
+            };
+            if let Some(p) = p {
+                let (took, who) = flows(m.drains(i, p));
+                if who.is_empty() {
+                    out.push(format!(
+                        "{} is full and nothing is wired to it — it has nowhere to go",
+                        part.ports[p].name
+                    ));
+                } else {
+                    out.push(format!(
+                        "{} took {} of it last tick, and {} is full",
+                        say(&who),
+                        took,
+                        part.ports[p].name
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // And then the end of the trail, which is the sentence worth reading.
+    if let Some(r) = m.root_cause(i) {
+        let title = parts::part(m.kinds[r]).title;
+        let st = m.st[r].status;
+        out.push(if st.well() {
+            format!(
+                "follow the wire back and it ends at {} ({title}), running flat out — \
+                 there is simply less of it than this wants",
+                m.names[r]
+            )
+        } else {
+            format!(
+                "follow the wire back and it ends at {} ({title}), which is {} — fix that first",
+                m.names[r],
+                st.tag()
+            )
+        });
+    }
+    out
+}
+
+/// What experiment 14 has to say about this component, if anything.
+///
+/// Deliberately silent for the great majority of the catalogue. A chute has no
+/// body temperature and no vibration and is bolted to nothing, and printing
+/// "temperature: 0, NORMAL" underneath it would be three experiments' worth of
+/// panel noise in exchange for no information at all.
+fn body_why(m: &Machine, i: usize) -> Vec<String> {
+    let ph = parts::phys(m.kinds[i]);
+    let mat = m.mats[i];
+    let mut out = Vec::new();
+
+    if m.shake[i] > 0 {
+        let by = match m.shaker(i) {
+            Some(j) if j != i => format!("{} on the same drive", m.names[j]),
+            _ => "itself".to_string(),
+        };
+        if m.shake[i] > mat.tol() {
+            out.push(format!(
+                "SHAKING — {} shakes at {} and {} carries {}",
+                by,
+                m.shake[i],
+                mat.title().to_lowercase(),
+                mat.tol()
+            ));
+            out.push(
+                "put it on a stiffer frame, or break the drive with a belt -- \
+                 a belt passes torque and does not pass shake"
+                    .to_string(),
+            );
+        } else if m.shake[i] >= mat.tol() {
+            out.push(format!(
+                "shaken at {} by {}, and {} carries exactly {}",
+                m.shake[i],
+                by,
+                mat.title().to_lowercase(),
+                mat.tol()
+            ));
+        }
+    }
+
+    if !ph.thermal() {
+        return out;
+    }
+
+    let temp = m.temp(i);
+    let band = m.band(i);
+    out.push(format!(
+        "body: {temp} degrees, {band} -- range {}..{}, trips at {}",
+        ph.lo,
+        ph.hi,
+        ph.ceiling(mat)
+    ));
+    if m.st[i].tripped {
+        out.push(format!(
+            "OVERHEATED — stopped until it is back under {}, and it is {temp}",
+            ph.hi
+        ));
+    } else if m.duty(i) < 1000 {
+        out.push(format!("{} -- {}% of rating", band.note(), m.duty(i) / 10));
+    }
+
+    let cooling = m.clear[i];
+    out.push(format!(
+        "{} with {} clear, shedding {}/tick",
+        mat.title().to_lowercase(),
+        match cooling {
+            0 => "nothing".to_string(),
+            1 => "one tile".to_string(),
+            n => format!("{n} tiles"),
+        },
+        m.st[i].body
+    ));
+
+    let wired = m
+        .kinds[i]
+        .waste_port()
+        .map(|p| !m.drains(i, p).is_empty())
+        .unwrap_or(false);
+    if m.kinds[i].waste_port().is_some() && !wired {
+        out.push(format!(
+            "the waste port is not wired -- on air alone this settles at {}",
+            ph.settles_at(mat, cooling)
+        ));
+    } else if wired {
+        out.push(format!(
+            "waste heat leaving at grade {}, and it settles at {}",
+            era::grade(temp),
+            ph.cooled_at(mat, cooling)
+        ));
+    }
+    if band == super::era::Band::Warm || band == super::era::Band::Hot {
+        out.push(format!(
+            "a clear tile either side would take it to {}",
+            ph.cooled_at(mat, (cooling + 1).min(era::CLEAR_MAX))
+        ));
+    }
     out
 }
 
@@ -487,7 +744,7 @@ fn recipe_why(m: &Machine, i: usize) -> Vec<String> {
         Stop::Below(floor) => {
             let per = r.draws.first().map(|d| d.qty).unwrap_or(1);
             out.push(format!(
-                "STALLED — this one does not run slowly. Below {} {}/tick it does                  nothing at all.",
+                "STALLED — this one does not run slowly. Below {} {}/tick it does nothing at all.",
                 floor * per,
                 part.ports[r.draws.first().map(|d| d.port).unwrap_or(0)].name
             ));
@@ -556,25 +813,45 @@ fn hint_for(need: &Need, kind: Kind) -> String {
 /// design; a stalled turbine is producing nothing and is one tank away from
 /// producing something; a venting reactor is burning fuel for nothing; a
 /// starved component is a symptom of one of those somewhere upstream.
+///
+/// Since the legibility pass that followed experiment 14, that last clause is
+/// not just a comment. Every row knows whether it is a *cause* or a *symptom* —
+/// a symptom being a starved or blocked component whose trail ends somewhere
+/// else in this same list — and causes are listed first whatever their
+/// severity. A plant with one broken burner and fourteen starved machines
+/// downstream of it used to be fifteen rows of equal weight, which is fifteen
+/// places to look and one that is right.
 fn holding(d: &Design, m: &Machine) -> Json {
-    let mut rows: Vec<(u8, Json)> = Vec::new();
+    let mut rows: Vec<(u8, bool, Json)> = Vec::new();
     for i in 0..m.len() {
         let s = &m.st[i];
         let rank = match s.status {
-            Status::Refused => 0,
-            Status::Stalled => 1,
-            Status::Venting => 2,
-            Status::Blocked => 3,
-            Status::Starved => 4,
-            Status::Idle if !matches!(m.kinds[i], Kind::Tank | Kind::Drum | Kind::Flywheel) => 5,
+            // Experiment 14's two both outrank everything: a shaking component
+            // is wrong in the document and will never work, and an overheated
+            // one will not restart on its own.
+            Status::Shaking => 0,
+            Status::Overheated => 0,
+            Status::Refused => 1,
+            Status::Stalled => 2,
+            Status::Venting => 3,
+            Status::Blocked => 4,
+            Status::Starved => 5,
+            Status::Idle if !matches!(m.kinds[i], Kind::Tank | Kind::Drum | Kind::Flywheel) => 6,
             _ => continue,
         };
+        // Whether this row is somebody else's fault, and whose.
+        let root = m.root_cause(i);
+        let symptom = matches!(s.status, Status::Starved | Status::Blocked) && root.is_some();
         let lines = why(d, m, i);
         // The line worth putting on the row is the one that names the problem.
         let line = lines
             .iter()
             .find(|l| {
                 l.starts_with("REFUSED")
+                    || l.starts_with("SHAKING")
+                    || l.starts_with("OVERHEATED")
+                    || l.starts_with("nothing is wired")
+                    || l.contains("follow it back")
                     || l.contains("short of")
                     || l.contains("is full")
                     || l.contains("below the")
@@ -587,16 +864,26 @@ fn holding(d: &Design, m: &Machine) -> Json {
             .unwrap_or_default();
         rows.push((
             rank,
+            symptom,
             Json::obj()
                 .set("name", m.names[i].clone())
                 .set("kind", parts::part(m.kinds[i]).tag)
                 .set("title", parts::part(m.kinds[i]).title)
                 .set("status", s.status.tag())
                 .set("util", Json::Real(pct(s.util)))
+                .set("cause", !symptom)
+                .set(
+                    "because",
+                    match root {
+                        Some(r) if symptom => Json::Str(m.names[r].clone()),
+                        _ => Json::Null,
+                    },
+                )
                 .set("why", line),
         ));
     }
-    rows.sort_by_key(|(r, _)| *r);
-    Json::Arr(rows.into_iter().map(|(_, j)| j).collect())
+    // Causes before symptoms, and then worst first within each half.
+    rows.sort_by_key(|(r, symptom, _)| (*symptom, *r));
+    Json::Arr(rows.into_iter().map(|(_, _, j)| j).collect())
 }
 

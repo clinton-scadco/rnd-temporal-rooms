@@ -23,11 +23,13 @@
 //!
 //! ```text
 //!   stuff    what a wire carries: a domain, a substance, five properties
-//!   parts    thirty-eight components in eight families, and the numbers
+//!   parts    forty-four components in eight families, and the numbers
+//!   era      experiment 14: what they are made of, how hot they get, how
+//!            hard they shake, and which century they belong to
 //!   design   the document: components on a tile grid, wires between ports
 //!   sim      the tick: transfer along wires, export, then every component steps
 //!   orbit    run it until it repeats, and keep transient + period
-//!   eval     what it is worth, against whichever of four briefs it claims
+//!   eval     what it is worth, against whichever of five briefs it claims
 //!   snap     state(t) in the shape a renderer needs, and why things are stopped
 //!   web      all of the above, over a socket, to a canvas
 //!   form     experiments 08-10: the same document, built as a plant, and
@@ -49,7 +51,7 @@
 //!
 //! ## What is deliberately absent
 //!
-//! No pressure, no torque, no vapour-liquid equilibrium, no electrical network.
+//! No pressure, no vapour-liquid equilibrium, no electrical network.
 //! Temperature is a band, purity is a percent, size is one of four words, and a
 //! phase change is a change of *domain* rather than a number inside a box. Every
 //! component has a capacity, most have an efficiency, some have a constraint,
@@ -57,8 +59,15 @@
 //! physics, and it is already enough for a design to starve, block, stall,
 //! refuse, pulse and settle.
 //!
+//! Experiment 14 adds three things to that list and no more: a body that holds
+//! heat, a frame that is made of something, and a number saying how hard the
+//! thing shakes. It adds them the same way -- coarsely, in integers, with
+//! behaviour that changes at thresholds rather than continuously -- so that
+//! `orbit` can still compile a design by watching its state repeat. What it
+//! deliberately does not add is a second crusher.
+//!
 //! The chemistry family is absent on purpose: mixers, reactor vessels,
-//! electrolysers and scrubbers were cut because none of the four briefs needs
+//! electrolysers and scrubbers were cut because none of the five briefs needs
 //! them, and a component no brief needs is exactly the failure being avoided.
 //!
 //! ## What is deliberately present
@@ -81,6 +90,7 @@
 //! happened to it in the parentheses.
 
 pub mod design;
+pub mod era;
 pub mod eval;
 pub mod form;
 pub mod orbit;

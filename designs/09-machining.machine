@@ -18,7 +18,6 @@ lathe     L2  at 4,3
 outlet    O1  at 9,0
 skip      SK1 at 9,4
 
-cable     CB1 at 0,4
 mains     M1  at 0,7
 motor     MO1 at 4,7
 motor     MO2 at 7,7
@@ -26,11 +25,10 @@ motor     MO2 at 7,7
 wire I1.out -> L1.in
 wire I1.out -> L2.in
 
-wire M1.power -> CB1.in
 wire M1.power -> MO1.power
 wire M1.power -> MO2.power
-wire CB1.out -> L1.power
-wire CB1.out -> L2.power
+wire M1.power -> L1.power
+wire M1.power -> L2.power
 wire MO1.rotary -> L1.drive
 wire MO2.rotary -> L2.drive
 

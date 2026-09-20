@@ -310,6 +310,21 @@ button.link {
 .bar.warn i { background: var(--signal); }
 .bar.bad i { background: var(--bad); }
 
+/* Experiment 14: the physical readout. Set apart from the rest of the
+   inspector because it is a different kind of fact -- everything above it is
+   about what is flowing through the component, and this is about the component
+   itself. */
+.body {
+  margin: .5rem 0;
+  padding: .4rem .5rem;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--sunk);
+}
+.body .field { margin: 0 0 .2rem 0; grid-template-columns: auto 1fr; }
+.body .field label { font-size: 13px; color: var(--ink); }
+.body .hint { margin: .3rem 0 0 0; }
+
 .rows { width: 100%; border-collapse: collapse; font: 11px var(--mono); }
 .rows th {
   text-align: left; font-weight: 400; color: var(--muted); font-size: 10px;
@@ -324,6 +339,10 @@ button.link {
 .holdrow b { font-size: 11px; }
 .holdrow span { font: 10px var(--mono); color: var(--muted); }
 .holdrow.bad { border-left-color: var(--bad); }
+/* A component that is only starved because something else is broken. Still
+   listed, because hiding it would be lying, and still clickable -- just not
+   competing with the thing that is actually wrong. */
+.holdrow.symptom { opacity: .55; border-left-color: var(--rule); }
 
 /* ----------------------------------------------------------- the compiled */
 

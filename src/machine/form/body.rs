@@ -1,4 +1,4 @@
-//! Procedural dressing: thirty-eight components, assembled out of twenty-nine
+//! Procedural dressing: forty-four components, assembled out of twenty-nine
 //! meshes.
 //!
 //! This is the pass that would traditionally be a folder of models. What is

@@ -66,15 +66,16 @@
 //! which is the point: a component set that only ever answers one question has
 //! not been shown to be a component set at all.
 
+use super::era::Mat;
 use super::eval::Brief;
 use super::parts::{self, Dir, Kind};
 use super::stuff::Subst;
 use crate::json::Json;
 
 /// The settings a component exposes to the player. One struct for all
-/// thirty-eight kinds: a `Tune` field that a kind does not use is simply never
-/// read, which is cheaper than thirty-eight variants of a thing that holds at
-/// most four numbers.
+/// forty-four kinds: a `Tune` field that a kind does not use is simply never
+/// read, which is cheaper than forty-four variants of a thing that holds at
+/// most five numbers.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Tune {
     /// Reactor, percent. Clamped to `MIN_THROTTLE..=100`.
@@ -91,6 +92,15 @@ pub struct Tune {
     pub limit: u64,
     /// Column: how many times it separates.
     pub stages: u32,
+    /// Experiment 14: what the frame is made of.
+    ///
+    /// Unlike every other field here this one means something on almost every
+    /// component, because "what is it made of" is a question you can ask a
+    /// pulley and a crusher and get two different useful answers to. What it
+    /// changes is how well the body sheds heat, how hot the frame will stand,
+    /// and how much vibration it will carry -- and the catalogue says, per
+    /// kind, which of the three are on offer.
+    pub mat: Mat,
 }
 
 impl Default for Tune {
@@ -104,6 +114,7 @@ impl Default for Tune {
             ratio: 4,
             limit: 100,
             stages: 2,
+            mat: Mat::Steel,
         }
     }
 }
@@ -117,7 +128,13 @@ impl Tune {
         if kind == Kind::Inlet {
             t.subst = Subst::Ore;
         }
+        t.mat = parts::phys(kind).mat;
         t
+    }
+
+    /// Whether the frame is the one this kind comes on.
+    fn frame_is_default(&self, kind: Kind) -> bool {
+        self.mat == parts::phys(kind).mat
     }
 
     fn is_default_for(&self, kind: Kind) -> bool {
@@ -135,7 +152,14 @@ impl Tune {
 
     /// Whether this kind has anything to tune at all, for a palette that would
     /// rather not offer an empty box.
+    ///
+    /// Since experiment 14 a component with more than one frame on offer is
+    /// tunable whatever else it does or does not expose, which is most of the
+    /// drive train and every one of the process machines.
     pub fn tunable(kind: Kind) -> bool {
+        if parts::phys(kind).mats.len() > 1 {
+            return true;
+        }
         !matches!(
             kind,
             Kind::Burner
@@ -150,7 +174,6 @@ impl Tune {
                 | Kind::Chute
                 | Kind::Screw
                 | Kind::Shaft
-                | Kind::Cable
                 | Kind::Exchanger
                 | Kind::Preheater
                 | Kind::Condenser
@@ -387,6 +410,22 @@ impl Design {
                     ));
                 }
             }
+            // Experiment 14. A timber turbine is not a trade-off, it is a
+            // category error, so the catalogue says what each component may be
+            // built out of and the document is held to it.
+            let ph = parts::phys(u.kind);
+            if !ph.mats.contains(&u.tune.mat) {
+                out.push(fault(
+                    format!(
+                        "{} cannot be built out of {} -- a {} comes in {}",
+                        u.name,
+                        u.tune.mat,
+                        parts::part(u.kind).title.to_lowercase(),
+                        ph.mats.iter().map(|m| m.tag()).collect::<Vec<_>>().join(" or ")
+                    ),
+                    Some(&u.name),
+                ));
+            }
             if matches!(u.kind, Kind::Pump | Kind::Inlet) {
                 let want = parts::part(u.kind).ports[0].dom;
                 if u.tune.subst.home() != want {
@@ -473,13 +512,26 @@ impl Design {
         }
         // Three dimensions since experiment 10: stacking a component on top of
         // the one it feeds is a legitimate way of being next to it.
+        //
+        // Since experiment 14 the reach depends on the domain, for one reason:
+        // plumbing is a design decision and wiring is not. See
+        // `parts::REACH_POWER`.
         let gap = self.units[from].gap_to(&self.units[to]);
-        if gap > parts::REACH {
-            return Err(format!(
-                "{} and {} are {gap} tiles apart and a connection reaches {} -- \
-                 move them together, stack them, or put a pipe between them",
-                w.from, w.to, parts::REACH
-            ));
+        let far = parts::reach(a.dom);
+        if gap > far {
+            return Err(if a.dom == super::stuff::Domain::Electrical {
+                format!(
+                    "{} and {} are {gap} tiles apart, and even a power connection \
+                     only reaches {far}",
+                    w.from, w.to
+                )
+            } else {
+                format!(
+                    "{} and {} are {gap} tiles apart and a {} connection reaches {far} \
+                     -- move them together, stack them, or put a pipe between them",
+                    w.from, w.to, a.dom
+                )
+            });
         }
         Ok(Link { from, from_port: fi, to, to_port: ti })
     }
@@ -516,6 +568,42 @@ impl Design {
         self.units.iter().map(|u| u.z + u.tall()).max().unwrap_or(0)
     }
 
+    /// Experiment 14: how much clear air component `i` has been given, in
+    /// tiles, capped at the point where more stops helping.
+    ///
+    /// The nearest neighbour decides it, not the average, because a machine
+    /// wedged hard against one thing and alone on three sides is a machine that
+    /// cannot get rid of its heat on the side that matters. This is what turns
+    /// the tile grid -- which since experiment 06 has only ever been a thing
+    /// the brief asks you to *minimise* -- into a cooling decision, and it is
+    /// the cheapest one on the list: it costs plot and nothing else.
+    pub fn clearance(&self, i: usize) -> u32 {
+        let me = &self.units[i];
+        self.units
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i)
+            .map(|(_, o)| me.gap_to(o) as u32)
+            .min()
+            .unwrap_or(super::era::CLEAR_MAX)
+            .min(super::era::CLEAR_MAX)
+    }
+
+    /// Which eras this design draws on. A design that names one era is a design
+    /// built in a century; a design that names two is a retrofit, which is a
+    /// legitimate and frequently sensible thing to build.
+    pub fn eras(&self) -> Vec<super::era::Era> {
+        let mut v: Vec<super::era::Era> = Vec::new();
+        for u in &self.units {
+            let e = parts::phys(u.kind).era;
+            if e != super::era::Era::Any && !v.contains(&e) {
+                v.push(e);
+            }
+        }
+        v.sort();
+        v
+    }
+
     // ------------------------------------------------------------- the file
 
     pub fn parse(src: &str) -> Result<Design, String> {
@@ -536,7 +624,7 @@ impl Design {
             if head == "brief" {
                 let rest = line["brief".len()..].trim();
                 d.brief = Brief::by_tag(rest)
-                    .ok_or_else(|| at(format!("`{rest}` is not one of the four briefs")))?;
+                    .ok_or_else(|| at(format!("`{rest}` is not one of the five briefs")))?;
                 continue;
             }
             if head == "wire" {
@@ -579,6 +667,11 @@ impl Design {
                         let v = w.next().ok_or_else(|| at("`stages` needs a number".into()))?;
                         u.tune.stages =
                             v.parse().map_err(|_| at(format!("`{v}` is not a stage count")))?;
+                    }
+                    "frame" => {
+                        let v = w.next().ok_or_else(|| at("`frame` needs a material".into()))?;
+                        u.tune.mat = Mat::by_tag(v)
+                            .ok_or_else(|| at(format!("`{v}` is not wood, iron or steel")))?;
                     }
                     "at" => {
                         // `at x,y` is where experiment 06 left it and still
@@ -648,6 +741,12 @@ impl Design {
             if let Some(f) = u.face {
                 s.push_str(&format!("  face {}", compass(f)));
             }
+            // The frame is written only when it is not the one the component
+            // comes on, so every file experiments 06 to 13 could read is still
+            // a file this emits.
+            if !u.tune.frame_is_default(u.kind) {
+                s.push_str(&format!("  frame {}", u.tune.mat.tag()));
+            }
             if !u.tune.is_default_for(u.kind) {
                 match u.kind {
                     Kind::Reactor => s.push_str(&format!("  throttle {}", u.tune.throttle)),
@@ -714,6 +813,7 @@ impl Design {
                                 .set("ratio", u.tune.ratio as i64)
                                 .set("limit", u.tune.limit as i64)
                                 .set("stages", u.tune.stages as i64)
+                                .set("frame", u.tune.mat.tag())
                         })
                         .collect(),
                 ),
@@ -770,6 +870,10 @@ impl Design {
             if let Some(v) = u.at("stages").as_u64() {
                 tune.stages = v as u32;
             }
+            if let Some(v) = u.at("frame").as_str() {
+                tune.mat =
+                    Mat::by_tag(v).ok_or_else(|| format!("`{v}` is not a frame material"))?;
+            }
             d.units.push(Unit {
                 name: u.at("name").as_str().unwrap_or("").to_string(),
                 kind,
@@ -814,6 +918,9 @@ impl Design {
                         .set("height", parts::height(k) as i64)
                         .set("tunable", Tune::tunable(k))
                         .set("recipe", recipe_json(k))
+                        // Experiment 14: the other half of what a component is.
+                        .set("phys", parts::phys(k).to_json())
+                        .set("era", parts::phys(k).era.tag())
                         .set(
                             "ports",
                             Json::Arr(

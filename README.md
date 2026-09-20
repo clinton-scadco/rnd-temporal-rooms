@@ -113,7 +113,7 @@ project has spent the promise it has been making since Prototype 1.
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 211 cross-validation tests
+.\run.ps1 -Test    # 257 cross-validation tests
 .\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
 
@@ -144,6 +144,11 @@ project has spent the promise it has been making since Prototype 1.
 # how every connection was routed, and what is in the way
 .\run.ps1 -Machine space designs/17-stacked.machine
 .\run.ps1 -Machine spaces                      # every design, routed and judged
+
+# Experiment 14: three centuries, one brief, and what stops each of them
+.\run.ps1 -Machine era                         # the families, side by side
+.\run.ps1 -Machine heat designs/20-steamline.machine
+.\run.ps1 -Machine run designs/19-waterline.machine
 
 # Prototype 2: two players, one factory, one clock that does not stop
 .\run.ps1 -Room                                # the game, at :8790
@@ -2073,7 +2078,7 @@ no amount of bad luck can produce one:
 |---|---|
 | socket direction | the first and last sections are the flange normal, and nothing else is offered |
 | minimum straight before bend | the gates: the first bend is `stub` from the flange, and so is the last |
-| allowed bend radius | `straight` is at least twice the radius plus a diameter, so every corner can afford its own elbows |
+| allowed bend radius | `floor` is twice the radius plus a diameter, so every corner can afford its own elbows |
 | pipe diameter | the bore, from the port's rate |
 | clearance from equipment | a cost inside it, forbidden through it |
 | clearance between pipes | a laid route claims its cells and charges for the ones beside them |
@@ -2131,6 +2136,114 @@ Across the seventeen designs, 204 connections of 209 are laid under the full
 set, four are squeezed and one is refused. All five exceptions are drive shafts,
 which is the domain with by far the strictest rules — four metres of straight
 between bends, because a shaft that bends is a gearbox nobody placed.
+
+### 3a. The connection solver, and a constraint that was making things worse
+
+Everything in section 3 held, and the plant still came out with rectangles in
+it. A run would leave a flange, travel four metres the wrong way, turn twice,
+and come back past where it started — three left turns where a right turn was
+wanted, and a shape no fitter would ever build. It was worst on drive shafts,
+which is where it is least forgivable, because a shaft is the one connection a
+player reads as a single straight object.
+
+There were two causes and they are the same cause seen from two ends.
+
+**A rule the search cannot break is a rule the search routes around.** The
+minimum straight was the length of the shortest edge in the search graph, which
+made it true by construction — and made a one-metre sidestep *unrepresentable*.
+So when a run had to correct a metre of offset, the router could not step
+sideways by a metre; it had to find a path whose every section was long, and
+there is always one: overshoot, turn, come back. A one-metre section is a
+slightly awkward pipe. The detour that avoids it is a picture of nothing. The
+general lesson is worth keeping:
+
+> Going round a constraint can be much worse than the thing the constraint
+> prevents. A constraint is only free when violating it is the *only* bad
+> outcome.
+
+So the minimum straight became two numbers. `floor` — two bend radii and a
+diameter — is geometry, stays a constraint, and remains the shortest edge in
+the graph: no two elbows are ever drawn through each other. `straight` is what
+the domain would *like* (a shaft runs four metres, a chute two and a half) and
+is now a price, charged per half-metre a section falls short of it, set so that
+one short section beats two extra corners and loses to four.
+
+**And the offsets should not have been there in the first place.** A port used
+to be placed by one component looking at one partner, which is as far as a
+single socket can see: it cannot tell whether the partner can reach the line it
+just chose, it does not know what the next machine along the same shaft will
+ask for, and it has no idea the router cannot step sideways by less than two
+elbows. Half the corners in the repository were bought with offsets of a metre
+or less that nobody had asked for — the residue of two components rounding the
+same decision in two different directions.
+
+So `layout` gained two passes that run before anything is routed:
+
+```text
+align_drives  every coupling whose two flanges face along one axis
+              each end offers the interval it can reach across that axis
+              a group of coupled components is one unknown, not one per wire
+              intersect, busiest first; whoever cannot fit is dropped and reported
+align_lines   the same for pipe, cable and chute, per axis, per flange
+              a top nozzle is free across the plan; a wall nozzle up and along
+              never onto a neighbouring nozzle, never into the next machine
+```
+
+A transport component gets a third thing out of it: a shaft, a belt or a chute
+is a thin body loose inside a strip of its own tiles, so it does not merely
+choose where its flange sits — it *moves*, and the line slides across its tiles
+to meet the machine rather than the machine being asked to reach a line drawn
+down the middle of nothing in particular. Three separate defects came out of
+forgetting that, and a test now states it: a belt with its in and its out
+bolted to the same end of itself, a shaft whose body ran east–west while its
+couplings left by the two faces at right angles to it, and a line shaft solved
+onto one machine's axis at one end and another's at the other.
+
+One more rule, in `yaw_of`, which reads like a detail and behaves like a
+grammar: a component with no authored rotation faces along the flow through it
+— **except that if anything is coupled to it, only the couplings get a say**. A
+cable bends, a pipe bends, a shaft does not. A motor fed by a three-hundred-unit
+cable and driving a twenty-unit gearbox faces the gearbox, because the cable can
+be routed round the answer and the shaft cannot. No amount of solving afterwards
+can fix that one, since a flange slides along its face and never leaves it.
+
+What it is worth, across all twenty-one designs:
+
+```text
+                      before   after
+corners                 1042     626
+routes squeezed            6       4
+routes refused             1       1
+components in the way     34      32
+components merely awkward  20      12
+```
+
+Two corners in five, and the ones left are load bearing. `01-first-try` went
+from seventeen corners to three; `13-longreach` from twenty-one to seven. The
+one refusal is still `07-crushline`'s second motor, which is still bolted to
+the same end of the same shaft and still cannot be.
+
+The report gained the two columns that find the rest: `over` is how much
+further a run went than the shortest orthogonal path between its own two
+flanges, and `machine space FILE --paths` prints the corners themselves. A run
+with four corners and eleven metres of `over` is a rectangle in the middle of a
+straight run, and now that it is one line of output it is a thing that can be
+argued with.
+
+What the solver deliberately does not do is launder a bad design. A motor three
+metres south of the shaft it drives cannot be put on that shaft's line by
+sliding flanges, so it is left where it is and painted red — which is the
+honest answer and the one the player can act on.
+
+Which is why the two right-hand rows of that table barely moved, and why one of
+them is the more interesting number. Four designs went from a red component to
+none, because their couplings were never out of line in the first place — they
+were a quarter of a tile apart and nobody could see why. Two designs gained a
+report, because a shaft is now put on the line its *busiest* partners can reach
+rather than split between all of them, which leaves the odd one out further off
+than the old per-wire compromise did. Further off is not worse. It is the same
+fault, measured honestly and attached to one component instead of smeared
+across four.
 
 ### 4. Space is scarce, and the plant says who is in whose way
 
@@ -2908,6 +3021,294 @@ only place to make it is a room that has been quietly shipping powder for ten
 minutes. The first half is a question about an evening with two people and a
 browser, and no test suite is going to answer it.
 
+## Experiment 14: era machines and physical operating limits
+
+Thirteen experiments built machines out of components that were pure
+transformations. A crusher took ore and rotary and made smaller ore, and it
+would do that forever, at the same rate, in a cupboard, made of anything. That
+was the right simplification for the question those experiments were asking.
+This one asks a different question:
+
+> **Does machine design get more interesting when components have material,
+> energy and thermal properties — and is old machinery *mechanically* different,
+> rather than cosmetically antique?**
+
+The failure this is written against is the one every factory game reaches:
+
+```text
+Wood Crusher Mk1
+Steel Crusher Mk2   +20%
+```
+
+which is not a technology tree, it is a multiplier with a costume. So the first
+decision of the experiment is a refusal: **there is exactly one crusher**, there
+always was, and `tests/era.rs` fails if a second one ever appears under a name
+that is the first one's with something stuck on the end.
+
+What changes between eras is not the crusher. It is everything around it.
+
+### One brief, three machines
+
+The brief is the smallest one in the file — extract ore, crush ore, move
+crushed ore, forty a tick at an outlet — and it deliberately asks for nothing
+that any one century has and another does not. Three designs on disk answer it.
+
+```text
+$ machine era
+
+  design               made    plot  parts    grid    fuel  water wasted
+  --------------------------------------------------------------------------
+  19-waterline        97.06     338     14     0.0     0.0  400.0   10.0
+  20-steamline        92.65     420     17     0.0     9.0   12.0  128.0
+  21-electricline    100.00     180     12   128.1     0.0    0.0    2.0
+
+  19-waterline     belt crusher inlet outlet pump screw shaft waterwheel
+  20-steamline     burner crusher exchanger gearbox inlet jacket outlet pump
+                   radiator screw shaft skip steamengine valve
+  21-electricline  crusher gearbox inlet mains motor outlet screw
+```
+
+Three power systems, three shapes on the ground, three columns of the
+scoreboard, and — the part that had to be simulated rather than asserted —
+three different ways to fail.
+
+```text
+water      river -> wheel -> line shaft -> belt -> crusher
+           fails: it runs out of torque, and it shakes its own frame apart
+
+steam      coal -> burner -> exchanger -> engine -> gearbox -> line shaft
+           fails: it cooks itself, unless the waste heat has somewhere to go
+
+electric   mains -> motor -> gearbox -> crusher
+           fails: it stops when the grid does, and every unit is billed
+```
+
+The shared half of those parts lists is the ore path — inlet, crusher, screw,
+outlet — which is the half that genuinely does not change between centuries.
+Across every pair of designs, 15 of 43 distinct components are shared, and
+every one of them is ore handling.
+
+The third column is also the shortest, and it is meant to be: the electric
+plant is the smallest plot, the fewest components and the most output, and it
+pays for all three on one line of the scoreboard. That is what the twentieth
+century actually bought.
+
+### Three properties, and why these three
+
+The note behind the experiment lists ten: energy domain, power, torque, speed,
+heat generation, thermal mass, optimal range, maximum temperature, structural
+material and vibration tolerance. Four of them were already here — a port *is*
+an energy domain, a rate *is* a power demand, `Qual::speed` is the speed band,
+and a `Need::MinSpeed` is what torque feels like from the other end. The
+remaining six collapse into three mechanics.
+
+**Material.** A frame is three numbers, and every one of them is a reason to
+choose a different one.
+
+| frame | conducts | ceiling | carries shake |
+|---|---:|---:|---:|
+| wood | 55% | 110 | 4 |
+| iron | 100% | 220 | 7 |
+| steel | 150% | 320 | 9 |
+
+Timber is an *insulator*, which is the thing worth noticing about it: a wooden
+machine does not run cool because it is old and gentle, it runs hot because the
+heat cannot get out. What a component may be built out of is a fact in the part
+table, so a timber press is refused by `Design::check` before anything is
+simulated — it is not a trade-off, it is a category error.
+
+**Temperature.** A body temperature is an integer, held exactly, moved by whole
+units of heat every tick. Behaviour moves only at thresholds:
+
+```text
+COLD          60%     below its operating range
+NORMAL       100%
+WARM          95%
+HOT           75%
+OVERHEATED     0%     and it will not restart until it is NORMAL again
+```
+
+A continuous derating curve would give the player a number that always moves a
+little and never means anything; a band gives them something that is true or
+false, a warning before it is false, and a sentence to read when it is. It also
+keeps the state space finite, which is not a detail — `orbit` compiles a design
+by watching its state repeat, and it can only do that because a body temperature
+is one of a few hundred integers rather than one of infinitely many floats.
+
+**Vibration.** A crusher shakes at 7. Timber carries 4. Vibration travels
+through rigid rotary couplings — shafts, gearboxes, pulleys, and any direct
+connection — and stops dead at a belt, because a belt is slack. So the question "will this hold
+together" is not about one component, it is about the *rigid cluster* it belongs
+to, and the worst offender anywhere in that cluster is what every frame in it
+has to carry.
+
+That single rule is what makes the first era a different machine rather than a
+different sprite. The obvious water-mill drive train — bolt the crusher to the
+line shaft, the way the electric plant bolts its crusher straight to a gearbox
+— pulls the mill apart on the first tick:
+
+```text
+SH1  Line Shaft  SHAKING
+    SHAKING — C1 on the same drive shakes at 7 and timber frame carries 4
+    put it on a stiffer frame, or break the drive with a belt --
+    a belt passes torque and does not pass shake
+```
+
+The belt is not a lossy pipe with a story attached. It is five tiles long, it
+costs 8%, and it is the reason a water-driven plant is a long line of small
+machines while an electric one is a tight block.
+
+### Cooling is a design decision, not a statistic
+
+A component sheds heat to the air at a rate set by what it is made of and how
+much room it has been given. That is the free option and it is usually not
+enough. The rest are things the player builds:
+
+```text
+spacing       clear tiles around the footprint, up to a doubling
+material      steel conducts nearly three times as well as timber
+radiator      the waste port, wired to the sky
+fan           the same, four times faster, and it wants power to do it
+water jacket  the same again, and the heat comes out the other side
+```
+
+Spacing is the one that changes what an old mechanic means. The tile grid has
+been a thing the brief asks you to *minimise* since experiment 06; now it is
+also how you cool something, and the two pull in opposite directions.
+
+The steam engine is where all of this lands. It puts 500 heat a tick into a
+cast-iron body that trips at 220 and sheds its own temperature to the air, so
+it cannot be built without a cooling decision. One wire is the difference:
+
+```text
+  component  kind          frame    air  temp   band        duty
+  ---------------------------------------------------------------
+  SE1        steamengine   iron       0   152  TRIPPED         0%     no radiator
+  SE1        steamengine   iron       0   108   NORMAL       100%     one radiator
+```
+
+And the waste heat is not thrown away. Heat leaving a `waste` port carries a
+*grade* — the body temperature it came off at, on the same scale everything else
+in this crate measures temperature on — so a steam engine at 91 degrees has
+waste heat a jacket will take and a motor settling at 30 has nothing worth
+plumbing. In the shipped steam plant the condensate comes off the engine at band
+1, passes through a jacket on its way back to the boiler, and arrives carrying
+heat the engine was trying to get rid of. That is why it draws twelve units of
+water a tick where the first-era plant draws four hundred.
+
+The grade is deliberately capped one band below boiling. An engine whose own
+waste heat could raise the steam that drives it is not a clever design, it is a
+bug with a diagram.
+
+### Two things that were not designed and turned up anyway
+
+**Thermal derating is a stabilising loop.** The HOT band takes a quarter off a
+component's output, which takes a quarter off its heat, which is negative
+feedback — so a hot machine mostly settles *just* below its trip rather than
+running away to it. Reaching OVERHEATED takes a machine that is both fully
+loaded and packed in with no air, which is a much better failure mode than a
+cliff: it is something the player walks towards and can see coming.
+
+**A closed steam cycle can be over-fed.** An engine vents a sixth of its steam
+up the stack, so the feedwater loop runs at a deficit and the makeup valve is a
+real setting. Set it to twelve and the plant runs. Set it to fourteen and it
+does not get faster, it *floods*: the surplus fills the feedwater line, which
+blocks the condensate, which stops the engine, which stops the boiler, and the
+whole thing deadlocks with every buffer full. Nobody wrote that rule. It falls
+out of components that block when they are full, which is how every component
+in this crate has behaved since experiment 06.
+
+### The promise to the thirteen experiments before it
+
+An experiment about thermal limits that silently re-scored eighteen measured
+designs would have proved nothing except that it had changed the subject. So
+every component that existed before experiment 14 settles inside its operating
+range on the frame it comes on, at full output, with no clearance at all — which
+means `duty` is 1000 per mille for all of them, and the arithmetic of
+experiments 06 to 13 is bit-for-bit what it was.
+
+The thermal model is not switched off for them. It is running, it is telling the
+truth, and the truth is that an idealised steel crusher in still air runs warm
+rather than hot. `tests/era.rs` asserts it from the part table and then again
+from every design on disk.
+
+What *did* change is the transient. A body temperature is real state, so every
+design now has a thermal settling time on top of its mechanical one, and several
+have a longer period: `08-stamping` went from 40 ticks to 120, because the
+temperature of a press is a slow integrator that does not close its loop on the
+same tick the drive train does. That is not a regression, it is the experiment
+working — and `machine verify` still agrees with a straight simulation at every
+tick it is asked about.
+
+### What it cost, and what it paid back
+
+Six components arrived, one brief, one module, three designs.
+
+```text
+waterwheel    200 water/tick -> 60 rotary at speed 1        water era
+pulley        a ratio, in timber, that slips above 90       water era
+belt          a long rotary span that does not carry shake  water era
+mechpump      40 rotary -> 120 water, because water is not free
+steamengine   120 steam -> 180 rotary, and 500 heat nobody asked for
+fan           15 heat per MW, and it stops when the grid does
+jacket        waste heat into hot water, instead of into the sky
+```
+
+And **two left**, which is the part of this experiment that took the longest to
+see. The first draft had a `coupling` — rotary in, rotary out, no loss, no
+distance, perfectly rigid — and the catalogue already had a `cable`, which is
+the same idea in the electrical domain. Both are components that ask the player
+a question with one answer.
+
+Playing the thing made the cost of that obvious. A connector with no trade-off
+does not just fail to add anything; it *subtracts*, three times over. It puts
+a `Run` in the plant for the renderer to thread pipework around, which is why
+the third-era design had six shaft-alignment faults and now has one. It doubles
+the number of connections, so a cascade of STARVED messages is twice as long
+and twice as far from its cause. And it fills the palette with things that look
+like decisions.
+
+So a power connection now reaches twenty-four tiles and a coupling is something
+the *renderer* draws on a direct shaft link rather than something the player
+places. The rule that replaced both is one sentence: **plumbing is a design
+decision and wiring is not.** A heat main is a route, a bore and a loss, and
+where it goes changes the plant; a cable is stationery.
+
+The third-era design lost two component types and three placements and came out
+smaller, faster and cleaner than the version that had them.
+
+Twenty-nine of the forty-three components belong to no century at all, including
+the crusher, and that ratio is the claim: the eras differ in how power is made
+and carried, not in what a bin is.
+
+### Limits
+
+- **A cascade still has to be read.** A starved component now names its supplier
+  and the fault at the end of the trail, and the holding panel puts causes above
+  symptoms — but the trail is followed one wire at a time on the tick that was
+  asked about, so a plant that is starved *intermittently* still reports
+  whichever fault it had at tick 4,000.
+- **The pulley is in the catalogue and no shipped design uses one.** A pulley is
+  a ratio, and a river turning at speed 1 already suits a crusher, which takes 2
+  or less. It earns its place the moment a first-era plant is asked for the
+  `crush` brief — a mill wants speed 4 — and that design is not written.
+- **Vibration is static.** A component's rated shake is a fact about the
+  document, not about how hard it is working, so a crusher running at 10%
+  shakes as hard as one at 100%. That is legible and checkable and it is not
+  what a mill sounds like.
+- **Waste heat has one producer.** Only the steam engine has a `waste` port,
+  because only the steam engine's waste heat is a decision. Everything else
+  sheds to the air and that is the whole of its thermal life.
+- **A frame is not a cost.** Timber, cast iron and steel are worth different
+  amounts and the scoreboard does not know it. Nothing in this experiment makes
+  the first era *cheaper*, which is most of the reason anybody built one.
+- **The room editor knows about frames; the campaign's component tiers do not.**
+  A design carried into a Prototype 2 room keeps the frames it was designed
+  with and can be retuned there, but Prototype 3's twelve unlockable components
+  are not era-aware, so "this room has not invented steel yet" is not yet a
+  thing the campaign can say.
+
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -3167,11 +3568,12 @@ scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
 
 src/machine/stuff.rs   Ex 07: seven domains, thirteen substances, five properties
-src/machine/parts.rs   Ex 07: thirty-eight components in eight families, and the numbers
+src/machine/parts.rs   Ex 07/14: forty-four components in eight families, and the numbers
+src/machine/era.rs     Ex 14: materials, temperature bands, vibration, three centuries
 src/machine/design.rs  Ex 06: components on a tile grid, wires between their ports
 src/machine/sim.rs     Ex 06: transfer along wires, then every component steps
 src/machine/orbit.rs   Ex 06: run it until it repeats; keep transient + period
-src/machine/eval.rs    Ex 07: four briefs, competing costs, and no score
+src/machine/eval.rs    Ex 07/14: five briefs, competing costs, and no score
 src/machine/snap.rs    Ex 06: state(t) for a renderer, and why things are stopped
 src/machine/web.rs     Ex 06: its own small server, so it can be thrown away
 src/bin/machine.rs     Ex 08/09: run, why, compile, verify, parts, reuse, form, kit, read
@@ -3194,6 +3596,7 @@ src/machine/form/shot.rs    Ex 08: a rasteriser and a PNG writer, so it can be s
 tests/form.rs               Ex 08: the five claims, checked rather than asserted
 tests/read.rs               Ex 09: the five claims about what did *not* change
 tests/space.rs              Ex 10: placement, interfaces, routing and clashes
+tests/era.rs                Ex 14: one brief, three machines, and the guard rail
 
 src/mp/mod.rs        P2: sixty ticks a second, and the two seeds a room is
 src/mp/kit.rs        P2: what may be placed, in seconds rather than in ticks
@@ -3235,6 +3638,7 @@ server rather than a dependency tree larger than the crate they serve.
 > **Experiment 08:** and then go and look at it.
 > **Experiment 09:** and then find out how much of *looking* is paint.
 > **Experiment 10:** and then let somebody move it.
+> **Experiment 14:** and then give it a temperature, a frame and a century.
 > **Prototype 2:** and then let two people build one together, without stopping
 > the clock.
 > **Prototype 3:** and then give them somewhere to go next, and make the thing
