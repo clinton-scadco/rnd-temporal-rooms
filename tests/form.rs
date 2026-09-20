@@ -370,6 +370,71 @@ fn the_library_stays_small() {
     assert!((far - kit::Mesh::ELBOW_R).abs() < 0.51, "the elbow does not end where it says: {far}");
 }
 
+/// Both the browser and the OBJ consumer cull by winding and shade by normals.
+/// Check their agreement, including the dome pole and the insides of fittings.
+#[test]
+fn kit_triangles_have_area_and_outward_winding() {
+    for m in kit::MESHES {
+        let g = kit::geom(m);
+        assert_eq!(g.pos.len(), g.nrm.len(), "{m}: parallel vertex arrays");
+        assert_eq!(g.idx.len() % 3, 0, "{m}: incomplete triangle");
+        for n in g.nrm.chunks_exact(3) {
+            let len2: f32 = n.iter().map(|v| v * v).sum();
+            assert!((len2 - 1.0).abs() < 1e-4, "{m}: invalid normal {n:?}");
+        }
+        for (i, tri) in g.idx.chunks_exact(3).enumerate() {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| &g.pos[i as usize * 3..i as usize * 3 + 3]);
+            let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            let cross = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            let area2: f32 = cross.iter().map(|v| v * v).sum();
+            assert!(area2 > 1e-12, "{m}: degenerate triangle {i}");
+            for &vertex in tri {
+                let n = &g.nrm[vertex as usize * 3..vertex as usize * 3 + 3];
+                let dot: f32 = (0..3).map(|k| cross[k] * n[k]).sum();
+                assert!(dot > 0.0, "{m}: triangle {i} disagrees with its normal");
+            }
+        }
+    }
+}
+
+/// Test openings against the actual triangles, rather than the presence of a
+/// ring helper: an accidental cap or backing plate must fail this check.
+#[test]
+fn kit_openings_are_not_capped_or_backed_by_solid_plates() {
+    // Intersect a vertical line with each triangle's projection onto XZ.
+    let covered = |m, x: f32, z: f32| {
+        let g = kit::geom(m);
+        g.idx.chunks_exact(3).any(|tri| {
+            let [a, b, c] = [tri[0], tri[1], tri[2]].map(|i| &g.pos[i as usize * 3..i as usize * 3 + 3]);
+            let det = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+            if det.abs() < 1e-8 { return false; }
+            let u = ((x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])) / det;
+            let v = ((b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])) / det;
+            u >= -1e-5 && v >= -1e-5 && u + v <= 1.00001
+        })
+    };
+    for m in [kit::Mesh::Flange, kit::Mesh::Nozzle, kit::Mesh::Band, kit::Mesh::Stack, kit::Mesh::Reducer, kit::Mesh::Clamp] {
+        assert!(!covered(m, 0.0, 0.0), "{m}: capped bore");
+    }
+    assert!(covered(kit::Mesh::Flange, 0.46, 0.0), "flange lost its annular face");
+    assert!(!covered(kit::Mesh::Grate, 0.06, 0.055), "grate has a solid lid");
+    assert!(covered(kit::Mesh::Grate, 0.0, 0.055), "grate lost its bearing bars");
+    assert!(!covered(kit::Mesh::Cowl, 0.22, 0.0), "fan has no gap between blades");
+    assert!(covered(kit::Mesh::Cowl, 0.0, 0.0), "fan lost its hub");
+
+    let cowl = kit::geom(kit::Mesh::Cowl);
+    let mut inner = 0;
+    for (p, n) in cowl.pos.chunks_exact(3).zip(cowl.nrm.chunks_exact(3)) {
+        let r = p[0].hypot(p[2]);
+        if (r - 0.44).abs() < 1e-5 && n[1].abs() < 1e-5 {
+            assert!(p[0] * n[0] + p[2] * n[2] < -0.43, "fan bore faces outwards");
+            inner += 1;
+        }
+    }
+    assert!(inner > 0, "fan has no inner wall");
+}
+
 /// The claim in section 10: a plant is a handful of draw calls, and it stays a
 /// handful of draw calls when the plant gets big.
 #[test]

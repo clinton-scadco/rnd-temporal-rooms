@@ -518,6 +518,12 @@ console.log('the form');
   ok(kit.ok && kit.meshes.length >= 20 && kit.meshes.length <= 30,
      `${kit.meshes.length} canonical meshes`);
   ok(kit.mats.length === 12, 'twelve materials for a whole plant');
+  for (const m of kit.mats) {
+    const s = m.surface;
+    ok(s && s.size === 64 && s.metres > 0 && s.rg.length === s.size * s.size * 2 &&
+       s.rg.every(v => Number.isInteger(v) && v >= 0 && v <= 255),
+       `${m.tag}: complete colour-variation and roughness texture`);
+  }
   ok(Array.isArray(kit.grades) && kit.grades.length === 4 &&
      kit.grades.every(g => g.tag && g.letter && g.what),
      'four readability grades, each of which says what it is');

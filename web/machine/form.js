@@ -48,6 +48,9 @@ out vec3 vNrm;
 out vec3 vWorld;
 out float vTint;
 out float vPick;
+out vec3 vLocal;
+out vec3 vLocalNrm;
+flat out float vLength;
 
 mat3 basis(vec3 d, float spin) {
   vec3 up = normalize(d);
@@ -68,6 +71,9 @@ void main() {
   vec3 n = m * (aNrm / max(iSize, vec3(1e-4)));
   vNrm = normalize(n);
   vWorld = world;
+  vLocal = local;
+  vLocalNrm = normalize(aNrm / max(iSize, vec3(1e-4)));
+  vLength = iSize.y;
   vTint = iTint;
   vPick = (uPick >= 0.0 && abs(iOf - uPick) < 0.5) ? 1.0 : 0.0;
   gl_Position = uViewProj * vec4(world, 1.0);
@@ -79,11 +85,18 @@ in vec3 vNrm;
 in vec3 vWorld;
 in float vTint;
 in float vPick;
+in vec3 vLocal;
+in vec3 vLocalNrm;
+flat in float vLength;
 
 uniform vec3 uColour;
 uniform float uRough;
 uniform float uMetal;
 uniform vec3 uEye;
+uniform highp sampler2DArray uSurfaces;
+uniform float uSurface;
+uniform float uRepeat;
+uniform float uJoints;
 
 out vec4 outColour;
 
@@ -97,11 +110,24 @@ void main() {
   vec3 amb = mix(vec3(0.20, 0.21, 0.24), vec3(0.46, 0.51, 0.58), sky);
 
   vec3 base = uColour * (1.0 - vTint * 0.035);
+  // Tile in local metres, not canonical UVs: a stretched pipe keeps the same
+  // grain size. Three projections avoid seams and polar pinching on the kit.
+  vec3 ln = normalize(vLocalNrm);
+  vec3 blend = pow(abs(ln), vec3(4.0));
+  blend /= max(dot(blend, vec3(1.0)), 1e-5);
+  vec3 p = vLocal / uRepeat;
+  vec2 tex = texture(uSurfaces, vec3(p.yz, uSurface)).rg * blend.x
+           + texture(uSurfaces, vec3(p.zx, uSurface)).rg * blend.y
+           + texture(uSurfaces, vec3(p.xy, uSurface)).rg * blend.z;
+  float rough = clamp(uRough + (tex.g - 0.5) * 0.4, 0.04, 1.0);
+  float seam = (1.0 - smoothstep(0.0, 0.045, min(vLocal.y, vLength - vLocal.y)))
+             * pow(1.0 - abs(ln.y), 4.0) * uJoints;
+  base *= (0.7 + tex.r * 0.6) * (1.0 - seam * (0.035 + min(vTint, 5.0) * 0.019));
   vec3 col = base * (amb + lam * 0.85);
 
   vec3 view = normalize(uEye - vWorld);
   vec3 h = normalize(view + sun);
-  float spec = pow(max(dot(n, h), 0.0), mix(90.0, 8.0, uRough)) * (0.04 + 0.5 * uMetal);
+  float spec = pow(max(dot(n, h), 0.0), mix(90.0, 8.0, rough)) * (0.04 + 0.5 * uMetal);
   col += vec3(spec) * lam;
 
   // Depth haze: a plant seen across a yard.
@@ -212,6 +238,7 @@ let lineProg = null;
 let lineUni = {};
 let lineVao = null;
 let kit = null;      // { meshes: {tag: {vao-parts}}, mats: {tag: {...}} }
+let surfaces = null;
 let scene = null;    // { batches: [...], bounds }
 let canvas = null;
 let cam = { yaw: 0.7, pitch: 0.5, dist: 60, at: [0, 4, 0] };
@@ -246,7 +273,7 @@ export async function initForm(el) {
   if (!gl) return false;
 
   prog = link(VERT, FRAG);
-  for (const n of ['uViewProj', 'uColour', 'uRough', 'uMetal', 'uEye', 'uPick']) {
+  for (const n of ['uViewProj', 'uColour', 'uRough', 'uMetal', 'uEye', 'uPick', 'uSurfaces', 'uSurface', 'uRepeat', 'uJoints']) {
     uni[n] = gl.getUniformLocation(prog, n);
   }
   lineProg = link(LINE_VERT, LINE_FRAG);
@@ -278,7 +305,21 @@ export async function initForm(el) {
   const res = await fetch('/api/kit').then(r => r.json());
   kit = { meshes: {}, mats: {} };
   for (const m of res.meshes) kit.meshes[m.tag] = upload(m);
-  for (const m of res.mats) kit.mats[m.tag] = m;
+  // One shared, mipmapped RG array: colour variation and roughness, generated
+  // by Rust. No texture downloads or per-instance material copies.
+  surfaces = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, surfaces);
+  const size = res.mats[0].surface.size;
+  gl.texStorage3D(gl.TEXTURE_2D_ARRAY, Math.log2(size) + 1, gl.RG8, size, size, res.mats.length);
+  res.mats.forEach((m, layer) => {
+    kit.mats[m.tag] = { ...m, layer };
+    gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, layer, size, size, 1, gl.RG, gl.UNSIGNED_BYTE, new Uint8Array(m.surface.rg));
+  });
+  gl.generateMipmap(gl.TEXTURE_2D_ARRAY);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.REPEAT);
 
   drag();
   requestAnimationFrame(frame);
@@ -369,6 +410,8 @@ export function show(json, refit) {
       vao, inst, count: mesh.count, keep: b.keep, n: b.n,
       colour: colour.map(v => Math.pow(v / 255, 2.2)),
       rough: mat.rough / 100, metal: mat.metal ? 1 : 0,
+      surface: mat.layer ?? 0, repeat: mat.surface?.metres ?? 0.6,
+      joints: ['cyl', 'fins', 'cone'].includes(b.mesh) ? 1 : 0,
     });
   }
   // An edit moves the plant, not the viewer: the camera is only reset when a
@@ -642,6 +685,9 @@ function draw() {
   gl.uniformMatrix4fv(uni.uViewProj, false, vp);
   gl.uniform3fv(uni.uEye, eye);
   gl.uniform1f(uni.uPick, view.pick);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D_ARRAY, surfaces);
+  gl.uniform1i(uni.uSurfaces, 0);
 
   // The very far level is one box, and drawing it is the point: it is what an
   // installation costs when it is a smudge on the horizon.
@@ -655,6 +701,9 @@ function draw() {
     gl.uniform3fv(uni.uColour, b.colour);
     gl.uniform1f(uni.uRough, b.rough);
     gl.uniform1f(uni.uMetal, b.metal);
+    gl.uniform1f(uni.uSurface, b.surface);
+    gl.uniform1f(uni.uRepeat, b.repeat);
+    gl.uniform1f(uni.uJoints, b.joints);
     gl.bindVertexArray(b.vao);
     gl.drawElementsInstanced(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0, n);
   }
@@ -787,6 +836,9 @@ function proxy() {
   gl.uniform3fv(uni.uColour, [0.20, 0.22, 0.24]);
   gl.uniform1f(uni.uRough, 0.9);
   gl.uniform1f(uni.uMetal, 0);
+  gl.uniform1f(uni.uSurface, kit.mats.concrete.layer);
+  gl.uniform1f(uni.uRepeat, kit.mats.concrete.surface.metres);
+  gl.uniform1f(uni.uJoints, 0);
   gl.bindVertexArray(scene.proxyBatch.vao);
   gl.drawElementsInstanced(gl.TRIANGLES, scene.proxyBatch.count, gl.UNSIGNED_INT, 0, 1);
   gl.bindVertexArray(null);

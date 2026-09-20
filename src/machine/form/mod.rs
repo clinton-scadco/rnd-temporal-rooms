@@ -33,8 +33,8 @@
 //! ## Millimetres, and why there is not a float in sight
 //!
 //! Every position, size and direction in a `Scene` is an `i32` in millimetres.
-//! Floats appear exactly twice: inside `kit`, which builds canonical unit
-//! meshes, and at the boundary where a `Scene` is written for a renderer.
+//! Floats are confined to canonical meshes, surface textures, and the boundary
+//! where a `Scene` is written for a renderer.
 //!
 //! The reason is section 7. A scene that is going to be described over a
 //! network as `design + seed` has to rebuild *identically* on the other end,
@@ -113,6 +113,7 @@ pub mod seed;
 pub mod space;
 pub mod shell;
 pub mod shot;
+pub mod surface;
 
 use super::design::Design;
 use crate::json::Json;
@@ -1076,9 +1077,8 @@ impl Scene {
     }
 }
 
-/// The library itself, sent once: twenty-five meshes and eight materials. A
-/// client asks for this on connect and never again -- everything after it is
-/// instances.
+/// The library itself, sent once: twenty-nine meshes and twelve materials,
+/// including their shared surface maps. Everything after it is instances.
 pub fn kit_json() -> Json {
     let meshes: Vec<Json> = kit::MESHES
         .iter()
@@ -1096,11 +1096,16 @@ pub fn kit_json() -> Json {
         .iter()
         .map(|&x| {
             let (c, rough, metal) = x.look();
+            let texture = surface::Surface::new(x);
             Json::obj()
                 .set("tag", x.tag())
                 .set("colour", Json::arr(c.iter().map(|&v| v as i64).collect::<Vec<_>>()))
                 .set("rough", rough as i64)
                 .set("metal", metal)
+                .set("surface", Json::obj()
+                    .set("size", surface::SIZE as i64)
+                    .set("metres", texture.metres as f64)
+                    .set("rg", Json::arr(texture.levels[0].iter().map(|&v| v as i64).collect::<Vec<_>>())))
         })
         .collect();
     Json::obj()

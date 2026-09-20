@@ -15,7 +15,8 @@
 //! hundred kilobytes on a debugging screenshot, and this crate has a rule
 //! about dependencies that it would rather keep.
 
-use super::kit::{self, Mat};
+use super::kit::{self, Mat, Mesh};
+use super::surface::Surface;
 use super::Scene;
 
 pub struct Shot {
@@ -93,6 +94,7 @@ pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod
     let aspect = w as f32 / h as f32;
 
     let sun = unit([0.45, 0.82, 0.35]);
+    let surfaces: Vec<_> = kit::MATS.iter().map(|&m| Surface::new(m)).collect();
     for p in s.pieces.iter().filter(|p| p.lod >= lod) {
         let g = kit::geom(p.mesh);
         let (r, fw, u) = axes(p);
@@ -134,6 +136,12 @@ pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod
             metal,
             sun,
             cam,
+            surface: &surfaces[p.mat as usize],
+            axes: [r, u, fw],
+            origin: org,
+            length: sz[1],
+            tint: p.tint,
+            joints: matches!(p.mesh, Mesh::Cyl | Mesh::Fins | Mesh::Cone),
             who: match s.owner(p.of).class {
                 super::Owns::Unit => 1,
                 super::Owns::Run => 2,
@@ -191,20 +199,25 @@ fn project(v: [f32; 3], f: f32, aspect: f32, w: usize, h: usize) -> [f32; 3] {
 }
 
 /// Everything a pixel needs that is the same for the whole piece.
-struct Look {
+struct Look<'a> {
     base: [f32; 3],
     rough: f32,
     metal: bool,
     sun: [f32; 3],
     cam: [f32; 3],
     who: u8,
+    surface: &'a Surface,
+    axes: [[f32; 3]; 3],
+    origin: [f32; 3],
+    length: f32,
+    tint: u8,
+    joints: bool,
 }
 
 impl Shot {
     /// One triangle: a depth test, an interpolated normal and a shaded pixel.
-    /// Screen-space interpolation rather than perspective-correct, because the
-    /// error is invisible at the size a machine is looked at and the loop is
-    /// half as long.
+    /// Perspective-correct interpolation keeps texture scale continuous across
+    /// a quad's diagonal, particularly on long pipes and slabs near the camera.
     fn tri(&mut self, p: [[f32; 3]; 3], n: [[f32; 3]; 3], w: [[f32; 3]; 3], look: &Look) {
         let (a, b, c) = (p[0], p[1], p[2]);
         let minx = a[0].min(b[0]).min(c[0]).floor().max(0.0) as usize;
@@ -218,6 +231,13 @@ impl Shot {
         if area.abs() < 1e-6 {
             return;
         }
+        let inv = [1.0 / a[2], 1.0 / b[2], 1.0 / c[2]];
+        let dx = [(c[1] - b[1]) / area, (a[1] - c[1]) / area, (b[1] - a[1]) / area];
+        let dy = [(b[0] - c[0]) / area, (c[0] - a[0]) / area, (a[0] - b[0]) / area];
+        let denom_dx: f32 = (0..3).map(|k| dx[k] * inv[k]).sum();
+        let denom_dy: f32 = (0..3).map(|k| dy[k] * inv[k]).sum();
+        let numerator_dx: [f32; 3] = std::array::from_fn(|k| (0..3).map(|j| dx[j] * inv[j] * w[j][k]).sum());
+        let numerator_dy: [f32; 3] = std::array::from_fn(|k| (0..3).map(|j| dy[j] * inv[j] * w[j][k]).sum());
         for y in miny..maxy {
             for x in minx..maxx {
                 let q = [x as f32 + 0.5, y as f32 + 0.5, 0.0];
@@ -225,17 +245,21 @@ impl Shot {
                 if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                     continue;
                 }
-                let z = w0 * a[2] + w1 * b[2] + w2 * c[2];
+                let denom = w0 * inv[0] + w1 * inv[1] + w2 * inv[2];
+                let z = 1.0 / denom;
                 let i = y * self.w + x;
                 if z >= self.z[i] {
                     continue;
                 }
-                let mix = |v: [[f32; 3]; 3], k: usize| w0 * v[0][k] + w1 * v[1][k] + w2 * v[2][k];
+                let mix = |v: [[f32; 3]; 3], k: usize| (w0 * inv[0] * v[0][k] + w1 * inv[1] * v[1][k] + w2 * inv[2] * v[2][k]) * z;
                 let nn = unit([mix(n, 0), mix(n, 1), mix(n, 2)]);
                 let pos = [mix(w, 0), mix(w, 1), mix(w, 2)];
                 self.z[i] = z;
                 self.who[i] = look.who;
-                self.px[i] = shade(nn, pos, look);
+                let ddx = std::array::from_fn(|k| (numerator_dx[k] - pos[k] * denom_dx) * z);
+                let ddy = std::array::from_fn(|k| (numerator_dy[k] - pos[k] * denom_dy) * z);
+                let footprint = dot(ddx, ddx).max(dot(ddy, ddy)).sqrt();
+                self.px[i] = shade(nn, pos, footprint, look);
             }
         }
     }
@@ -269,21 +293,26 @@ impl Shot {
     }
 }
 
-/// Sun, sky and a little shine -- the same three lines as the browser's
-/// fragment shader, which is what makes this a second opinion rather than a
-/// different plant.
-fn shade(n: [f32; 3], pos: [f32; 3], look: &Look) -> [f32; 3] {
+/// Sun, sky, shared surface maps and restrained grime at casing joints, using
+/// the same material interpretation as the browser's fragment shader.
+fn shade(n: [f32; 3], pos: [f32; 3], footprint: f32, look: &Look) -> [f32; 3] {
     let lam = dot(n, look.sun).max(0.0);
     let sky = 0.5 + 0.5 * n[1];
     let amb = [lerp(0.20, 0.46, sky), lerp(0.21, 0.51, sky), lerp(0.24, 0.58, sky)];
     let view = unit(sub(look.cam, pos));
     let half = unit([view[0] + look.sun[0], view[1] + look.sun[1], view[2] + look.sun[2]]);
-    let power = lerp(90.0, 8.0, look.rough);
+    let local = look.axes.map(|axis| dot(sub(pos, look.origin), axis));
+    let ln = look.axes.map(|axis| dot(n, axis));
+    let tex = look.surface.sample(local, ln, footprint);
+    let t = (local[1].min(look.length - local[1]) / 0.045).clamp(0.0, 1.0);
+    let seam = if look.joints { (1.0 - t * t * (3.0 - 2.0 * t)) * (1.0 - ln[1].abs()).powi(4) } else { 0.0 };
+    let tone = tex[0] * (1.0 - seam * (0.035 + look.tint.min(5) as f32 * 0.019));
+    let power = lerp(90.0, 8.0, (look.rough + tex[1]).clamp(0.04, 1.0));
     let spec = dot(n, half).max(0.0).powf(power) * (0.04 + if look.metal { 0.5 } else { 0.0 }) * lam;
     [
-        look.base[0] * (amb[0] + lam * 0.85) + spec,
-        look.base[1] * (amb[1] + lam * 0.85) + spec,
-        look.base[2] * (amb[2] + lam * 0.85) + spec,
+        look.base[0] * tone * (amb[0] + lam * 0.85) + spec,
+        look.base[1] * tone * (amb[1] + lam * 0.85) + spec,
+        look.base[2] * tone * (amb[2] + lam * 0.85) + spec,
     ]
 }
 

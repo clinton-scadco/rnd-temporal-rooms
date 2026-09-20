@@ -356,18 +356,23 @@ fn a_grade_is_deterministic() {
 fn the_palette_is_measured_off_the_picture() {
     let d = design("designs/15-turbinehall.machine");
     let grey = at(&d, Grade::Grey);
+    let paint = at(&d, Grade::Paint);
     let full = at(&d, Grade::Full);
     let frame = grey.bounds.join(full.bounds);
     let eye = form::shot::Eye::default();
     let a = form::shot::render_in(&grey, frame, 320, 220, eye, 0).palette();
-    let b = form::shot::render_in(&full, frame, 320, 220, eye, 0).palette();
+    // Isolate colour from assembly: full detail now seats smaller casings on
+    // real supports, so the proportions of coloured/metal surfaces can change.
+    let b = form::shot::render_in(&paint, frame, 320, 220, eye, 0).palette();
+    let c = form::shot::render_in(&full, frame, 320, 220, eye, 0).palette();
 
     assert!(a.ink > 5, "the baseline covers {}% of the frame", a.ink);
     // The same machine from the same camera covers the same frame, whatever it
     // is painted -- which is the check that the two pictures are comparable.
     assert!((a.ink as i64 - b.ink as i64).abs() <= 3, "{a:?} vs {b:?}");
-    assert!(b.tones >= a.tones, "the readability pass lost tones: {a:?} -> {b:?}");
+    assert!(c.tones >= a.tones, "the detailed assembly lost tones: {a:?} -> {c:?}");
     assert!(b.chroma >= a.chroma, "the readability pass lost colour: {a:?} -> {b:?}");
+    assert!((a.ink as i64 - c.ink as i64).abs() <= 3, "assembly changed the picture's coverage: {a:?} vs {c:?}");
 }
 
 /// The kit stayed a kit. Experiment 09 was allowed to add to the library and

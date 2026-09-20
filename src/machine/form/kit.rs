@@ -29,10 +29,9 @@
 //!
 //! # Why the meshes are generated rather than shipped
 //!
-//! Because they have to exist twice -- once in Rust, to be baked into an `.obj`
-//! and counted, and once in the browser, to be drawn -- and a generator is one
-//! description of a shape where a pair of files is two. It also keeps the whole
-//! experiment inside `std` and inside the repo, which is the rule everything
+//! Because the same triangles are baked into an `.obj` and sent to the browser
+//! through `/api/kit`, one generator keeps both views in agreement. It also
+//! keeps the experiment inside `std` and inside the repo, which is the rule everything
 //! else here follows.
 
 use std::fmt;
@@ -354,6 +353,82 @@ impl Geom {
         self.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]);
     }
 
+    /// Revolve an ordered (radius, height) outline. Travel up the outside and
+    /// down the inside: inward walls and flat shoulders then get their own
+    /// correct normals, with hard edges between profile segments.
+    fn profile(&mut self, points: &[[f32; 2]], seg: usize) {
+        for p in points.windows(2) {
+            let ([r0, y0], [r1, y1]) = (p[0], p[1]);
+            let n = norm([y1 - y0, r0 - r1, 0.0]);
+            let base = self.verts() as u32;
+            for i in 0..=seg {
+                let a = i as f32 / seg as f32 * std::f32::consts::TAU;
+                let (s, c) = a.sin_cos();
+                let n = [c * n[0], n[1], s * n[0]];
+                self.vert([c * r0, y0, s * r0], n);
+                self.vert([c * r1, y1, s * r1], n);
+            }
+            for i in 0..seg {
+                let a = base + i as u32 * 2;
+                if r0 > 0.0 {
+                    self.tri(a, a + 1, a + 2);
+                }
+                if r1 > 0.0 {
+                    self.tri(a + 2, a + 1, a + 3);
+                }
+            }
+        }
+    }
+
+    /// A hollow sleeve with real wall thickness and annular end faces.
+    fn ring(&mut self, outer: f32, inner: f32, y0: f32, y1: f32, seg: usize) {
+        self.profile(&[[outer, y0], [outer, y1], [inner, y1], [inner, y0], [outer, y0]], seg);
+    }
+
+    /// A hex head with a small bevel; flat side normals keep it a bolt rather
+    /// than a tiny, smoothly shaded cylinder.
+    fn bolt(&mut self, r: f32, y0: f32, y1: f32, at: [f32; 3]) {
+        let mut head = Geom::default();
+        let yb = y1 - (y1 - y0) * 0.2;
+        for i in 0..6 {
+            let a = i as f32 / 6.0 * std::f32::consts::TAU;
+            let b = (i + 1) as f32 / 6.0 * std::f32::consts::TAU;
+            let p = |a: f32, r: f32, y: f32| [a.cos() * r, y, a.sin() * r];
+            head.quad(p(a, r, y0), p(a, r, yb), p(b, r, yb), p(b, r, y0));
+            head.quad(p(a, r, yb), p(a, r * 0.82, y1), p(b, r * 0.82, y1), p(b, r, yb));
+        }
+        head.disc(r * 0.82, y1, 6, true);
+        head.disc(r, y0, 6, false);
+        shifted(self, &head, at);
+    }
+
+    /// A closed prism with an inclined top, useful for a continuous saddle
+    /// surface instead of a staircase of overlapping boxes.
+    fn wedge(&mut self, x: [f32; 2], bottom: f32, top: [f32; 2], depth: f32) {
+        let ([a, b], [h0, h1], z) = (x, top, depth / 2.0);
+        self.quad([a, bottom, z], [b, bottom, z], [b, h1, z], [a, h0, z]);
+        self.quad([b, bottom, -z], [a, bottom, -z], [a, h0, -z], [b, h1, -z]);
+        self.quad([a, h0, z], [b, h1, z], [b, h1, -z], [a, h0, -z]);
+        self.quad([a, bottom, -z], [b, bottom, -z], [b, bottom, z], [a, bottom, z]);
+        self.quad([a, bottom, -z], [a, bottom, z], [a, h0, z], [a, h0, -z]);
+        self.quad([b, bottom, z], [b, bottom, -z], [b, h1, -z], [b, h1, z]);
+    }
+
+    /// A swept, pitched blade, with thickness so it reads from either side.
+    fn blade(&mut self, root: f32, tip: f32, width: f32) {
+        let outline = [[-width * 0.3, root], [width * 0.3, root], [width, tip], [-width * 0.4, tip]];
+        let face = |i: usize, dy: f32| {
+            let [x, z] = outline[i];
+            [x, 0.5 + x * 0.8 + dy, z]
+        };
+        self.quad(face(3, 0.03), face(2, 0.03), face(1, 0.03), face(0, 0.03));
+        self.quad(face(0, -0.03), face(1, -0.03), face(2, -0.03), face(3, -0.03));
+        for i in 0..4 {
+            let j = (i + 1) % 4;
+            self.quad(face(i, -0.03), face(i, 0.03), face(j, 0.03), face(j, -0.03));
+        }
+    }
+
     /// A frustum about the `Y` axis, with optional caps, `seg` sides.
     fn barrel(&mut self, r0: f32, r1: f32, y0: f32, y1: f32, seg: usize, caps: bool) {
         let slope = ((r0 - r1) / (y1 - y0).abs().max(1e-4)).atan();
@@ -401,27 +476,27 @@ impl Geom {
 
     /// A dome sitting on `y0`, `rings` bands tall.
     fn dome(&mut self, r: f32, h: f32, y0: f32, seg: usize, rings: usize) {
+        let base = self.verts() as u32;
         for k in 0..rings {
-            let (t0, t1) = (k as f32 / rings as f32, (k + 1) as f32 / rings as f32);
-            let (p0, p1) = (t0 * std::f32::consts::FRAC_PI_2, t1 * std::f32::consts::FRAC_PI_2);
-            let base = (self.pos.len() / 3) as u32;
+            let p = k as f32 / rings as f32 * std::f32::consts::FRAC_PI_2;
             for i in 0..=seg {
                 let a = (i as f32 / seg as f32) * std::f32::consts::TAU;
-                for p in [p0, p1] {
-                    let (c, s) = (a.cos() * p.cos(), a.sin() * p.cos());
-                    self.vert([c * r, y0 + p.sin() * h, s * r], norm([c, p.sin() * r / h, s]));
-                }
+                let (c, s) = (a.cos() * p.cos(), a.sin() * p.cos());
+                self.vert([c * r, y0 + p.sin() * h, s * r], norm([c, p.sin() * r / h, s]));
             }
+        }
+        // One exact pole and a triangle fan, not a collapsed ring of slivers.
+        let pole = self.vert([0.0, y0 + h, 0.0], [0.0, 1.0, 0.0]);
+        for k in 0..rings {
             for i in 0..seg {
-                // The same winding as `barrel`, and for the same reason: the
-                // ring is built lower-then-upper per step, so `a, a+1, b` is
-                // the order that comes out counter-clockwise from outside. It
-                // was `a, b, a+1` here, which is the mirror image -- and a
-                // dome whose outside is its inside is culled away by every
-                // renderer downstream, which is why tanks were see-through.
-                let (a, b) = (base + (i as u32) * 2, base + (i as u32) * 2 + 2);
-                self.tri(a, a + 1, b);
-                self.tri(b, a + 1, b + 1);
+                let a = base + (k * (seg + 1) + i) as u32;
+                if k + 1 == rings {
+                    self.tri(a, pole, a + 1);
+                } else {
+                    let b = a + (seg + 1) as u32;
+                    self.tri(a, b, a + 1);
+                    self.tri(a + 1, b, b + 1);
+                }
             }
         }
     }
@@ -471,13 +546,12 @@ fn norm(v: [f32; 3]) -> [f32; 3] {
     [v[0] / l, v[1] / l, v[2] / l]
 }
 
-/// The sides a round thing gets. Sixteen is enough to read as round at the
-/// distance a plant is looked at, and cheap enough that a design with four
-/// hundred pipe segments is still one draw call.
-const SEG: usize = 16;
+/// Twenty-four sides keep vessel silhouettes round in close views. Small
+/// fittings use fewer sides, and every canonical mesh stays below 800 triangles.
+const SEG: usize = 24;
 
 /// The mesh, built. Cheap enough to call per request -- the whole library is
-/// about fifteen thousand triangles -- and cached by nothing, because a cache
+/// under ten thousand triangles -- and cached by nothing, because a cache
 /// would be the first piece of state in a system whose entire argument is that
 /// it has none.
 pub fn geom(m: Mesh) -> Geom {
@@ -485,9 +559,9 @@ pub fn geom(m: Mesh) -> Geom {
     match m {
         Mesh::Box => g.cuboid([-0.5, 0.0, -0.5], [0.5, 1.0, 0.5]),
         Mesh::Cyl => g.barrel(0.5, 0.5, 0.0, 1.0, SEG, true),
-        Mesh::Dome => g.dome(0.5, 1.0, 0.0, SEG, 5),
+        Mesh::Dome => g.dome(0.5, 1.0, 0.0, SEG, 8),
         Mesh::Cone => g.barrel(0.5, 0.16, 0.0, 1.0, SEG, true),
-        Mesh::Elbow => g.bend(Mesh::ELBOW_R, 0.5, SEG, 6),
+        Mesh::Elbow => g.bend(Mesh::ELBOW_R, 0.5, SEG, 8),
         Mesh::Tee => {
             g.barrel(0.5, 0.5, 0.0, 1.0, SEG, true);
             // The branch reaches clear of the run and stops, which is as far
@@ -501,35 +575,61 @@ pub fn geom(m: Mesh) -> Geom {
             across(&mut g, &b, [0.0, 0.5, 0.0]);
         }
         Mesh::Flange => {
-            g.barrel(0.5, 0.5, 0.0, 1.0, SEG, true);
-            g.barrel(0.34, 0.34, -0.05, 1.05, SEG, true);
+            g.profile(&[
+                [0.47, 0.12], [0.5, 0.18], [0.5, 0.82], [0.47, 0.88],
+                [0.34, 0.88], [0.34, 1.0], [0.27, 1.0], [0.27, 0.0],
+                [0.34, 0.0], [0.34, 0.12], [0.47, 0.12],
+            ], SEG);
+            for i in 0..8 {
+                let a = i as f32 / 8.0 * std::f32::consts::TAU;
+                g.bolt(0.052, 0.88, 1.0, [a.cos() * 0.405, 0.0, a.sin() * 0.405]);
+            }
         }
         Mesh::Nozzle => {
-            g.barrel(0.34, 0.34, 0.0, 0.78, SEG, false);
-            g.barrel(0.5, 0.5, 0.78, 1.0, SEG, true);
-            g.disc(0.34, 0.0, SEG, false);
+            g.profile(&[
+                [0.4, 0.0], [0.34, 0.12], [0.34, 0.76], [0.5, 0.76],
+                [0.5, 0.95], [0.47, 1.0], [0.26, 1.0], [0.26, 0.0], [0.4, 0.0],
+            ], SEG);
         }
         Mesh::Valve => {
-            g.barrel(0.44, 0.44, 0.0, 1.0, SEG, true);
-            g.barrel(0.56, 0.56, 0.3, 0.7, SEG, true);
-            // The stem and the handwheel, across the run: a valve whose wheel
-            // you cannot see is a pipe.
+            g.barrel(0.3, 0.3, 0.0, 1.0, SEG, true);
+            g.profile(&[[0.3, 0.16], [0.42, 0.32], [0.42, 0.68], [0.3, 0.84]], SEG);
+            g.ring(0.4, 0.3, 0.0, 0.12, 16);
+            g.ring(0.4, 0.3, 0.88, 1.0, 16);
+            // A narrow body leaves room for an exposed stem and open spoked
+            // wheel without changing the fitting's installation envelope.
             let mut s = Geom::default();
-            s.barrel(0.09, 0.09, 0.0, 0.48, 8, false);
-            s.barrel(0.34, 0.34, 0.48, 0.56, 10, true);
+            s.barrel(0.065, 0.065, 0.38, 0.6, 8, true);
+            s.ring(0.32, 0.26, 0.54, 0.6, 16);
+            for i in 0..3 {
+                let a = i as f32 / 3.0 * std::f32::consts::TAU;
+                let mut spoke = Geom::default();
+                spoke.cuboid([-0.026, 0.55, 0.0], [0.026, 0.59, 0.28]);
+                turned(&mut s, &spoke, a.cos(), a.sin());
+            }
             across(&mut g, &s, [0.0, 0.5, 0.0]);
         }
-        Mesh::Band => g.barrel(0.5, 0.5, 0.0, 1.0, SEG, false),
+        Mesh::Band => g.ring(0.5, 0.46, 0.0, 1.0, SEG),
         Mesh::Beam => {
             g.cuboid([-0.5, 0.0, -0.5], [0.5, 1.0, -0.36]);
             g.cuboid([-0.5, 0.0, 0.36], [0.5, 1.0, 0.5]);
             g.cuboid([-0.16, 0.0, -0.36], [0.16, 1.0, 0.36]);
         }
         Mesh::Grate => {
-            g.cuboid([-0.5, 0.88, -0.5], [0.5, 1.0, 0.5]);
-            for i in 0..5 {
-                let z = -0.4 + i as f32 * 0.2;
-                g.cuboid([-0.5, 0.7, z - 0.03], [0.5, 0.88, z + 0.03]);
+            // An open grid: the old solid top hid every bearing bar beneath it.
+            for x in [-0.5, 0.44] {
+                g.cuboid([x, 0.7, -0.5], [x + 0.06, 1.0, 0.5]);
+            }
+            for z in [-0.5, 0.44] {
+                g.cuboid([-0.44, 0.7, z], [0.44, 1.0, z + 0.06]);
+            }
+            for i in 0..7 {
+                let x = -0.36 + i as f32 * 0.12;
+                g.cuboid([x - 0.018, 0.72, -0.44], [x + 0.018, 0.98, 0.44]);
+            }
+            for i in 0..4 {
+                let z = -0.33 + i as f32 * 0.22;
+                g.cuboid([-0.44, 0.76, z - 0.018], [0.44, 0.84, z + 0.018]);
             }
         }
         Mesh::Step => {
@@ -554,7 +654,9 @@ pub fn geom(m: Mesh) -> Geom {
         }
         Mesh::Anchor => {
             g.cuboid([-0.5, 0.0, -0.5], [0.5, 0.5, 0.5]);
-            g.barrel(0.16, 0.16, 0.5, 1.0, 8, true);
+            g.barrel(0.22, 0.22, 0.5, 0.59, 12, true);
+            g.bolt(0.18, 0.59, 0.84, [0.0; 3]);
+            g.barrel(0.095, 0.095, 0.84, 1.0, 10, true);
         }
         Mesh::Coupling => {
             g.barrel(0.5, 0.5, 0.0, 0.42, SEG, true);
@@ -573,11 +675,33 @@ pub fn geom(m: Mesh) -> Geom {
         }
         Mesh::Gauge => {
             g.barrel(0.1, 0.1, 0.0, 0.6, 8, false);
-            g.barrel(0.5, 0.5, 0.6, 1.0, 12, true);
+            g.profile(&[
+                [0.0, 0.6], [0.44, 0.6], [0.5, 0.66], [0.5, 0.96],
+                [0.46, 1.0], [0.41, 1.0], [0.41, 0.91], [0.0, 0.91],
+            ], SEG);
+            for i in 0..9 {
+                let a = (-0.75 + i as f32 * 1.5 / 8.0) * std::f32::consts::PI;
+                let mut tick = Geom::default();
+                tick.cuboid([-0.012, 0.915, 0.31], [0.012, 0.94, 0.38]);
+                turned(&mut g, &tick, a.cos(), a.sin());
+            }
+            let mut needle = Geom::default();
+            needle.cuboid([-0.018, 0.94, -0.08], [0.018, 0.965, 0.29]);
+            turned(&mut g, &needle, 0.8, 0.6);
+            g.barrel(0.045, 0.045, 0.94, 0.98, 8, true);
         }
         Mesh::Panel => {
-            g.cuboid([-0.5, 0.0, -0.5], [0.5, 1.0, 0.5]);
-            g.cuboid([-0.44, 0.06, 0.5], [0.44, 0.94, 0.56]);
+            g.cuboid([-0.5, 0.0, -0.5], [0.5, 1.0, 0.44]);
+            g.cuboid([-0.45, 0.05, 0.44], [0.45, 0.95, 0.49]);
+            // A door reveal, hinges and a raised pull catch the light even
+            // when the whole cabinet shares one material.
+            for y in [0.18, 0.76] {
+                g.cuboid([-0.48, y, 0.44], [-0.41, y + 0.08, 0.51]);
+            }
+            for y in [0.39, 0.57] {
+                g.cuboid([0.31, y, 0.49], [0.36, y + 0.04, 0.56]);
+            }
+            g.cuboid([0.31, 0.39, 0.54], [0.36, 0.61, 0.58]);
         }
         Mesh::Fins => {
             g.barrel(0.42, 0.42, 0.0, 1.0, SEG, true);
@@ -589,16 +713,32 @@ pub fn geom(m: Mesh) -> Geom {
             }
         }
         Mesh::Louvre => {
-            g.cuboid([-0.5, 0.0, -0.06], [0.5, 1.0, 0.06]);
+            for x in [-0.5, 0.44] {
+                g.cuboid([x, 0.0, -0.14], [x + 0.06, 1.0, 0.14]);
+            }
+            for y in [0.0, 0.94] {
+                g.cuboid([-0.44, y, -0.14], [0.44, y + 0.06, 0.14]);
+            }
             for i in 0..6 {
-                let y = 0.08 + i as f32 * 0.15;
-                g.cuboid([-0.44, y, -0.14], [0.44, y + 0.07, 0.02]);
+                let y = 0.12 + i as f32 * 0.145;
+                let mut slat = Geom::default();
+                slat.cuboid([-0.44, -0.016, -0.14], [0.44, 0.016, 0.14]);
+                // Tilt about X, leaving real gaps between the slats.
+                for (p, n) in slat.pos.chunks_mut(3).zip(slat.nrm.chunks_mut(3)) {
+                    let (py, pz, ny, nz) = (p[1], p[2], n[1], n[2]);
+                    p[1] = y + py * 0.8660254 - pz * 0.5;
+                    p[2] = py * 0.5 + pz * 0.8660254;
+                    n[1] = ny * 0.8660254 - nz * 0.5;
+                    n[2] = ny * 0.5 + nz * 0.8660254;
+                }
+                shifted(&mut g, &slat, [0.0; 3]);
             }
         }
         Mesh::Stack => {
-            g.barrel(0.5, 0.3, 0.0, 0.9, SEG, false);
-            g.barrel(0.36, 0.36, 0.9, 1.0, SEG, true);
-            g.disc(0.5, 0.0, SEG, false);
+            g.profile(&[
+                [0.5, 0.0], [0.3, 0.88], [0.36, 0.88], [0.36, 1.0],
+                [0.26, 1.0], [0.26, 0.88], [0.45, 0.0], [0.5, 0.0],
+            ], SEG);
         }
         Mesh::Ladder => {
             g.cuboid([-0.3, 0.0, -0.04], [-0.22, 1.0, 0.04]);
@@ -610,11 +750,11 @@ pub fn geom(m: Mesh) -> Geom {
         }
         Mesh::Rotor => {
             g.barrel(0.16, 0.16, 0.0, 1.0, 10, true);
-            g.barrel(0.5, 0.5, 0.36, 0.64, SEG, true);
+            g.barrel(0.3, 0.3, 0.42, 0.58, SEG, true);
             for i in 0..12 {
                 let a = (i as f32 / 12.0) * std::f32::consts::TAU;
                 let mut f = Geom::default();
-                f.cuboid([-0.06, 0.3, 0.46], [0.06, 0.7, 0.62]);
+                f.blade(0.24, 0.49, 0.07);
                 turned(&mut g, &f, a.cos(), a.sin());
             }
         }
@@ -622,57 +762,68 @@ pub fn geom(m: Mesh) -> Geom {
         // end so that it is obviously a fitting rather than a pipe that got
         // thinner while nobody was looking.
         Mesh::Reducer => {
-            g.barrel(0.5, 0.5, 0.0, 0.14, SEG, false);
-            g.barrel(0.5, 0.3, 0.14, 0.8, SEG, false);
-            g.barrel(0.3, 0.3, 0.8, 1.0, SEG, false);
-            g.barrel(0.6, 0.6, 0.0, 0.08, SEG, true);
-            g.barrel(0.4, 0.4, 0.92, 1.0, SEG, true);
-            g.disc(0.5, 0.0, SEG, false);
-            g.disc(0.3, 1.0, SEG, true);
+            g.profile(&[
+                [0.6, 0.0], [0.6, 0.08], [0.5, 0.08], [0.5, 0.14],
+                [0.3, 0.8], [0.3, 0.92], [0.4, 0.92], [0.4, 1.0],
+                [0.24, 1.0], [0.24, 0.8], [0.44, 0.14], [0.44, 0.0], [0.6, 0.0],
+            ], SEG);
         }
         // A strap, two ears and two bolts. Half a metre of this is the
         // difference between a pipe resting on a support and a pipe fixed to
         // one.
         Mesh::Clamp => {
-            g.barrel(0.56, 0.56, 0.0, 1.0, SEG, false);
+            g.ring(0.56, 0.5, 0.0, 1.0, SEG);
             for sgn in [-1.0f32, 1.0] {
                 let (a, b) = (sgn * 0.44, sgn * 0.60);
                 g.cuboid([a.min(b), 0.0, -0.09], [a.max(b), 1.0, 0.09]);
-                let mut bolt = Geom::default();
-                bolt.barrel(0.055, 0.055, -0.06, 1.06, 8, true);
-                shifted(&mut g, &bolt, [sgn * 0.52, 0.0, 0.0]);
+                g.bolt(0.055, 1.0, 1.06, [sgn * 0.52, 0.0, 0.0]);
             }
         }
         // A shroud, a hub and six blades: the piece that says a box moves air
         // rather than holding it.
         Mesh::Cowl => {
-            g.barrel(0.5, 0.5, 0.0, 1.0, SEG, false);
-            g.barrel(0.44, 0.44, 0.0, 1.0, SEG, false);
-            g.barrel(0.5, 0.44, 0.0, 0.1, SEG, false);
-            g.barrel(0.5, 0.44, 1.0, 0.9, SEG, false);
-            g.barrel(0.13, 0.13, 0.16, 0.84, 10, true);
+            // Rolled lips and an inward-facing bore. Two outward barrels
+            // made the inside of the old shroud disappear under backface culling.
+            g.profile(&[
+                [0.48, 0.0], [0.5, 0.04], [0.5, 0.96], [0.48, 1.0],
+                [0.44, 1.0], [0.44, 0.0], [0.48, 0.0],
+            ], SEG);
+            g.barrel(0.13, 0.13, 0.64, 0.96, 10, true);
             for i in 0..6 {
                 let a = (i as f32 / 6.0) * std::f32::consts::TAU;
                 let mut f = Geom::default();
-                f.cuboid([-0.05, 0.36, 0.13], [0.05, 0.62, 0.44]);
-                turned(&mut g, &f, a.cos(), a.sin());
+                f.blade(0.1, 0.415, 0.12);
+                let mut pitched = Geom::default();
+                turned(&mut pitched, &f, a.cos(), a.sin());
+                // Keep the rotor close to the mouth, where it can be seen
+                // through the correctly opaque wall of the shroud.
+                shifted(&mut g, &pitched, [0.0, 0.32, 0.0]);
             }
         }
-        // A cradle for a horizontal vessel: base plate, solid web, and a strap
+        // A cradle for a horizontal vessel: base plate, two webs, and a strap
         // that curves up round the shell. The vessel's axis runs along local
         // `+Z`, which is why the callers spin it.
         Mesh::Saddle => {
             g.cuboid([-0.5, 0.0, -0.5], [0.5, 0.12, 0.5]);
-            let n = 8;
+            let n = 12;
             for i in 0..n {
                 let (x0, x1) = (-0.5 + i as f32 / n as f32, -0.5 + (i + 1) as f32 / n as f32);
-                // The mid-ordinate of the segment, on a parabola that sits the
-                // shell down into the saddle by a third of its radius.
-                let xm = (x0 + x1) / 2.0;
-                let h = 0.62 + 0.38 * (xm / 0.5) * (xm / 0.5);
-                g.cuboid([x0, 0.12, -0.34], [x1, (h - 0.14).max(0.12), 0.34]);
-                g.cuboid([x0, (h - 0.14).max(0.12), -0.44], [x1, h, 0.44]);
+                let height = |x: f32| 0.62 + 0.38 * (x / 0.5).powi(2);
+                let (h0, h1) = (height(x0), height(x1));
+                for z in [-0.26, 0.26] {
+                    let mut web = Geom::default();
+                    web.wedge([x0, x1], 0.12, [h0 - 0.1, h1 - 0.1], 0.1);
+                    shifted(&mut g, &web, [0.0, 0.0, z]);
+                }
+                // The strap's underside follows the top, with no vertical
+                // risers between samples of the cradle curve.
+                g.quad([x0, h0, 0.44], [x1, h1, 0.44], [x1, h1, -0.44], [x0, h0, -0.44]);
+                g.quad([x0, h0 - 0.1, -0.44], [x1, h1 - 0.1, -0.44], [x1, h1 - 0.1, 0.44], [x0, h0 - 0.1, 0.44]);
+                g.quad([x0, h0 - 0.1, 0.44], [x1, h1 - 0.1, 0.44], [x1, h1, 0.44], [x0, h0, 0.44]);
+                g.quad([x1, h1 - 0.1, -0.44], [x0, h0 - 0.1, -0.44], [x0, h0, -0.44], [x1, h1, -0.44]);
             }
+            g.quad([-0.5, 0.9, -0.44], [-0.5, 0.9, 0.44], [-0.5, 1.0, 0.44], [-0.5, 1.0, -0.44]);
+            g.quad([0.5, 0.9, 0.44], [0.5, 0.9, -0.44], [0.5, 1.0, -0.44], [0.5, 1.0, 0.44]);
         }
     }
     g

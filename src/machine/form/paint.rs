@@ -158,6 +158,8 @@ pub fn skin(u: &Placed) -> Mat {
 /// has no opinion about keeps what experiment 08 gave it, which is what stops
 /// this pass from being a rewrite of the plant in twelve colours.
 fn unit(u: &Placed, p: &Piece) -> Mat {
+    // An authored gasket remains rubber even when its reusable mesh is Band.
+    if p.mat == Mat::Rubber { return Mat::Rubber; }
     match p.mesh {
         // Structure, and the things bolted to it.
         Mesh::Beam | Mesh::Anchor | Mesh::Bearing | Mesh::Saddle | Mesh::Coupling => Mat::Dark,

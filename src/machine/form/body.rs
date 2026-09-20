@@ -29,9 +29,10 @@
 //!
 //! # What experiment 09 added, and where
 //!
-//! Nothing in the silhouette. Every archetype below builds the same body out of
-//! the same meshes at the same proportions it did in experiment 08; what the
-//! grade decides is how much is *hung on it*:
+//! Grey and paint retain the experiment 08 assembly for comparison. Detailed
+//! grades also seat the bodies on their supports and fit casings around the
+//! authored shaft axes. The logical volumes and interfaces stay with layout;
+//! dressing connects the visible skin back to them. The grades add:
 //!
 //! ```text
 //!   C  detail        bedplates, bolts, saddles, manways, discharge flanges
@@ -68,10 +69,9 @@ const RING: [(Mm, Mm); 8] = [
 /// One component, made of pieces.
 ///
 /// Experiment 09 added the `grade` argument and nothing else to this
-/// function's contract: every archetype still assembles the same silhouette
-/// out of the same canonical meshes, and the grade only decides how much
-/// articulation is hung on it. A turbine at grade A and a turbine at grade D
-/// are the same turbine in the same place; one of them has an exhaust hood.
+/// function's contract: the same canonical meshes dress the same logical
+/// component. Detailed grades refine support clearances and casing joints;
+/// neither the interfaces nor the routed connections move with those details.
 pub fn dress(u: &Placed, plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) {
     let mut r = seed.at(&u.name, "body");
     let wear = r.range(0, 6) as u8;
@@ -96,11 +96,22 @@ pub fn dress(u: &Placed, plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &
 
     // Every port gets a stub, whatever the archetype: it is what makes a pipe
     // look bolted on rather than pushed through the wall.
+    let bodies: Vec<_> = out[n0..].iter().filter(|p| {
+        matches!(p.mesh, Mesh::Box | Mesh::Cyl | Mesh::Fins | Mesh::Cone | Mesh::Dome) && p.mat != Mat::Dark
+    }).cloned().collect();
     for s in &u.sockets {
         if u.arch == Arch::Run {
             continue;
         }
         let b = s.bore;
+        if g.detailed() {
+            if let Some(start) = neck_start(s, &bodies, u.vol.size().len()) {
+                let run = s.at.sub(start);
+                if run.len() > 30 {
+                    out.push(Piece::new(Mesh::Cyl, nozzle_mat(s.dom), start, run, p3(b, run.len(), b)).lod(MEDIUM));
+                }
+            }
+        }
         out.push(
             Piece::new(Mesh::Nozzle, nozzle_mat(s.dom), s.at, s.out, p3(b * 13 / 10, b * 9 / 10, b * 13 / 10))
                 .lod(MEDIUM),
@@ -110,11 +121,26 @@ pub fn dress(u: &Placed, plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &
     // A gauge or two, on the machines that would have them.
     if matches!(u.arch, Arch::Vessel | Arch::Shell | Arch::Tower | Arch::Turbine | Arch::Skid) {
         let c = u.vol.centre();
-        let f = super::EAST;
+        let body = out[n0..].iter().find(|p| matches!(p.mesh, Mesh::Cyl | Mesh::Box) && p.mat != Mat::Dark).cloned();
         for k in 0..r.range(1, 2) {
             let y = u.vol.lo.y + (u.vol.hi.y - u.vol.lo.y) * (2 + k) / 5;
+            let mut at = p3(u.vol.hi.x, y, c.z + k * 400 - 200);
+            let mut f = super::EAST;
+            if g.detailed() {
+                if let Some(p) = &body {
+                    let b = p.vol();
+                    // Mount to the actual shell, not the clearance box. On a
+                    // horizontal barrel the instruments sit on its side.
+                    if p.mesh == Mesh::Cyl && p.dir.y == 0 {
+                        f = across(p.dir);
+                        at = b.centre().add(f.mul(p.size.x / 2 - 20)).add(p.dir.mul(k * 300 - 150));
+                    } else {
+                        at = p3(b.hi.x - 20, y.clamp(b.lo.y + 100, b.hi.y - 100), b.centre().z);
+                    }
+                }
+            }
             out.push(
-                Piece::new(Mesh::Gauge, Mat::Steel, p3(u.vol.hi.x, y, c.z + k * 400 - 200), f, p3(260, 320, 260))
+                Piece::new(Mesh::Gauge, Mat::Steel, at, f, p3(260, 320, 260))
                     .lod(CLOSE),
             );
         }
@@ -126,6 +152,46 @@ pub fn dress(u: &Placed, plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &
             p.tint = wear;
         }
     }
+}
+
+/// Test the authored solids in integer local coordinates. The pipe router
+/// owns the logical socket; dressing only bridges the gap to the visible skin.
+fn inside_body(p: &Piece, at: P3) -> bool {
+    let delta = at.sub(p.at);
+    let dot = |a: P3, b: P3| a.x as i64 * b.x as i64 + a.y as i64 * b.y as i64 + a.z as i64 * b.z as i64;
+    let x = dot(delta, super::right_of(p.dir, p.spin)) / p.size.x.max(1) as i64;
+    let z = dot(delta, super::right_of(p.dir, (p.spin + 1) & 3)) / p.size.z.max(1) as i64;
+    let y = dot(delta, p.dir) / p.dir.len().max(1) as i64;
+    if y < 0 || y > p.size.y as i64 { return false; }
+    let radial = x * x + z * z;
+    match p.mesh {
+        Mesh::Box => x.abs() <= 500 && z.abs() <= 500,
+        Mesh::Cyl => radial <= 500 * 500,
+        Mesh::Fins => radial <= 420 * 420,
+        Mesh::Cone => radial <= (500 - 340 * y / p.size.y.max(1) as i64).pow(2),
+        Mesh::Dome => radial + (500 * y / p.size.y.max(1) as i64).pow(2) <= 500 * 500,
+        _ => false,
+    }
+}
+
+fn neck_start(s: &super::layout::Socket, bodies: &[Piece], reach: Mm) -> Option<P3> {
+    // Prefer a straight, face-normal neck. If a port is above a reduced
+    // casing, an inclined neck still physically meets its unchanged interface.
+    let march = |target: P3| {
+        let d = target.sub(s.at);
+        let len = d.len().max(1);
+        (0..=len).step_by(10).find_map(|t| {
+            let point = s.at.add(p3(
+                (d.x as i64 * t as i64 / len as i64) as Mm,
+                (d.y as i64 * t as i64 / len as i64) as Mm,
+                (d.z as i64 * t as i64 / len as i64) as Mm,
+            ));
+            bodies.iter().any(|p| inside_body(p, point)).then_some(point)
+        })
+    };
+    march(s.at.sub(s.out.mul(reach))).or_else(|| {
+        bodies.iter().filter_map(|p| march(p.vol().centre())).min_by_key(|p| p.sub(s.at).len())
+    })
 }
 
 /// What a stub is made of: the domain it carries, in one glance. Lagged for
@@ -271,10 +337,13 @@ fn shell(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
     let a = along(u);
     let (len, wide) = extent(u, a);
     let s = u.vol.size();
-    let d = wide.min(s.y);
+    let full_d = wide.min(s.y);
+    // Reserve real room for the saddles below the shell. The axis stays put,
+    // so the interfaces and the routed plant remain in the same places.
+    let d = if g.detailed() { full_d * 4 / 5 } else { full_d };
     let c = u.vol.centre();
     let m = skin(u);
-    let axis = p3(c.x, u.vol.lo.y + d / 2, c.z);
+    let axis = p3(c.x, u.vol.lo.y + full_d / 2, c.z);
     let end = a.mul(len / 2 - d / 6);
 
     out.push(Piece::new(Mesh::Cyl, m, axis.sub(end), a, p3(d, len - d / 3, d)).lod(FAR));
@@ -289,8 +358,11 @@ fn shell(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
     for sgn in [1, -1] {
         let at = axis.add(a.mul(sgn * (len / 4)));
         if g.detailed() {
+            let height = (full_d - d) * 50 / 62;
+            let rise = height * 38 / 100;
+            let width = 2 * ((d as i64 * rise as i64 - (rise as i64).pow(2)).max(1).isqrt() as Mm);
             out.push(
-                Piece::up(Mesh::Saddle, Mat::Dark, p3(at.x, u.vol.lo.y, at.z), p3(d + 300, d / 2 + 200, 460))
+                Piece::up(Mesh::Saddle, Mat::Dark, p3(at.x, u.vol.lo.y, at.z), p3(width, height, 460))
                     .spin(if a.x != 0 { 1 } else { 0 })
                     .lod(MEDIUM),
             );
@@ -426,9 +498,15 @@ fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
     let a = along(u);
     let (len, wide) = extent(u, a);
     let s = u.vol.size();
-    let d = wide.min(s.y).max(600);
+    let mut d = wide.min(s.y).max(600);
     let c = u.vol.centre();
-    let axis = p3(c.x, u.vol.lo.y + d / 2 + 150, c.z);
+    let mut axis = p3(c.x, u.vol.lo.y + d / 2 + 150, c.z);
+    if g.detailed() {
+        if let Some(socket) = u.sockets.iter().find(|s| matches!(s.dom, Domain::Rotary | Domain::Mech)) {
+            axis.y = socket.at.y;
+        }
+        d = d.min((axis.y - u.vol.lo.y - 300).max(100) * 2);
+    }
     let barrel = if u.kind == crate::machine::parts::Kind::Motor { Mesh::Fins } else { Mesh::Cyl };
     let m = skin(u);
 
@@ -450,10 +528,20 @@ fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
     // Feet, and the terminal box that says it is electrical.
     for sgn in [1, -1] {
         let at = axis.add(a.mul(sgn * (len / 4)));
-        out.push(
-            Piece::up(Mesh::Box, Mat::Dark, p3(at.x, u.vol.lo.y, at.z), p3(if a.x != 0 { 300 } else { d }, 150 + d / 2, if a.x != 0 { d } else { 300 }))
-                .lod(MEDIUM),
-        );
+        if g.detailed() {
+            for side in [-1, 1] {
+                let foot = at.add(across(a).mul(side * d * 27 / 100));
+                let floor = u.vol.lo.y + 160;
+                let height = (axis.y - d * 39 / 100 - floor).max(40);
+                out.push(Piece::up(Mesh::Box, Mat::Dark, p3(foot.x, floor, foot.z),
+                    p3(if a.x != 0 { 300 } else { d / 5 }, height, if a.x != 0 { d / 5 } else { 300 })).lod(MEDIUM));
+            }
+        } else {
+            out.push(
+                Piece::up(Mesh::Box, Mat::Dark, p3(at.x, u.vol.lo.y, at.z), p3(if a.x != 0 { 300 } else { d }, 150 + d / 2, if a.x != 0 { d } else { 300 }))
+                    .lod(MEDIUM),
+            );
+        }
     }
     if r.chance(80) || g.articulated() {
         out.push(
@@ -469,6 +557,10 @@ fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
             Piece::up(Mesh::Box, Mat::Dark, p3(c.x, u.vol.lo.y, c.z), p3(s.x, 160, s.z)).lod(MEDIUM),
         );
         anchors(u, out);
+        for sgn in [-1, 1] {
+            out.push(Piece::new(Mesh::Band, Mat::Rubber, axis.add(a.mul(sgn * (len / 2 - 165))),
+                a.mul(sgn), p3(d + 12, 25, d + 12)).lod(CLOSE));
+        }
     }
 
     // Which end the drive leaves by, so that the shaft comes out of the right
@@ -619,19 +711,26 @@ fn wheel(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) 
 }
 
 fn turbine(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
-    let a = along(u);
+    let drive = u.sockets.iter().find(|s| matches!(s.dom, Domain::Rotary | Domain::Mech));
+    let a = if g.detailed() { drive.map(|s| s.out).filter(|d| d.y == 0).unwrap_or_else(|| along(u)) } else { along(u) };
     let (len, wide) = extent(u, a);
     let c = u.vol.centre();
-    let d = wide.min(u.vol.size().y).max(800);
-    let axis = p3(c.x, super::layout::SHAFT_Y, c.z);
+    let mut d = wide.min(u.vol.size().y).max(800);
+    let y = if g.detailed() { drive.map(|s| s.at.y).unwrap_or(u.base + super::layout::SHAFT_Y) } else { super::layout::SHAFT_Y };
+    let axis = p3(c.x, y, c.z);
+    if g.detailed() { d = d.min((y - u.vol.lo.y - 180).max(100) * 2); }
     let m = skin(u);
 
     // A casing that tapers: wide where the steam comes in, narrow where the
     // shaft leaves.
     out.push(Piece::new(Mesh::Cyl, m, axis.sub(a.mul(len / 2 - 200)), a, p3(d, (len * 2) / 5, d)).lod(FAR));
-    out.push(
-        Piece::new(Mesh::Cone, m, axis.add(a.mul(len / 10)), a.neg(), p3(d, (len * 2) / 5, d)).lod(FAR),
-    );
+    let joint = axis.add(a.mul(-len / 2 + 200 + len * 2 / 5));
+    if g.detailed() {
+        out.push(Piece::new(Mesh::Cone, m, joint, a, p3(d, (len * 3 / 10 - 200).max(200), d)).lod(FAR));
+        out.push(Piece::new(Mesh::Band, Mat::Rubber, joint.sub(a.mul(12)), a, p3(d + 16, 24, d + 16)).lod(CLOSE));
+    } else {
+        out.push(Piece::new(Mesh::Cone, m, axis.add(a.mul(len / 10)), a.neg(), p3(d, (len * 2) / 5, d)).lod(FAR));
+    }
     out.push(Piece::new(Mesh::Rotor, Mat::Steel, axis.sub(a.mul(len / 6)), a, p3(d - 100, 400, d - 100)).lod(MEDIUM));
     // The shaft end, and the bearing it runs in.
     out.push(
@@ -657,7 +756,7 @@ fn turbine(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>
     }
     if g.articulated() {
         out.push(
-            Piece::new(Mesh::Flange, Mat::Steel, axis.sub(a.mul(len / 10)), a, p3(d * 11 / 10, d / 10, d * 11 / 10))
+            Piece::new(Mesh::Flange, Mat::Steel, joint.sub(a.mul(d / 20)), a, p3(d * 11 / 10, d / 10, d * 11 / 10))
                 .lod(MEDIUM),
         );
         // The exhaust hood: a turbine throws its steam downwards at whatever
