@@ -51,11 +51,13 @@ of typed components, and the finished thing compiles to a startup transient plus
 an exact periodic orbit rather than to an average.
 
 **Experiment 07** asks whether that generalises past a power plant. It expands
-the eight components into a construction kit of thirty-eight across eight
-families, makes a wire carry a *substance with properties* rather than a number,
-and then tries to answer four different briefs with the one vocabulary. The
-recipe stays `Iron → Gear`; the machine that performs it is where the
-complexity lives.
+the eight components into a construction kit across seven families, makes a wire
+carry a *substance with properties* rather than a number, and then tries to
+answer four different briefs with the one vocabulary. The recipe stays
+`Iron → Gear`; the machine that performs it is where the complexity lives. The
+kit has since lost a family: the seven transport components — four pipes, a
+chute, a screw and a line shaft, plus the belt — are gone, because every one of
+them was a picture of a connection standing in the middle of a connection.
 
 **Experiment 08** asks what all of that *looks like*. A design is components on
 a grid with typed ports; a plant is vessels, pipework, steel and a building. So
@@ -938,12 +940,14 @@ Three of the six meet the brief, and none of the three dominates:
   half. Turned down to 40% it makes 108 MW on 40 fuel/tick, wastes nothing, and
   fits in 12×6.
 - **02-more-of-everything** is the design everybody builds second: four of each,
-  full throttle, heat pipes to reach the far half of the plot. 216 MW — and 285
-  tiles, 200 wasted heat a tick, and seventeen components.
+  full throttle, and two heat mains six tiles long to reach the far half of the
+  plot. 216 MW — and 285 tiles, 190 wasted heat a tick, and fifteen components.
 - **06-radial** is the same 216 MW with the reactor in the *middle*, so all four
-  exchangers are in reach and both heat pipes are gone, and with the throttle
-  set to what four exchangers can actually swallow. Two thirds of the land,
-  fifteen components, nothing wasted at all.
+  exchangers are bolted *against* it rather than near it, and with the throttle
+  set to what four exchangers can actually swallow. Two thirds of the land, the
+  same fifteen components, nothing wasted at all. The difference between the two
+  is six tiles of clear air on two of the connections, and six tiles is six
+  percent.
 
 ### The one nobody guesses first
 
@@ -1013,8 +1017,9 @@ that was never allowed to bend:
 Simulation  ->  State(t)  ->  RenderSnapshot  ->  Renderer
 ```
 
-The canvas does not know that a heat pipe leaks 2%. It knows this wire carried
-392 units last tick and that its rate is 400, which is enough to draw it thick.
+The canvas does not know that an eighteen-tile heat main leaks 18%. It knows
+this wire carried 392 units last tick and that its rate is 400, which is enough
+to draw it thick.
 
 The browser owns a copy of exactly two rules — whether a wire is legal, and what
 the file looks like — because refusing to draw an illegal connection has to
@@ -1110,7 +1115,7 @@ is six bytes, and two stuffs are equal or they are not.
 
 ### A component is a row in a table
 
-Thirty-eight components in eight families, and fourteen of them are pure data:
+Thirty-seven components in seven families, and seventeen of them are pure data:
 
 ```text
 Crusher {
@@ -1125,12 +1130,12 @@ Crusher {
 .\run.ps1 -Machine parts process
 ```
 
-The other twenty-four are hand-written, but not twenty-four times over: one
-`conduit` is six kinds of pipe, one `store` is four kinds of buffer, one
-`source` is three kinds of inlet, one `dump` is three kinds of boundary. Six
-components are genuinely one of a kind — reactor, gearbox, turbine, generator,
-furnace, column — and each has a warm-up, a ratio, a spin-up curve, a rounding,
-a phase change or a separation split that a table row could not have expressed.
+The other twenty are hand-written, but not twenty times over: one `store` is
+four kinds of buffer, one `source` is three kinds of inlet, one `dump` is three
+kinds of boundary. Six components are genuinely one of a kind — reactor,
+gearbox, turbine, generator, furnace, column — and each has a warm-up, a ratio,
+a spin-up curve, a rounding, a phase change or a separation split that a table
+row could not have expressed.
 The generator is on that list for an unglamorous reason: rounding its intake to
 whole batches would discard up to nine rotary a tick, and experiment 06's six
 designs are reported to two decimal places.
@@ -1139,20 +1144,28 @@ The payoff is the one the note was really after:
 
 > a motor is not part of the crusher's recipe. It supplies the rotary domain.
 
-Six crushers can hang off one engine through a shared shaft, and nobody had to
-write that down as a special case:
+Six crushers can hang off one engine, and nobody had to write that down as a
+special case:
 
 ```text
-             ┌→ Crusher
-Engine → Shaft → Crusher
-             ├→ Crusher
-             └→ Crusher
+        ┌→ Crusher
+Engine ─┼→ Crusher
+        ├→ Crusher
+        └→ Crusher
 ```
+
+That diagram used to have a `Shaft` in the middle of it, and taking it out is
+the shortest statement of why the transport family went. The sharing was never
+the shaft. It is `share()` in `sim.rs`: a port takes as many wires as you draw
+into it and divides what arrives between them, max-min fair, with a rotating
+cursor so a fan-out of three on a budget of ten is 4,3,3 and then 3,4,3 rather
+than a permanent favourite. The shaft was a four-tile component standing in the
+middle of that, charging one percent.
 
 ### Four briefs, one component set
 
-One brief proves a component set can answer one question. Four of them, answered
-by the same thirty-eight components, is the only evidence that the vocabulary is
+One brief proves a component set can answer one question. Five of them, answered
+by the same thirty-seven components, is the only evidence that the vocabulary is
 a vocabulary rather than an elaborate way of writing `Boiler Mk2`.
 
 ```powershell
@@ -1162,31 +1175,39 @@ a vocabulary rather than an elaborate way of writing `Boiler Mk2`.
 ```text
 GENERATE ELECTRICITY  --  heat, fluid, gas, rotary, electrical
 design                          made     grid   water  wasted     plot  parts  util  start   period
-01-first-try                   54.00      0.0    80.0   800.0     15x6      5   65%    120        1
-02-more-of-everything         216.00      0.0   320.0   200.0    15x19     17   83%    127        4
-03-compact                    108.00      0.0   160.0     0.0     12x6      8   81%    123        2
+01-first-try                   54.00      0.0    81.0   797.5     15x6      5   66%    386        2
+02-more-of-everything         216.00      0.0   324.0   190.0    15x19     15   88%    437        4
+03-compact                    108.00      0.0   160.0     0.0     12x6      8   81%    426        2
 04-stalled                      0.00      0.0    80.0     0.0     16x8     10   18%    122        3
-05-pulsed                      51.71      0.0    80.0     0.0     16x8     10   36%    212       21
-06-radial                     216.00      0.0   320.0     0.0    14x13     15   87%    123        4
+05-pulsed                      51.19      0.0    80.0     0.0     16x8     10   36%    729       42
+06-radial                     216.00      0.0   320.0     0.0    14x13     15   87%    449        4
 
 CRUSH ORE  --  motor, gearbox, rotary, material transformation
-07-crushline                   35.67    220.2     0.0     2.0    21x14     15   64%    152      108
-11-steamcrusher                37.40      0.0   311.2   224.1    32x16     25   70%    120       60
+07-crushline                   33.33    225.4     0.0     1.0    21x14     13   69%    263       72
+11-steamcrusher                38.67      0.0   326.0   187.0    30x16     20   75%    646       12
 
 DISTIL MIXED FLUID  --  heat, phase change, fluid separation
-10-refinery                    36.00      0.0    18.0    30.0    26x10     10   46%    192        6
+10-refinery                    35.56      0.0    17.8    34.8    26x10     10   46%    125      204
 
 MANUFACTURE GEARS  --  material handling, forming, buffering
-08-stamping                    49.50    121.0     0.0     5.4    22x12     13   56%     57       40
-09-machining                   24.00    128.9     0.0     0.0     11x9      9   49%      4       18
-12-onemotor                    18.00     60.0     0.0    15.1    22x12     11   27%     58       50
+08-stamping                    48.25    120.0     0.0     9.2    22x12     11   60%    416     1710
+09-machining                   24.00    133.3     0.0     0.0     11x9      8   54%    533       36
+12-onemotor                    17.14     60.0     0.0    18.0    22x12     10   28%    259       70
 ```
 
-Experiment 06's six are unchanged to the decimal place, which was a constraint
-rather than a coincidence: they are the regression test for everything
-underneath. The three transients that moved by one tick moved because a boundary
-port now exports *after* the transfer rather than during the step, so that a
-generator can power a motor inside its own machine and export the difference.
+Experiment 06's six were unchanged to the decimal place through experiment 14,
+which was a constraint rather than a coincidence: they are the regression test
+for everything underneath.
+
+Deleting the transport family is the first change that moved them, and it moved
+them in the one way it was always going to. Distance is now charged per tile of
+clear air rather than per pipe, so every connection longer than nothing costs a
+little and the designs that sprawl say so: `01-first-try` pays one extra unit of
+water, `02-more-of-everything` loses 10 a tick on the two heat mains that reach
+the bottom of its plot, `06-radial` — whose exchangers are bolted against the
+reactor with nothing between them — pays nothing at all and is the only one of
+the six that did not move. Three of the eleven designs above lost components and
+were rewritten; the rest are the same documents.
 
 ### The same brief, twice, differently
 
@@ -1203,10 +1224,10 @@ comes from.
 | plot | 21×14, 15 parts | 32×16, 25 parts |
 
 The steam crusher has no generator and no motor anywhere in it. Four turbines
-drive two line shafts directly, because rotary is a *domain* and a turbine
-already makes it — putting it through a generator and back through a motor
-would be two conversions and 19% for nothing. What it costs is precisely
-everything the power brief was trying to minimise.
+drive the crushers, the mill and the separator directly, because rotary is a
+*domain* and a turbine already makes it — putting it through a generator and
+back through a motor would be two conversions and 19% for nothing. What it costs
+is precisely everything the power brief was trying to minimise.
 
 ### Refusal is the mechanic, not the error case
 
@@ -1235,7 +1256,7 @@ tool found it, named the property, and said what fixes it — which is the whole
 argument for making a component's constraints data rather than code, because the
 sentence is generated from the same table the simulation obeys.
 
-The load-bearing one is the drive train. A crusher will not take a shaft turning
+The load-bearing one is the drive train. A crusher will not take a drive turning
 at speed 6; a mill will not take one turning at speed 1. So a motor cannot drive
 both, and the diff between a machine that makes nothing and a machine that works
 is one component:
@@ -1249,8 +1270,9 @@ is one component:
 
 ### Half the drive is not half the gears
 
-`12-onemotor` is `08-stamping` with one motor instead of two. The shaft splits
-54 rotary fairly: 27 to the rolling mill, 27 to the crank. The mill is content
+`12-onemotor` is `08-stamping` with one motor instead of two. Its rotary port
+splits 54 fairly between the two wires drawn out of it: 27 to the rolling mill,
+27 to the crank. The mill is content
 to run slowly and does. The crank is content to run slowly and does, at 23
 strokes a tick. The press is not — **a press fed half the strokes it needs does
 not make half a gear, it fails to close** — and a stroke that arrives unused does
@@ -1308,30 +1330,30 @@ paragraph:
 ```
 
 ```text
-reactor      source            12       12  power distil crush
-pump         source            12       17  power distil crush
-exchanger    heat              11       24  power crush
-turbine      mechanical        11       30  power crush
-generator    mechanical        10       25  power
-outlet       sink               6        6  crush gears distil
-shaft        transport          5        7  crush gears power
-inlet        source             5        7  crush gears
-motor        mechanical         4        9  crush gears
+pump         source            15       21  power distil crush line
+exchanger    heat              13       27  power crush line
+reactor      source            13       13  power distil crush
+turbine      mechanical        12       32  power crush
+generator    mechanical        11       27  power
+outlet       sink              10       10  crush gears distil line
+inlet        source             9       12  crush gears line
+motor        mechanical         6       14  crush gears line
+gearbox      mechanical         5        7  crush line
 ...
-  28 of 38 components are used at all, and 11 of those appear in more than one
-  brief.
+  infrastructure   22 of 30 used, 12 of them across more than one brief
+  process          7 of 7 used, 1 of them across more than one brief
 
-  not used by any shipped design: heater, steampipe, fluidpipe, chute, screw,
-  hopper, drum, flywheel, valve, clutch
+  used by no shipped design: heater, hopper, drum, flywheel, clutch, pulley,
+  mechpump, fan
 ```
 
-The infrastructure passed: reactors, pumps, exchangers, turbines, shafts, motors
-and outlets all turn up across two or three briefs, and a reactor that was built
-for a power plant now heats a distillation column. The process components did
-not span briefs and were never going to — a crusher belongs to the crush brief
-the way a verb belongs to a sentence.
+The infrastructure passed: reactors, pumps, exchangers, turbines, gearboxes,
+motors and outlets all turn up across two, three or four briefs, and a reactor
+that was built for a power plant now heats a distillation column. The process
+components did not span briefs and were never going to — a crusher belongs to
+the crush brief the way a verb belongs to a sentence.
 
-**Ten components earned nothing, and that is the most useful thing the
+**Eight components earn nothing, and that is the most useful thing the
 experiment produced.** It is not that they are badly designed. It is that
 *every port already has a capacity*, so every component in the kit is already a
 buffer, and a dedicated store has nothing left to do. Experiment 06's Steam
@@ -1344,20 +1366,132 @@ The fix is not more components. It is smaller port capacities — roughly one
 tick's worth — so that a store is a decision instead of a decoration. That is a
 one-line change to the table and a different experiment.
 
+It used to be *ten* components earning nothing, and four of the ten were pipes.
+Those four were not a balance problem with a tuning fix, and pretending they
+were is what kept them in the catalogue for eight experiments. See below.
+
 ### What it answered, and what it did not
 
 | the question | the answer |
 |---|---|
-| Can one component set answer four different briefs? | Yes. 38 components, 8 families, and a met design for each of power, crush, distil and gears. |
+| Can one component set answer four different briefs? | Yes. 37 components, 7 families, and a met design for each of power, crush, distil and gears. |
 | Does a recipe stay simple while the machine gets complicated? | Yes. `Iron → Gear` is performed by a 13-part stamping line and a 9-part machining cell with no component in common except the inlet and the outlet. |
 | Do properties beat intermediate items? | Yes, and the macro-machine is the proof: `Iron Ore (lump, 40%)` in, `Iron Ore (powder, 82%)` out, one item, five properties. |
 | Is a constraint better than a rate penalty? | Yes, and it was not close. "REFUSED — wants billet, and this is raw" teaches the mechanic in one line; a component quietly running at 40% teaches nothing. |
 | Does the orbit survive the richer state? | Yes. Periods of 6, 18, 40, 50, 60 and 108 across the new designs, tick 10⁹ still answered in a few hundred steps, still cross-checked against a straight run. |
-| Are the primitives primitives? | Mostly. Seven infrastructure components span two or three briefs each; ten components are used by nothing. |
+| Are the primitives primitives? | Mostly. Twelve infrastructure components span two or more briefs each; eight are used by nothing. Seven more were deleted outright — see below. |
 | Do stores and controls earn their place? | **No.** Every port is already a buffer, so a buffer buys nothing. Diagnosed above; the fix is smaller capacities, not more parts. |
 | Is `mech` a domain or an affectation? | Honestly, an affectation — one producer, one consumer. It pays for itself only because it is the domain that cannot be stored, which is what makes the press interesting. |
 | Is the chemistry family in? | No. Mixers, reactor vessels, electrolysers and scrubbers were cut. The four briefs did not need them, and adding components no brief needs is exactly the parts-catalogue failure the note warned about. |
 | Does it scale? | Still not asked. Still not the point. |
+
+### The transport family, and why there is not one
+
+The kit shipped with eight families. It has seven, and the missing one is
+`transport`: a heat pipe, a gas pipe, a fluid pipe, a chute, a screw conveyor, a
+line shaft and — added later, with the eras — a belt.
+
+The `reuse` table had been saying so for eight experiments. Four of the seven
+were used by no shipped design at all, and the diagnosis above filed them with
+the stores and the controls, as a balance problem with a tuning fix. That was
+wrong, and it is worth being precise about how, because the three arguments
+against them are different from each other.
+
+**They carried no information.** A connection is refused unless both ends agree
+on a domain, so the only thing a `heatpipe` between a reactor and an exchanger
+ever said was "this is a heat connection" — which the wire had already said, in
+the same file, one line down. Placing one was not a decision. It was a tax on
+having put two components more than six tiles apart, payable in three tiles of
+plot and one line of the document.
+
+**The renderer had already made the point.** `form::route` lays *every* wire as
+a physical run and has done since experiment 08: lagged pipe for heat, bright
+shaft for rotary, square chute for material, galvanised conduit for power, each
+with its own bore, elevation, bend cost and minimum straight. So a design with a
+heat pipe in it built a lagged pipe, into a small grey box, into a lagged pipe.
+The connection *was* the pipe. The component was a picture of a pipe standing in
+the middle of one.
+
+**Everything interesting about them is a property of the connection.** Which is
+where all of it went:
+
+```text
+what a pipe did       what the connection does now
+------------------------------------------------------------------
+bought distance       every domain has its own reach: heat 18 tiles,
+                      gas and fluid 16, rotary 12, material 10, mech
+                      8, power 24. All of them longer than the six a
+                      pipe existed to extend.
+charged for it        loss is per tile of clear air. Heat costs 1% a
+                      tile, gas 1%, rotary and mech 1%, fluid and
+                      material nothing. Continuous rather than in
+                      three-tile steps -- so moving a condenser two
+                      tiles closer is worth something, which it never
+                      was before.
+a chute ran downhill  a material connection whose source stands clear
+                      above its destination reaches six tiles further,
+                      which makes the third axis pay for itself.
+a belt broke shake    wire A.out -> B.in  belt
+```
+
+The belt is the whole of the case for connection properties, and it is the
+reason this is not simply a deletion. A belt was never really a component: it
+was a *kind of rotary connection*, slack rather than rigid, and the entire first
+era is built out of the one thing that follows — it passes torque and does not
+pass vibration. As a component it cost five tiles of plot to say that. As a word
+on a wire it costs a word, it can be switched on and off while looking at the
+drive it fixes, and it is now obvious that it is a property of the *drive*
+rather than an object sitting in one.
+
+```diff
+- wire W1.rotary -> B1.in
+- wire B1.out    -> C1.drive
+- belt      B1  at 9,6
++ wire W1.rotary -> C1.drive  belt
+```
+
+`tests/era.rs` runs both halves of that diff and asserts that the first one
+tears the water wheel apart and the second one does not. The two documents
+differ by four characters and no components.
+
+One thing was lost and is not mourned: the screw conveyor's 20 rotary to move
+material along. That really was a mechanic, and it cannot be a connection
+property without giving connections ports — which is inventing the component
+again under a different name. Material transport is free now, and the fall rule
+is what is left of the decision.
+
+What it cost, across the repository:
+
+```text
+                          before   after
+  components                  44      37
+  families                     8       7
+  archetypes in `form`        14      13
+  connections routed         263     242
+  ... relaxed to lay            4       0
+  ... refused outright          1       0
+  things in something else's way  32      18
+  ... and merely awkward       12       8
+  19-waterline                14 parts, 26x13   8 parts, 21x13
+  13-longreach                 8 parts, 33x6    5 parts, 32x6
+```
+
+Five of the eight plants pinned in `tests/read.rs` are bit-for-bit identical
+afterwards, because they never had a pipe or a shaft in them. The three that
+moved are the three that lost components. A change that deletes seven components
+and an archetype and moves nothing it did not touch is a change about the
+catalogue rather than about the renderer.
+
+The refusal that went is worth one more line. `07-crushline` shipped for two
+experiments with a connection the router would not lay — two motors bolted to
+the same end of one line shaft, which is a picture of a bent shaft — and the
+comment at the top of that file argued, correctly, that letting the router
+refuse was better than drawing nonsense. It is gone now, and not because
+anything got more permissive. A rotary wire between two machines is a straight
+line the router can aim at *both* ends; a rotary wire into a four-tile component
+that has already chosen a direction is a straight line with one end nailed down.
+The transport family was generating the geometry problems it was then blamed
+for.
 
 ## Experiment 08: procedural machine form
 
@@ -1442,7 +1576,7 @@ core rule: height that the player places by hand is CAD, and height that *falls
 out of the machine* is the thing actually being tested.
 
 ```text
-rotary   1250   every shaft in the plant at one height, so a line shaft is a
+rotary   1250   every drive in the plant at one height, so a shaft is a
                 straight line and a coupling is believable
 fluid     750   pumps push along the floor
 gas      high   steam leaves the top of a shell, onto the rack
@@ -2189,15 +2323,17 @@ align_lines   the same for pipe, cable and chute, per axis, per flange
               never onto a neighbouring nozzle, never into the next machine
 ```
 
-A transport component gets a third thing out of it: a shaft, a belt or a chute
-is a thin body loose inside a strip of its own tiles, so it does not merely
-choose where its flange sits — it *moves*, and the line slides across its tiles
-to meet the machine rather than the machine being asked to reach a line drawn
-down the middle of nothing in particular. Three separate defects came out of
-forgetting that, and a test now states it: a belt with its in and its out
+There used to be a third thing in those passes, for transport components: a
+shaft, a belt or a chute was a thin body loose inside a strip of its own tiles,
+so it did not merely choose where its flange sat — it *moved*, and the line slid
+across its tiles to meet the machine. Three separate defects came out of
+forgetting that, and a test stated all three: a belt with its in and its out
 bolted to the same end of itself, a shaft whose body ran east–west while its
 couplings left by the two faces at right angles to it, and a line shaft solved
-onto one machine's axis at one end and another's at the other.
+onto one machine's axis at one end and another's at the other. Deleting the
+transport family deleted the defects, the special case and the test, which is
+about eighty lines of `layout.rs` that existed to stop a line shaft being drawn
+as a small grey box in the middle of a line shaft.
 
 One more rule, in `yaw_of`, which reads like a detail and behaves like a
 grammar: a component with no authored rotation faces along the flow through it
@@ -2511,7 +2647,7 @@ touch it:
 
 ```text
 LIVE    Machining Cell, 216 Gear every 9 s, population intact, still queueing
-DRAFT   + one motor, wired to the cable and the line shaft
+DRAFT   + one motor, wired to the grid and to the lathe
 ```
 
 Component-level commands (`PlaceComponent`, `ConnectComponent`,
@@ -2826,11 +2962,11 @@ instead: Unlock: counterflow heat exchanger
 
 A percentage is a number that moves. A component is a *topology that did not
 exist before*, and the difference is that the second one sends you back to a
-machine you finished an hour ago. Twelve of the thirty-eight components are
+machine you finished an hour ago. Twelve of the thirty-seven components are
 held back:
 
 ```text
-motor gearbox shaft      a drive train: something to turn a crusher with
+motor gearbox clutch     a drive train: something to turn a crusher with
 separator                a split, and therefore a byproduct
 preheater condenser      heat and vapour that come back rather than leave
 furnace rollmill press   hot metal, and a shape to put it in
@@ -3058,14 +3194,14 @@ $ machine era
 
   design               made    plot  parts    grid    fuel  water wasted
   --------------------------------------------------------------------------
-  19-waterline        97.06     338     14     0.0     0.0  400.0   10.0
-  20-steamline        92.65     420     17     0.0     9.0   12.0  128.0
-  21-electricline    100.00     180     12   128.1     0.0    0.0    2.0
+  19-waterline       100.00     273      8     0.0     0.0  373.3    0.0
+  20-steamline        93.33     336     14     0.0     8.6   12.0  120.0
+  21-electricline    100.00     144      9   116.0     0.0    0.0    2.0
 
-  19-waterline     belt crusher inlet outlet pump screw shaft waterwheel
+  19-waterline     crusher inlet outlet pump waterwheel
   20-steamline     burner crusher exchanger gearbox inlet jacket outlet pump
-                   radiator screw shaft skip steamengine valve
-  21-electricline  crusher gearbox inlet mains motor outlet screw
+                   radiator skip steamengine valve
+  21-electricline  crusher gearbox inlet mains motor outlet
 ```
 
 Three power systems, three shapes on the ground, three columns of the
@@ -3073,20 +3209,29 @@ scoreboard, and — the part that had to be simulated rather than asserted —
 three different ways to fail.
 
 ```text
-water      river -> wheel -> line shaft -> belt -> crusher
+water      river -> wheel -> belt -> crusher
            fails: it runs out of torque, and it shakes its own frame apart
 
-steam      coal -> burner -> exchanger -> engine -> gearbox -> line shaft
+steam      coal -> burner -> exchanger -> engine -> gearbox -> crushers
            fails: it cooks itself, unless the waste heat has somewhere to go
 
 electric   mains -> motor -> gearbox -> crusher
            fails: it stops when the grid does, and every unit is billed
 ```
 
-The shared half of those parts lists is the ore path — inlet, crusher, screw,
-outlet — which is the half that genuinely does not change between centuries.
-Across every pair of designs, 15 of 43 distinct components are shared, and
-every one of them is ore handling.
+The shared half of those parts lists is the ore path — inlet, crusher, outlet —
+which is the half that genuinely does not change between centuries. Across every
+pair of designs, 11 of 35 distinct components are shared, and every one of them
+is ore handling.
+
+Those three rows got shorter when the transport family went, and the first one
+got shorter than the other two. The water plant used to be fourteen components
+on 338 tiles; it is eight on 273, and the six that left were two line shafts,
+three belts and a screw conveyor standing in rows being counted as machinery.
+Its belts are still there — they are the four `belt` wires between the wheels
+and the crushers, and taking the word off them still tears the plant apart on
+the first tick. What is gone is the *plot* they were charged for, which was
+never a fact about water power.
 
 The third column is also the shortest, and it is meant to be: the electric
 plant is the smallest plot, the fewest components and the most output, and it
@@ -3136,27 +3281,37 @@ by watching its state repeat, and it can only do that because a body temperature
 is one of a few hundred integers rather than one of infinitely many floats.
 
 **Vibration.** A crusher shakes at 7. Timber carries 4. Vibration travels
-through rigid rotary couplings — shafts, gearboxes, pulleys, and any direct
-connection — and stops dead at a belt, because a belt is slack. So the question "will this hold
-together" is not about one component, it is about the *rigid cluster* it belongs
-to, and the worst offender anywhere in that cluster is what every frame in it
-has to carry.
+through every rigid rotary connection — which is what a rotary wire is unless it
+is told otherwise — and stops dead at a belt, because a belt is slack. So the
+question "will this hold together" is not about one component, it is about the
+*rigid cluster* it belongs to, and the worst offender anywhere in that cluster
+is what every frame in it has to carry.
 
 That single rule is what makes the first era a different machine rather than a
-different sprite. The obvious water-mill drive train — bolt the crusher to the
-line shaft, the way the electric plant bolts its crusher straight to a gearbox
+different sprite. The obvious water-mill drive train — bolt the crusher straight
+to the wheel, the way the electric plant bolts its crusher straight to a gearbox
 — pulls the mill apart on the first tick:
 
 ```text
-SH1  Line Shaft  SHAKING
+W1  Water Wheel  SHAKING
     SHAKING — C1 on the same drive shakes at 7 and timber frame carries 4
-    put it on a stiffer frame, or break the drive with a belt --
+    put it on a stiffer frame, or make the drive wire a belt --
     a belt passes torque and does not pass shake
 ```
 
-The belt is not a lossy pipe with a story attached. It is five tiles long, it
-costs 8%, and it is the reason a water-driven plant is a long line of small
-machines while an electric one is a tight block.
+The belt was a five-tile component when this experiment was written and is now
+one word at the end of a wire, which is a better answer to the same question and
+a change the eras argued for. It costs 8% flat, it carries 100 a tick and no
+more, and it does not pass shake — and it is the reason a water-driven plant is
+a line of machines strung off one wheel while an electric one is a tight block
+of machines each with its own motor bolted on.
+
+```diff
+- wire W1.rotary -> B1.in
+- wire B1.out    -> C1.drive
+- belt      B1  at 9,6
++ wire W1.rotary -> C1.drive  belt
+```
 
 ### Cooling is a design decision, not a statistic
 
@@ -3277,9 +3432,18 @@ where it goes changes the plant; a cable is stationery.
 The third-era design lost two component types and three placements and came out
 smaller, faster and cleaner than the version that had them.
 
-Twenty-nine of the forty-three components belong to no century at all, including
-the crusher, and that ratio is the claim: the eras differ in how power is made
-and carried, not in what a bin is.
+That argument turned out to be right and half-applied. Every word of it is true
+of the four pipes, the chute, the screw and the line shaft as well — a heat main
+*is* a route, a bore and a loss, and none of those facts ever lived in the
+`heatpipe` component, they lived in the wire it was standing in the middle of.
+All seven went afterwards, along with the belt, and `belt` in the table above is
+now a word at the end of a rotary wire rather than a row in the catalogue. The
+water plant is eight components instead of fourteen and behaves identically.
+See *The transport family, and why there is not one*, above.
+
+Twenty-seven of the thirty-seven components belong to no century at all,
+including the crusher, and that ratio is the claim: the eras differ in how power
+is made and carried, not in what a bin is.
 
 ### Limits
 
@@ -3470,7 +3634,7 @@ These are real, and worth stating plainly.
     good game — only that they mean the same thing twice.
 15. **Experiment 07's stores buy nothing.** Every port has its own capacity, so
     every component is already a buffer and a dedicated one has no work to do.
-    Ten of thirty-eight components are used by no shipped design for this
+    Eight of thirty-seven components are used by no shipped design for this
     reason. The fix is smaller port capacities, not more components.
 16. **A property is a band, not a quantity.** Temperature is one of ten, size is
     one of four, speed is one of ten. That is what keeps an orbit findable and
@@ -3568,7 +3732,7 @@ scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
 
 src/machine/stuff.rs   Ex 07: seven domains, thirteen substances, five properties
-src/machine/parts.rs   Ex 07/14: forty-four components in eight families, and the numbers
+src/machine/parts.rs   Ex 07/14: thirty-seven components in seven families, and the numbers
 src/machine/era.rs     Ex 14: materials, temperature bands, vibration, three centuries
 src/machine/design.rs  Ex 06: components on a tile grid, wires between their ports
 src/machine/sim.rs     Ex 06: transfer along wires, then every component steps

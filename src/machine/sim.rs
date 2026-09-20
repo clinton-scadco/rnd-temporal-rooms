@@ -370,7 +370,14 @@ pub struct Machine {
     /// How much crossed each wire during the tick just simulated, and what it
     /// was. Per wire and not per port, because "which of my three pipes is
     /// actually carrying anything" is the question a player asks first.
+    ///
+    /// `flow` is what arrived and `lost` is what the run kept, which since the
+    /// transport family went is the only place a player can see the price of
+    /// distance. It used to be a component's own `waste` column, and it is a
+    /// better number here: a wire that loses four a tick is a wire you can
+    /// shorten.
     pub flow: Vec<u64>,
+    pub lost: Vec<u64>,
     pub carried: Vec<Stuff>,
     pub tick: Tick,
     pub last: Delta,
@@ -440,6 +447,7 @@ impl Machine {
             shake,
             group,
             flow: vec![0; nlinks],
+            lost: vec![0; nlinks],
             carried: vec![Stuff::fresh(Subst::Heat); nlinks],
             tick: 0,
             last: Delta::default(),
@@ -480,6 +488,7 @@ impl Machine {
             s.stop = Stop::None;
         }
         self.flow.iter_mut().for_each(|v| *v = 0);
+        self.lost.iter_mut().for_each(|v| *v = 0);
         let mut d = Delta::default();
         self.transfer(&mut d);
         self.export(&mut d);
@@ -537,7 +546,16 @@ impl Machine {
                             if !db.takes(&mine) {
                                 return 0;
                             }
-                            budget[l.to][l.to_port].min(dp.cap - db.qty)
+                            let room = budget[l.to][l.to_port].min(dp.cap - db.qty);
+                            // What the destination can take is not what the
+                            // source has to send: the run takes its cut in
+                            // between, so ask for the gross. This is where the
+                            // whole of the old conduit lives now -- the length
+                            // of the connection, priced.
+                            let gross = gross_for(room, l.loss_pct);
+                            // And a belt carries what a belt carries, however
+                            // much either end could manage.
+                            l.carries(gross)
                         })
                         .collect();
                     let alloc = share(avail, &demands, self.st[u].cursor[p]);
@@ -559,14 +577,30 @@ impl Machine {
                     }
                     let leaves = ports[p].external;
                     let wires = self.in_wires[u][p].clone();
-                    let demands: Vec<u64> = wires.iter().map(|&w| offer[w]).collect();
+                    // The offers are gross -- what the far end would send --
+                    // and `room` is net, because a port has room for what
+                    // arrives rather than for what set out. So the share is
+                    // settled in net units and turned back into gross one wire
+                    // at a time. Doing it the other way round would let a long
+                    // heat main and a short one contend on different scales,
+                    // and the long one would win.
+                    let demands: Vec<u64> = wires
+                        .iter()
+                        .map(|&w| net_of(offer[w], self.links[w].loss_pct))
+                        .collect();
                     let alloc = share(room, &demands, self.st[u].cursor[p]);
                     for (k, &w) in wires.iter().enumerate() {
-                        let q = alloc[k];
-                        if q == 0 {
+                        if alloc[k] == 0 {
                             continue;
                         }
                         let l = self.links[w];
+                        // `want` is what may *arrive*; `q` is what has to set
+                        // out for that much to arrive.
+                        let want = alloc[k];
+                        let q = gross_for(want, l.loss_pct).min(offer[w]);
+                        if q == 0 {
+                            continue;
+                        }
                         let src = self.st[l.from].buf[l.from_port].stuff;
                         // Checked again here rather than only in the offer: an
                         // earlier wire may have filled this port with something
@@ -576,17 +610,43 @@ impl Machine {
                             continue;
                         }
                         any = true;
+                        // `q` is gross -- what leaves the far end. What arrives
+                        // is what is left after the run has taken its cut, and
+                        // the difference is gone: down a line of bearings, out
+                        // of a lagged pipe into the plant, off a slipping belt.
                         let (moved, got) = self.st[l.from].buf[l.from_port].take(q);
+                        // Clamped to what was allocated, because both
+                        // conversions round in the plant's favour and two
+                        // roundings in the same direction would let a wire
+                        // deliver one unit more than the port had room for.
+                        // The port's budget is unsigned, and a unit over is
+                        // not a unit over -- it is eighteen quintillion.
+                        let net = net_of(got, l.loss_pct).min(want);
+                        let shed = got - net;
                         self.st[l.from].sent[l.from_port] += got;
                         budget[l.from][l.from_port] -= got;
-                        if leaves {
-                            self.leaves(u, moved, got, d);
-                        } else {
-                            self.st[u].buf[p].put(moved, got);
+                        if shed > 0 {
+                            // Heat lost out of a run is heat wasted; anything
+                            // else is a stream that went missing, and the
+                            // scoreboard has a column for each. The old
+                            // conduit put all of it in `heat_wasted`, which
+                            // was wrong about a chute and nobody noticed
+                            // because a chute lost nothing.
+                            if moved.subst == Subst::Heat {
+                                d.heat_wasted += shed;
+                            } else {
+                                bump(&mut d.lost, moved, shed);
+                            }
                         }
-                        self.st[u].got[p] += got;
-                        budget[u][p] -= got;
-                        self.flow[w] += got;
+                        if leaves {
+                            self.leaves(u, moved, net, d);
+                        } else {
+                            self.st[u].buf[p].put(moved, net);
+                        }
+                        self.st[u].got[p] += net;
+                        budget[u][p] -= net;
+                        self.flow[w] += net;
+                        self.lost[w] += shed;
                         self.carried[w] = moved;
                     }
                 }
@@ -647,10 +707,6 @@ impl Machine {
                     Kind::Inlet => self.source(i, self.tunes[i].subst, d),
                     Kind::Hopper | Kind::Tank | Kind::Drum | Kind::Flywheel => self.store(i),
                     Kind::Outlet | Kind::Skip | Kind::Radiator => self.dump(i),
-                    Kind::HeatPipe => self.conduit(i, parts::PIPE_LOSS_PCT, d),
-                    Kind::SteamPipe | Kind::FluidPipe | Kind::Chute => self.conduit(i, 0, d),
-                    Kind::Shaft => self.conduit(i, parts::SHAFT_LOSS_PCT, d),
-                    Kind::Belt => self.conduit(i, parts::BELT_LOSS_PCT, d),
                     Kind::Valve | Kind::Clutch => self.limiter(i),
                     Kind::Gearbox => self.gearbox(i, d),
                     Kind::Pulley => self.pulley(i, d),
@@ -1212,47 +1268,14 @@ impl Machine {
         s.status = if total > 0 { Status::Running } else { Status::Idle };
     }
 
-    /// A pipe, a chute or a line shaft. Distance, and what it costs.
-    fn conduit(&mut self, i: usize, loss_pct: u64, d: &mut Delta) {
-        let ports = parts::part(self.kinds[i]).ports;
-        let cap_out = ports[1].cap;
-        let s = &mut self.st[i];
-        let have = s.buf[0].qty;
-        let held = s.buf[0].stuff;
-        let room = if s.buf[1].takes(&held) { cap_out - s.buf[1].qty } else { 0 };
-
-        // Take as much as will still fit once the leak has taken its cut.
-        let mut take = have.min(room * 100 / (100 - loss_pct));
-        let mut net = take - take * loss_pct / 100;
-        if net > room {
-            take = room;
-            net = take - take * loss_pct / 100;
-        }
-
-        d.heat_wasted += take - net;
-        let (what, got) = s.buf[0].take(take);
-        s.buf[1].put(what, net);
-        s.used[0] = got;
-        s.made[1] = net;
-        s.waste = got - net;
-        s.util = (net * 1000 / ports[1].rate) as u32;
-        s.status = if have == 0 {
-            Status::Idle
-        } else if take < have {
-            Status::Blocked
-        } else {
-            Status::Running
-        };
-    }
-
     /// A valve or a clutch: a threshold, stated as a number, doing exactly what
     /// it says.
     ///
     /// The clutch is the one worth having. It will not engage until its
     /// threshold has gathered, which lets one stuttering drive turn something
     /// that must not be turned slowly -- the rotary equivalent of a pulsed
-    /// tank, and the reason a shared shaft with six things on it does not have
-    /// to be sized for the worst tick.
+    /// tank, and the reason one drive with six things hanging off it does not
+    /// have to be sized for the worst tick.
     fn limiter(&mut self, i: usize) {
         let kind = self.kinds[i];
         let ports = parts::part(kind).ports;
@@ -1681,11 +1704,12 @@ impl Machine {
 
 /// How hard the drive each component is bolted to shakes.
 ///
-/// Vibration travels through rigid rotary couplings -- shafts, gearboxes,
-/// couplings, clutches, pulleys -- and stops dead at a belt, because a belt is
-/// slack. So the question "will this hold together" is not about one component,
-/// it is about the *rigid cluster* it belongs to: the worst offender anywhere
-/// in it is what every frame in it has to carry.
+/// Vibration travels through rigid rotary connections -- a shaft and a pair of
+/// couplings, which is what a rotary wire is unless it is told otherwise -- and
+/// stops dead at a belt, because a belt is slack. So the question "will this
+/// hold together" is not about one component, it is about the *rigid cluster*
+/// it belongs to: the worst offender anywhere in it is what every frame in it
+/// has to carry.
 ///
 /// That one rule is the difference between the three eras being three drive
 /// trains and the three eras being three sprites. A crusher shakes at 7. Timber
@@ -1693,6 +1717,12 @@ impl Machine {
 /// thinks about it, the second era gets away with cast iron, and the first era
 /// has to put a belt between the crusher and everything it owns -- which is not
 /// a stat, it is a shape on the ground.
+///
+/// The belt used to be a five-tile component and is now a word on the wire,
+/// and the rule got *shorter* as a result: it is no longer "skip this link if
+/// either end happens to be a belt", which was a statement about two
+/// components pretending to be a statement about a connection. It is "skip
+/// this link if it is slack", which is what was always meant.
 /// Returns the load on each component and which rigid cluster it is in, so a
 /// panel can both judge a frame and name the thing that is shaking it.
 pub fn shake_loads(kinds: &[Kind], links: &[Link]) -> (Vec<u8>, Vec<usize>) {
@@ -1709,7 +1739,7 @@ pub fn shake_loads(kinds: &[Kind], links: &[Link]) -> (Vec<u8>, Vec<usize>) {
         if parts::part(kinds[l.from]).ports[l.from_port].dom != era::SHAKE_DOMAIN {
             continue;
         }
-        if kinds[l.from] == Kind::Belt || kinds[l.to] == Kind::Belt {
+        if l.belt {
             continue;
         }
         let (a, b) = (find(&mut parent, l.from), find(&mut parent, l.to));
@@ -1746,6 +1776,26 @@ pub fn geared(speed: u8, ratio: i32) -> u8 {
 /// rows -- can borrow the same sentence.
 pub fn need_of(kind: Kind, d: usize, n: usize) -> Option<&'static Need> {
     parts::part(kind).recipe.and_then(|r| r.draws.get(d)).and_then(|dr| dr.need.get(n))
+}
+
+/// What arrives when `gross` sets out down a run that loses `pct`.
+///
+/// Integer, and rounded in the plant's favour: a run that loses one percent of
+/// forty carries forty, because `40 * 1 / 100` is zero. That is deliberate.
+/// The alternative is to round the loss up, and then every short connection in
+/// a small design bleeds a unit a tick for no reason a player could see.
+pub fn net_of(gross: u64, pct: u64) -> u64 {
+    gross - gross * pct / 100
+}
+
+/// What has to set out for `net` to arrive. The inverse of `net_of`, rounded
+/// up, so asking for what a port has room for never under-fills it.
+pub fn gross_for(net: u64, pct: u64) -> u64 {
+    if pct == 0 || net == 0 {
+        return net;
+    }
+    let keep = 100 - pct.min(99);
+    (net * 100).div_ceil(keep)
 }
 
 /// Max-min fair allocation of `budget` across `demands`, starting at `cursor`.

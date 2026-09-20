@@ -5,9 +5,9 @@
 #
 #   mains -> motor -> gearbox -> crusher
 #
-# There is no prime mover on site. There is no line shaft. Each crusher has its
-# own motor two tiles below it, and the only reason the gearbox is there at all
-# is that a motor turns at speed 6 and a crusher will not take more than 2.
+# There is no prime mover on site, and no shared drive. Each crusher has its
+# own motor three tiles below it, and the only reason the gearbox is there at
+# all is that a motor turns at speed 6 and a crusher will not take more than 2.
 #
 # There is also no wiring in this file, and that is deliberate rather than an
 # omission. A power connection reaches twenty-four tiles, so the grid connection
@@ -17,8 +17,8 @@
 #
 # What this design does *not* contain is the interesting part:
 #
-#   no belt       steel rates 9 and a crusher shakes at 7, so nothing anywhere
-#                 in this plant needs isolating from anything else
+#   no belt       steel rates 9 and a crusher shakes at 7, so no drive wire in
+#                 this file needs the word on the end of it
 #   no cooling    a motor settles at 30 degrees and its range runs to 60
 #   no water      nothing here is a heat engine
 #   no spacing    the plot is tight on purpose, and nothing minds
@@ -33,30 +33,23 @@ inlet     I1  at 0,0    draws ore
 
 crusher   C1  at 4,0
 crusher   C2  at 9,0
-screw     SC1 at 14,0
-outlet    O1  at 18,0
+outlet    O1  at 14,0
 
 gearbox   GB1 at 5,4   ratio 4
 gearbox   GB2 at 10,4  ratio 4
-gearbox   GB3 at 15,4  ratio 2
 motor     MO1 at 4,7
 motor     MO2 at 9,7
-motor     MO3 at 14,7
 mains     M1  at 0,7
 
 wire M1.power -> MO1.power
 wire M1.power -> MO2.power
-wire M1.power -> MO3.power
 
 wire MO1.rotary -> GB1.in
 wire GB1.out -> C1.drive
 
 wire MO2.rotary -> GB2.in
 wire GB2.out -> C2.drive
-wire MO3.rotary -> GB3.in
-wire GB3.out -> SC1.drive
 
 wire I1.out -> C1.in
 wire C1.out -> C2.in
-wire C2.out -> SC1.in
-wire SC1.out -> O1.solid
+wire C2.out -> O1.solid

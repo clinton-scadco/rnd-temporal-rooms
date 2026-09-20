@@ -1,9 +1,8 @@
 # Experiment 14, the first answer: the same ore line, built in about 1790.
 #
-# Two wheels in the race, one timber line shaft down the middle of the mill, and
-# a belt to every machine that hangs off it:
+# Two wheels in the race, and a belt from each of them to each of the crushers:
 #
-#   river -> water wheel -> line shaft -> belt -> crusher
+#   river -> water wheel -> belt -> crusher
 #
 # Three things about that sentence are mechanical rather than decorative.
 #
@@ -13,21 +12,31 @@
 #    is a row of islands.
 #
 # 2. The belts are not lossy pipes, they are isolation. A crusher shakes at 7
-#    and a timber shaft rates 4, so bolting the crushers to the line shaft --
-#    the obvious thing, and what a gearbox would have done -- pulls the shaft
-#    apart on the first tick. Take the belts out of this file and the whole
-#    drive stops with SHAKING on every component of it. The crushers themselves
-#    are on cast iron, which rates exactly 7 and not a unit more.
+#    and a timber wheel rates 4, so a rigid drive from the wheel to the crusher
+#    -- the obvious thing, and what a gearbox would have done -- pulls the
+#    wheel apart on the first tick. Take the word `belt` off the four drive
+#    wires in this file and both wheels stop with SHAKING, and the crushers
+#    starve behind them and make nothing. The crushers themselves are never the
+#    thing that fails -- they are on cast iron, which rates exactly 7 and not a
+#    unit more. It is everything they are bolted to.
+#
+#    The second crusher is at 14,10 rather than 15 for that sentence's sake. A
+#    belt reaches fourteen tiles and a rigid drive reaches twelve, so at 15 the
+#    experiment would not be "the same plant, shaking" -- it would be a document
+#    the compiler refuses, which proves something much less interesting.
 #
 # 3. Nothing here gets hot. There is no cooling in this design because there is
 #    nothing to cool: a water wheel generates no heat at all and the crushers
 #    settle at 60 degrees against a range that runs to 70. The first era's
 #    problem is that it runs out of torque, not that it cooks.
 #
-# What it costs: no fuel, no grid, and 400 units of river a tick, all of which
-# goes back out of the tailrace. What it costs in *plot* is the striking number
-# -- a wheel is four tiles square and a belt is five tiles long, and the whole
-# machine is nearly twice the ground the electric one needs.
+# The belts used to be five-tile components and are now a word at the end of a
+# wire, and this is the design that shows why that is the right way round.
+# There is nothing on the ground called a belt. There is a *drive* between a
+# wheel and a crusher, and it is slack, and being told so is the entire content
+# of the decision. As components they also made the plot lie: the first-era
+# plant was nearly twice the ground the electric one needed, and about half of
+# that was belts and shaft standing in rows being counted as machinery.
 #
 # The pulley is the one first-era component this design does not use, and the
 # reason is worth writing down: a pulley is a *ratio*, and a river turning at
@@ -43,36 +52,20 @@ pump      P2  at 0,4    draws water
 waterwheel W1 at 4,0
 waterwheel W2 at 4,5
 
-shaft     SH1 at 10,2   frame wood
-shaft     SH2 at 15,2   frame wood
-
-belt      B1  at 10,5
-belt      B2  at 16,5
-belt      B3  at 10,8
-
 crusher   C1  at 10,10  frame iron
-crusher   C2  at 15,10  frame iron
-screw     SC1 at 20,10  frame wood
-outlet    O1  at 24,10
+crusher   C2  at 14,10  frame iron
+outlet    O1  at 19,10
 
 inlet     I1  at 6,10   draws ore
 
 wire P1.water -> W1.water
 wire P2.water -> W2.water
 
-wire W1.rotary -> SH1.in
-wire W2.rotary -> SH1.in
-wire SH1.out -> SH2.in
-
-wire SH1.out -> B1.in
-wire SH2.out -> B2.in
-wire SH1.out -> B3.in
-
-wire B1.out -> C1.drive
-wire B2.out -> C2.drive
-wire B3.out -> SC1.drive
+wire W1.rotary -> C1.drive  belt
+wire W2.rotary -> C1.drive  belt
+wire W1.rotary -> C2.drive  belt
+wire W2.rotary -> C2.drive  belt
 
 wire I1.out -> C1.in
 wire C1.out -> C2.in
-wire C2.out -> SC1.in
-wire SC1.out -> O1.solid
+wire C2.out -> O1.solid

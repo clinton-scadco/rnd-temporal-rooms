@@ -49,7 +49,7 @@
 //!
 //! `reuse` is experiment 07's own acceptance test and the reason it is a
 //! command rather than a paragraph. The note that asked for the experiment was
-//! explicit: if the same motor, pump, exchanger, buffer and shaft appear across
+//! explicit: if the same motor, pump, exchanger, buffer and gearbox appear across
 //! several designs the primitives are good, and if every challenge needs ten
 //! bespoke components used nowhere else the abstraction is wrong. That is a
 //! countable claim, so it is counted.
@@ -356,7 +356,7 @@ fn all() -> i32 {
 
 /// The vocabulary itself: what each component takes, refuses and makes.
 ///
-/// With forty-six of them the table in `parts.rs` is no longer something you
+/// With thirty-seven of them the table in `parts.rs` is no longer something you
 /// can hold in your head, and a player who has to read Rust to find out that a
 /// rolling mill will not touch cold metal has been failed by the tool.
 fn catalogue(args: &[String]) -> i32 {
@@ -365,7 +365,6 @@ fn catalogue(args: &[String]) -> i32 {
     for family in [
         Family::Source,
         Family::Sink,
-        Family::Transport,
         Family::Store,
         Family::Control,
         Family::Heat,
@@ -454,7 +453,7 @@ fn catalogue(args: &[String]) -> i32 {
     }
     if shown == 0 {
         eprintln!(
-            "no such family. Try source, sink, transport, store, control, heat, \
+            "no such family. Try source, sink, store, control, heat, \
              mechanical or process."
         );
         return 2;
@@ -511,7 +510,7 @@ fn reuse() -> i32 {
     // crusher belongs to the crush brief the way a verb belongs to a sentence:
     // nobody expected it to turn up in a refinery. Infrastructure is the half
     // the claim was ever about -- if the motor, pump, exchanger, buffer and
-    // shaft that a power plant needed are also what an ore line needs, the
+    // gearbox that a power plant needed are also what an ore line needs, the
     // vocabulary is a vocabulary.
     let infra: Vec<&eval::Uses> =
         uses.iter().filter(|u| u.kind.family() != Family::Process).collect();
@@ -555,7 +554,7 @@ fn reuse() -> i32 {
 ///
 /// One row per component that has a body or a drive, which in most designs is
 /// a minority of them, and that is deliberate: a panel that printed a
-/// temperature for a chute would be hiding the engine.
+/// temperature for an outlet would be hiding the engine.
 fn heat(args: &[String]) -> i32 {
     let (path, d) = match load(args) {
         Ok(v) => v,
@@ -1146,7 +1145,7 @@ fn where_it_points(d: form::P3) -> &'static str {
 ///
 /// Exits non-zero if anything was refused, which today is exactly one thing and
 /// on purpose -- `07-crushline` has two motors bolted to the same end of one
-/// shaft, and the comment at the top of it explains why that is left in.
+/// drive, and the comment at the top of it explains why that is left in.
 fn space_all(args: &[String]) -> i32 {
     let ask = ask_of(args);
     let paths = design_paths();

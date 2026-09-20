@@ -143,8 +143,8 @@ use crate::machine::parts::{self, Dir, Kind};
 use crate::machine::stuff::Domain;
 
 /// What sort of object a component is, once you stop caring what it does. This
-/// is the only place the forty-four kinds are collapsed, and it is why the
-/// asset library is twenty-five meshes rather than forty-four models.
+/// is the only place the thirty-seven kinds are collapsed, and it is why the
+/// asset library is twenty-five meshes rather than thirty-seven models.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Arch {
     /// A vertical pressure vessel: reactor, tank, drum on end.
@@ -167,8 +167,6 @@ pub enum Arch {
     Wheel,
     /// A fitting in a line rather than a machine: valve, clutch.
     Inline,
-    /// A component that *is* its connection: the six transports.
-    Run,
     /// Fins to the weather: radiator.
     Bank,
     /// A casing with a rotor and an exhaust: the turbine.
@@ -468,13 +466,21 @@ pub fn shape(k: Kind) -> (Arch, Mount, Mm) {
     (arch(k), mount(k), parts::height(k) as Mm)
 }
 
-/// What sort of object each of the forty-six is.
+/// What sort of object each of the thirty-seven is.
 ///
 /// The eight experiment 14 added are eight more rows here and nothing else in
-/// the visual pipeline: a water wheel is a wheel, a steam engine is a skid, a
-/// belt is a run. That is the point of having archetypes rather than models --
-/// a new century's worth of machinery arrives, and the thing that draws plants
-/// does not have to be told anything it does not already know.
+/// the visual pipeline: a water wheel is a wheel, a steam engine is a skid.
+/// That is the point of having archetypes rather than models -- a new
+/// century's worth of machinery arrives, and the thing that draws plants does
+/// not have to be told anything it does not already know.
+///
+/// There used to be a fourteenth archetype, `Run`, for the seven transport
+/// components: a component that *was* its own connection, drawn as a slender
+/// body down the middle of its tiles at the height of its own domain. Every
+/// one of those words is now a description of what `route` does to a wire, and
+/// deleting the archetype deleted about eighty lines of this file that existed
+/// to stop a line shaft being drawn as a small grey box in the middle of a
+/// line shaft.
 pub fn arch(k: Kind) -> Arch {
     use Arch::*;
     use Kind::*;
@@ -485,7 +491,6 @@ pub fn arch(k: Kind) -> Arch {
         Mains | Outlet | Skip => Pad,
         Inlet | Hopper | Separator => Bin,
         Radiator | Fan => Bank,
-        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft | Belt => Run,
         Drum | Exchanger | Preheater | Condenser | Mill | Jacket => Shell,
         Flywheel | Crank | WaterWheel | Pulley => Wheel,
         Valve | Clutch => Inline,
@@ -520,7 +525,6 @@ impl Arch {
             Arch::Tower => "tower",
             Arch::Wheel => "wheel",
             Arch::Inline => "inline",
-            Arch::Run => "run",
             Arch::Bank => "bank",
             Arch::Turbine => "turbine",
         }
@@ -617,13 +621,8 @@ pub fn nozzle(arch: Arch, dom: Domain, dir: Dir) -> &'static [Side] {
     match (arch, dom) {
         // A fitting in a line, and a component that *is* a line, take the line
         // in at one end and pass it out of the other -- whatever the line is
-        // made of. This row is first because it used to be last, and the
-        // drive-train row above it was catching belts and shafts: both ends of
-        // a five-metre belt were offered both ends of the belt, both of them
-        // picked whichever was nearer the machine they were wired to, and a
-        // third of the transport components in the repository came out with
-        // their in and their out bolted to the same end of themselves.
-        (Inline | Run, _) => {
+        // made of.
+        (Inline, _) => {
             if out {
                 &[Front]
             } else {
@@ -721,7 +720,7 @@ pub fn nozzle(arch: Arch, dom: Domain, dir: Dir) -> &'static [Side] {
 /// cooling water trickling in from one side -- and now that the tube ends are
 /// pinned to that axis, getting it wrong no longer merely looks odd, it puts
 /// the steam outlet on a face with nothing in front of it.
-fn yaw_of(d: &Design, i: usize, arch: Arch) -> u8 {
+fn yaw_of(d: &Design, i: usize) -> u8 {
     // Experiment 10: if the player turned it, it is turned. Inference is what
     // happens to a component nobody has an opinion about, which is still most
     // of them.
@@ -740,30 +739,6 @@ fn yaw_of(d: &Design, i: usize, arch: Arch) -> u8 {
     // the motor to face the mains -- and then pinned its shaft to a face
     // ninety degrees from the gearbox bolted to the end of it.
     let flow = flow_of(d, i, true).or_else(|| flow_of(d, i, false));
-    // A transport component *is* a straight line drawn down its own tiles, and
-    // a line shaft four tiles long lies east-west whatever the flow through it
-    // thinks. Letting inference turn it a quarter was worth a bent shaft in
-    // every design that had one: the body ran one way, the couplings left by
-    // the two faces at right angles to it, and every machine bolted to either
-    // end was then reported as misaligned by a pass that was quite right.
-    //
-    // So a run's yaw is its footprint's own axis, and the flow decides only
-    // which end of it is the front.
-    if arch == Arch::Run {
-        let u = &d.units[i];
-        let (ax, az) = flow.unwrap_or((1, 0));
-        return if u.w() >= u.h() {
-            if ax >= 0 {
-                0
-            } else {
-                2
-            }
-        } else if az >= 0 {
-            1
-        } else {
-            3
-        };
-    }
     let (ax, az) = match flow {
         Some(v) => v,
         None => return 0,
@@ -853,20 +828,7 @@ pub fn plan(d: &Design) -> Plan {
         let base = u.z * TILE;
         let (x0, z0) = (u.x * TILE, u.y * TILE);
         let (x1, z1) = (x0 + u.w() * TILE, z0 + u.h() * TILE);
-        // A transport component is its own connection, so it gets a slender
-        // volume down the middle of its tiles rather than a body filling them.
-        let vol = if arch == Arch::Run {
-            let mid = p3((x0 + x1) / 2, 0, (z0 + z1) / 2);
-            let along = (x1 - x0) >= (z1 - z0);
-            let half = if along { (x1 - x0) / 2 - INSET } else { (z1 - z0) / 2 - INSET };
-            let (dx, dz) = if along { (half, 400) } else { (400, half) };
-            // Centred on the height its domain lives at, so that the ports of
-            // a line shaft are at exactly the height of the ports it joins --
-            // unless the player has lifted it, in which case they have said
-            // where the run goes and this pass has nothing to add.
-            let y = if u.z > 0 { base + TILE / 2 } else { run_height(u.kind) };
-            Vol::new(p3(mid.x - dx, y - 250, mid.z - dz), p3(mid.x + dx, y + 250, mid.z + dz))
-        } else {
+        let vol = {
             Vol::new(
                 p3(x0 + INSET, base + lift, z0 + INSET),
                 p3(x1 - INSET, base + lift + h, z1 - INSET),
@@ -877,7 +839,7 @@ pub fn plan(d: &Design) -> Plan {
             kind: u.kind,
             arch,
             mount,
-            yaw: yaw_of(d, i, arch),
+            yaw: yaw_of(d, i),
             turned: u.face.is_some(),
             tile: (u.x, u.y, u.w(), u.h()),
             level: u.z,
@@ -910,18 +872,6 @@ pub fn plan(d: &Design) -> Plan {
         })
     });
     Plan { units, plot: plot.unwrap_or(Vol::new(p3(0, 0, 0), p3(TILE, TILE, TILE))) }
-}
-
-/// The height a transport component's own run sits at: the same height as
-/// everything else in its domain, which is what makes a line shaft straight.
-fn run_height(k: Kind) -> Mm {
-    match k {
-        Kind::Shaft => SHAFT_Y,
-        Kind::HeatPipe | Kind::SteamPipe => RACK_Y,
-        Kind::FluidPipe => FLUID_Y,
-        Kind::Chute | Kind::Screw => FEED_Y,
-        _ => SHAFT_Y,
-    }
 }
 
 /// Where each port of one component ends up.
@@ -964,11 +914,7 @@ fn sockets(d: &Design, units: &[Placed], i: usize) -> Vec<Socket> {
         // two machines' centres, which is a decision each end can make on its
         // own and still agree about. Whatever is left after each of them
         // clamps it to its own face is real misalignment, and `space` says so.
-        // A transport component is exempt: its two ports are the two ends of
-        // one line, so a guess made for one of them is a bend in the middle of
-        // the other. Where the line goes is `align_drives`' decision, and it
-        // makes it for the whole run at once.
-        if matches!(port.dom, Domain::Rotary | Domain::Mech) && me.arch != Arch::Run {
+        if matches!(port.dom, Domain::Rotary | Domain::Mech) {
             if let Some(peer) = peers[pi] {
                 at = onto_axis(me, side, at, peer);
             }
@@ -1128,11 +1074,6 @@ fn blocked(
 /// How high up the face a port sits, by domain. The five lines in this
 /// function are the plant's grammar.
 fn height_for(me: &Placed, dom: Domain, dir: Dir, side: Side) -> Mm {
-    // A transport component *is* its domain's height: both its ports sit on
-    // the axis of the run it draws.
-    if me.arch == Arch::Run {
-        return me.vol.centre().y;
-    }
     let (lo, hi) = (me.vol.lo.y, me.vol.hi.y);
     if !side.horizontal() {
         return if side == Side::Top { hi } else { lo };
@@ -1418,18 +1359,6 @@ fn line_of(u: &Placed, c: u8) -> Mm {
 fn reach(u: &Placed, c: u8) -> (Mm, Mm) {
     let here = line_of(u, c);
     let edge = 200;
-    if u.arch == Arch::Run {
-        if c == 1 {
-            return (here, here);
-        }
-        let half = coord(u.vol.size(), c) / 2;
-        let (t0, t1) = match c {
-            0 => (u.tile.0 * TILE, (u.tile.0 + u.tile.2) * TILE),
-            _ => (u.tile.1 * TILE, (u.tile.1 + u.tile.3) * TILE),
-        };
-        let (lo, hi) = (t0 + half, t1 - half);
-        return if lo <= hi { (lo, hi) } else { (here, here) };
-    }
     let (lo, hi) = (coord(u.vol.lo, c) + edge, coord(u.vol.hi, c) - edge);
     if lo > hi {
         return (here, here);
@@ -1458,27 +1387,8 @@ fn lane_between(lo: Mm, hi: Mm, want: Mm) -> Mm {
     best.unwrap_or(want)
 }
 
-/// Move a component's drive line onto the solved one -- and, if the component
-/// is a run, move the run.
+/// Move a component's drive line onto the solved one.
 fn slide(u: &mut Placed, c: u8, to: Mm) {
-    if u.arch == Arch::Run {
-        // The body goes where the line goes: a run *is* its own connection, so
-        // a shaft whose couplings are half a metre off the middle of the thing
-        // drawing them is not a near miss, it is a picture of a bent shaft.
-        let d = to - coord(u.vol.centre(), c);
-        u.vol = Vol::new(
-            with_coord(u.vol.lo, c, coord(u.vol.lo, c) + d),
-            with_coord(u.vol.hi, c, coord(u.vol.hi, c) + d),
-        );
-        u.clear = u.vol.grow_flat(CLEAR);
-        for s in u.sockets.iter_mut() {
-            if s.out.axis() == Some(c) {
-                continue;
-            }
-            s.at = with_coord(s.at, c, to);
-        }
-        return;
-    }
     // Every drive flange on the machine, because they are all on the one line
     // -- except one that faces along this very axis, which is not on the line,
     // it is looking down it.
@@ -1579,11 +1489,7 @@ fn align_lines(d: &Design, units: &mut [Placed]) {
             // there it is the machine that should meet the line, and a
             // machine that does not is a metre and a half of step that a
             // half-metre-wide chute has to go round.
-            if c == 1
-                && a.dom == Domain::Material
-                && units[i].arch != Arch::Run
-                && units[j].arch != Arch::Run
-            {
+            if c == 1 && a.dom == Domain::Material {
                 continue;
             }
             let (Some(ra), Some(rb)) =
@@ -1617,24 +1523,12 @@ fn align_lines(d: &Design, units: &mut [Placed]) {
 }
 
 /// How far one flange can slide on one axis: the face it is on, inset by its
-/// own radius, or the whole strip of tiles when the component is a run.
+/// own radius.
 ///
 /// `None` when it has already been solved against something else and moving it
 /// again would unsolve that.
 fn slack(u: &Placed, k: usize, c: u8, done: &[[bool; 3]]) -> Option<(Mm, Mm)> {
     let s = &u.sockets[k];
-    if u.arch == Arch::Run {
-        // Moving a run moves both its ends, so a run with one end already on
-        // somebody's line has no freedom left on that axis: sliding it to
-        // please the second connection would take the first one with it, and
-        // the first one's partner is not coming.
-        if done.iter().any(|f| f[c as usize]) {
-            let v = coord(s.at, c);
-            return Some((v, v));
-        }
-        let (lo, hi) = reach(u, c);
-        return if lo <= hi { Some((lo, hi)) } else { None };
-    }
     if done[k][c as usize] {
         let v = coord(s.at, c);
         return Some((v, v));
@@ -1648,15 +1542,8 @@ fn slack(u: &Placed, k: usize, c: u8, done: &[[bool; 3]]) -> Option<(Mm, Mm)> {
     Some((lo, hi))
 }
 
-/// Remember that a flange is on somebody's line -- and, for a run, that all of
-/// its flanges are, because they moved together.
-fn mark(done: &mut [[bool; 3]], u: &Placed, k: usize, c: u8) {
-    if u.arch == Arch::Run {
-        for f in done.iter_mut() {
-            f[c as usize] = true;
-        }
-        return;
-    }
+/// Remember that a flange is on somebody's line.
+fn mark(done: &mut [[bool; 3]], _u: &Placed, k: usize, c: u8) {
     done[k][c as usize] = true;
 }
 
@@ -1685,21 +1572,6 @@ fn nudge(u: &mut Placed, k: usize, c: u8, to: Mm, bodies: &[Vol], mine: usize) -
     if bodies.iter().enumerate().any(|(n, v)| n != mine && v.hits(stub)) {
         return false;
     }
-    if u.arch == Arch::Run {
-        let d = to - coord(u.vol.centre(), c);
-        u.vol = Vol::new(
-            with_coord(u.vol.lo, c, coord(u.vol.lo, c) + d),
-            with_coord(u.vol.hi, c, coord(u.vol.hi, c) + d),
-        );
-        u.clear = u.vol.grow_flat(CLEAR);
-        for s in u.sockets.iter_mut() {
-            if s.out.axis() == Some(c) {
-                continue;
-            }
-            s.at = with_coord(s.at, c, to);
-        }
-        return true;
-    }
     u.sockets[k].at = now;
     true
 }
@@ -1710,11 +1582,8 @@ fn on_face(me: &Placed, side: Side, f: P3, y: Mm, slot: i32, n: i32) -> P3 {
     let c = me.vol.centre();
     let s = me.vol.size();
     // Two ports on one face of a machine are spread along it so they are not
-    // the same nozzle drawn twice. Two ports on one end of a *run* are not:
-    // the body is eight hundred millimetres of line, everything on it is on
-    // the line, and spreading them puts the drive half a metre beside the
-    // screw it is supposed to be turning.
-    let off = if n <= 1 || me.arch == Arch::Run {
+    // the same nozzle drawn twice.
+    let off = if n <= 1 {
         0
     } else {
         (slot * 2 - (n - 1)) * (s.x.min(s.z) / (2 * n + 2))

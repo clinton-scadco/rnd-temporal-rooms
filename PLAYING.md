@@ -240,7 +240,7 @@ The third head only gets the 100/s the seam has left — a seam is a budget, not
 a socket, and the inspector says so. This costs nothing in footprint (still 384
 tiles) and is what every other room burns.
 
-Finishing Coal Basin hands over **motor, gearbox, line shaft** and opens *both*
+Finishing Coal Basin hands over **motor, gearbox, clutch** and opens *both*
 Iron Valley and the Power Station.
 
 ---

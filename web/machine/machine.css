@@ -304,6 +304,16 @@ button.link {
 .why { margin: .5rem 0; padding: .4rem .5rem; background: var(--sunk); border-left: 2px solid var(--rule); }
 .why div { font: 11px var(--mono); color: var(--muted); padding: .08rem 0; }
 .why div:first-child { color: var(--ink); }
+/* What a connection loses to its own length, which is the price of distance
+   now that there is no component to charge for it. Signal rather than muted:
+   it is a number the player can make smaller by moving something. */
+.why div.cost { color: var(--signal); }
+.why div.bad { color: var(--bad); }
+
+/* The one property a connection has. */
+label.belt { display: flex; align-items: center; gap: .4rem; margin: .5rem 0 0; cursor: pointer; }
+label.belt input[type="checkbox"] { width: auto; margin: 0; }
+label.belt span { font-size: 12px; }
 
 .bar { height: 7px; background: var(--sunk); border: 1px solid var(--rule); border-radius: 2px; overflow: hidden; margin: .3rem 0; }
 .bar i { display: block; height: 100%; background: var(--accent); }

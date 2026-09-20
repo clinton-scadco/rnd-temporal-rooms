@@ -254,6 +254,21 @@ function wire(ctx, boxes, w, flow, ui, index) {
   ctx.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
   ctx.stroke();
   ctx.setLineDash([]);
+  // A belt is drawn as two lines rather than one, because that is what it is:
+  // a loop over a pair of pulleys, and the one connection in the plan that
+  // does not pass vibration. It has to be readable without clicking on it --
+  // "which of these drives is isolated" is the question the first era is
+  // played by answering.
+  if (w.belt) {
+    ctx.globalAlpha = on ? 0.5 : 0.2;
+    ctx.lineWidth = 1;
+    for (const d of [-2.2, 2.2]) {
+      ctx.beginPath();
+      ctx.moveTo(c[0], c[1] + d);
+      ctx.bezierCurveTo(c[2], c[3] + d, c[4], c[5] + d, c[6], c[7] + d);
+      ctx.stroke();
+    }
+  }
   if (selected) {
     ctx.globalAlpha = 1;
     ctx.lineWidth = 1 + 4 * frac + 3;

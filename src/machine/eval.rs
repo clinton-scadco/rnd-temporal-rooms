@@ -706,9 +706,16 @@ pub fn constants() -> Json {
         .set("reactorHeat", parts::REACTOR_HEAT as i64)
         .set("reactorFuel", parts::REACTOR_FUEL as i64)
         .set("minThrottle", parts::MIN_THROTTLE as i64)
-        .set("pipeLossPct", parts::PIPE_LOSS_PCT as i64)
-        .set("reach", parts::REACH as i64)
+        // How far each domain reaches and what a tile of it costs, which is
+        // what the transport family turned into. The browser refuses a wire
+        // the server would refuse, so it needs the same table rather than a
+        // copy of it kept in step by hand.
+        .set("spans", spans())
         .set("reachPower", parts::REACH_POWER as i64)
+        .set("fallBonus", parts::FALL_BONUS as i64)
+        .set("beltLossPct", parts::BELT_LOSS_PCT as i64)
+        .set("beltCarries", parts::BELT_CARRIES as i64)
+        .set("beltReach", parts::BELT_REACH as i64)
         .set("turbineMin", parts::TURBINE_MIN as i64)
         .set("spinMax", parts::SPIN_MAX as i64)
         .set("spinUp", parts::SPIN_UP as i64)
@@ -726,12 +733,25 @@ pub fn constants() -> Json {
         .set("formNames", Json::arr(super::stuff::FORM_NAMES.to_vec()))
 }
 
+/// The reach and the per-tile loss of every domain, by tag.
+fn spans() -> Json {
+    let mut o = Json::obj();
+    for d in super::stuff::DOMAINS.iter() {
+        let s = parts::span(*d);
+        o = o.set(
+            d.tag(),
+            Json::obj().set("reach", s.reach as i64).set("lossPct", s.loss_pct as i64),
+        );
+    }
+    o
+}
+
 /// How many of the shipped designs each component appears in, and how many
 /// distinct briefs.
 ///
 /// This is the experiment's own acceptance test, and it is deliberately a
 /// number rather than an opinion: the note that asked for experiment 07 said
-/// that if the same motor, pump, buffer and shaft turn up across several
+/// that if the same motor, pump, buffer and gearbox turn up across several
 /// designs the primitives are good, and that if every challenge needs ten
 /// bespoke components used nowhere else the abstraction is wrong. So count
 /// them.

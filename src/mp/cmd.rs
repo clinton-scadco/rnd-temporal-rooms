@@ -802,13 +802,8 @@ fn apply_one(w: &mut World, c: &Cmd, out: &mut Vec<Effect>) -> Result<(), String
         Act::ConnectComponent { id, from, from_port, to, to_port } => {
             let player = c.player;
             let d = draft_of(w, *id, player)?;
-            d.can_wire(from, from_port, to, to_port)?;
-            d.wires.push(Wire {
-                from: from.clone(),
-                from_port: from_port.clone(),
-                to: to.clone(),
-                to_port: to_port.clone(),
-            });
+            d.can_wire(from, from_port, to, to_port, false)?;
+            d.wires.push(Wire::new(from, from_port, to, to_port));
         }
         Act::DisconnectComponent { id, from, from_port, to, to_port } => {
             let player = c.player;
@@ -1036,12 +1031,7 @@ pub fn redrawn(d: &Design) -> Design {
             .unwrap_or_else(|| old.to_string())
     };
     for w in &d.wires {
-        out.wires.push(Wire {
-            from: now(&w.from),
-            from_port: w.from_port.clone(),
-            to: now(&w.to),
-            to_port: w.to_port.clone(),
-        });
+        out.wires.push(Wire { from: now(&w.from), to: now(&w.to), ..w.clone() });
     }
     out
 }

@@ -171,7 +171,9 @@ const cat = doc.state.cat;
 
 console.log('catalogue');
 ok(cat.order.length > 30, `${cat.order.length} components`);
-ok(typeof cat.constants.reach === 'number', 'the reach limit came from Rust');
+ok(cat.constants.spans && typeof cat.constants.spans.heat.reach === 'number',
+   'the reach and the price of every domain came from Rust');
+ok(typeof cat.constants.beltReach === 'number', 'and what a belt is worth');
 ok(cat.briefs.length === 5, 'five briefs');
 ok(cat.substances.length > 0, 'and the substances a source can draw');
 // Experiment 14: the palette groups by century, offers frames and colours
@@ -228,9 +230,11 @@ for (const name of names) {
     const without = { ...design, wires: design.wires.filter(x => x !== w) };
     const saved = doc.state.design;
     doc.state.design = without;
-    const problem = doc.wireProblem(a, ai, b, bi);
+    const problem = doc.wireProblem(a, ai, b, bi, w.belt);
     doc.state.design = saved;
-    ok(!problem, `would let you draw ${w.from}.${w.fromPort} -> ${w.to}.${w.toPort} (${problem})`);
+    ok(!problem,
+       `would let you draw ${w.from}.${w.fromPort} -> ${w.to}.${w.toPort}`
+       + `${w.belt ? ' as a belt' : ''} (${problem})`);
   }
 
   // 2. The file the browser shows is the file the server writes.
@@ -727,6 +731,71 @@ console.log('the third axis');
   ok(/\bat \d+,\d+,\d+/.test(st.source), 'the file writes the third tile');
   ok(/\bface (east|south|west|north)\b/.test(st.source), 'and which way things face');
   ok(panels.emit() === st.source, 'and the browser writes the same file');
+}
+
+// ---------------------------------------- the connection is the component
+//
+// The transport family is gone: no pipes, no chute, no screw, no line shaft
+// and no belt. What is left is a connection that knows how far it reaches,
+// what a tile of it costs, and -- on a drive -- whether it is slack. The
+// browser has its own copy of all three, because it has to refuse an illegal
+// wire while the pointer is still moving, so all three are checked here
+// against the Rust that has the final word.
+console.log('the connection is the component');
+{
+  for (const tag of ['heatpipe', 'steampipe', 'fluidpipe', 'chute', 'screw', 'shaft', 'belt']) {
+    ok(!cat.parts[tag], `${tag} is not in the catalogue`);
+  }
+  ok(!cat.order.some(k => cat.parts[k].family === 'transport'),
+     'and neither is the family');
+
+  // The price of distance, on the design that exists to show it.
+  const src = readFileSync(join(here, '..', 'designs', '13-longreach.machine'), 'utf8');
+  const opened = await fetch(base + '/api/open', { method: 'POST', body: src }).then(r => r.json());
+  ok(opened.ok, `opened the long-reach design (${opened.error || ''})`);
+  const st = await fetch(base + '/api/state?t=1000', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design: opened.design }),
+  }).then(r => r.json());
+  ok(st.ok, `and ran it (${st.error || ''})`);
+  const main = st.snapshot.wires.find(w => w.from === 'R1');
+  ok(main && main.gap > 10, `the heat main is ${main && main.gap} tiles long`);
+  ok(main.lossPct === main.gap, 'and costs a percent a tile');
+  ok(Number(main.lost) > 0, 'which is a number of units a tick, on the connection');
+
+  // The belt: the one property a wire has, and the one place it means
+  // anything. Checked against the compiler both ways round.
+  doc.state.design = JSON.parse(JSON.stringify(opened.design));
+  const heat = doc.state.design.wires.findIndex(w => w.fromPort === 'heat');
+  ok(doc.setBelt(heat, true), 'a heat connection cannot be a belt');
+  ok(!doc.state.design.wires[heat].belt, 'and was not quietly made one');
+  const drive = doc.state.design.wires.findIndex(w => w.toPort === 'rotary');
+  ok(doc.setBelt(drive, true) === null, 'a drive can be');
+  ok(doc.state.design.wires[drive].belt, 'and says so');
+  ok(/belt/.test(panels.emit()), 'the file writes the word');
+
+  const belted = await fetch(base + '/api/state?t=1000', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design: doc.state.design }),
+  }).then(r => r.json());
+  ok(belted.ok, `the compiler takes it too (${belted.error || ''})`);
+  const w = belted.snapshot.wires.find(x => x.toPort === 'rotary');
+  ok(w.belt, 'and agrees it is a belt');
+  ok(w.lossPct === cat.constants.beltLossPct, `which costs ${w.lossPct}% flat`);
+  ok(w.rate <= cat.constants.beltCarries, `and carries at most ${w.rate}/tick`);
+
+  // And a heat connection the compiler would refuse is refused here first.
+  const bad = { ...opened.design, wires: opened.design.wires.map(x =>
+    x.fromPort === 'heat' ? { ...x, belt: true } : x) };
+  const refused = await fetch(base + '/api/state?t=100', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ design: bad }),
+  }).then(r => r.json());
+  ok(!refused.ok && /belt/.test(refused.error || ''),
+     `the compiler refuses it as well (${refused.error || 'it did not'})`);
 }
 
 // Every module at least parses in a real module loader.

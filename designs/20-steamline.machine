@@ -5,7 +5,7 @@
 # wherever the coal can be got to. So this plant is not laid out around a
 # prime mover, it is laid out around a *boiler house*:
 #
-#   coal -> burner -> exchanger -> steam engine -> gearbox -> line shaft
+#   coal -> burner -> exchanger -> steam engine -> gearbox -> crushers
 #                        ^                |
 #                        |                v
 #                     jacket <------- condensate
@@ -36,10 +36,12 @@
 #    the one nobody expects. This plant draws twelve units of water a tick
 #    where the first-era one draws four hundred.
 #
-# The drive train is one gearbox and two shafts and nothing is isolated from
-# anything, because steel rates 9, cast iron rates 7, and a crusher shakes at 7.
-# There are no belts in this file. That is not a saving of five tiles each, it
-# is the reason the whole machine can be a tight block instead of a long line.
+# The drive train is one gearbox and three rigid wires, and nothing is isolated
+# from anything, because steel rates 9, cast iron rates 7, and a crusher shakes
+# at 7. There is not a `belt` anywhere in this file, and that is the whole of
+# the second era: 19-waterline needs four of them and pays eight percent on
+# every one, and this plant pays nothing because it can bolt its crushers
+# straight to the drive.
 #
 # What it costs: 20 coal a tick, forever, and a machine that stops if the fire
 # goes out.
@@ -50,11 +52,8 @@ brief line
 inlet     I1  at 0,0    draws ore
 crusher   C1  at 4,0
 crusher   C2  at 9,0
-screw     SC1 at 14,0
-outlet    O1  at 18,0
+outlet    O1  at 14,0
 
-shaft     SH1 at 5,5
-shaft     SH2 at 11,5
 gearbox   GB1 at 4,7   ratio 2
 
 steamengine SE1 at 4,10
@@ -84,13 +83,9 @@ wire P1.water -> V1.in
 wire V1.out -> HX1.water
 
 wire SE1.rotary -> GB1.in
-wire GB1.out -> SH1.in
-wire SH1.out -> SH2.in
-wire SH1.out -> C1.drive
-wire SH1.out -> C2.drive
-wire SH2.out -> SC1.drive
+wire GB1.out -> C1.drive
+wire GB1.out -> C2.drive
 
 wire I1.out -> C1.in
 wire C1.out -> C2.in
-wire C2.out -> SC1.in
-wire SC1.out -> O1.solid
+wire C2.out -> O1.solid

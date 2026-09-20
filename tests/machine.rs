@@ -352,6 +352,191 @@ fn the_parts_table_is_in_order() {
     }
 }
 
+// ------------------------------------------- the connection is the component
+
+/// Distance costs, per tile of clear air, and the price is the connection's.
+///
+/// The seven transport components are gone, and this is the mechanic that
+/// replaced the only one of them anybody built a plant around. A heat main used
+/// to be free up to six tiles and then cost 2% per pipe; now it costs 1% a
+/// tile, continuously, from the first tile of daylight between the two
+/// footprints.
+///
+/// Three things are asserted rather than one, because only the third is
+/// interesting. That a long run loses more than a short one is arithmetic.
+/// That a run with *no* gap loses nothing is the rule that keeps the tile grid
+/// load bearing. And that moving the exchanger one tile is worth exactly one
+/// percent is the thing a step function could never have given a player.
+#[test]
+fn distance_is_charged_by_the_tile() {
+    use temporal_rooms::machine::stuff::Domain;
+
+    let at = |x: i32| {
+        format!(
+            "machine \"Reach\"\nbrief power\n\
+             reactor   R1  at 0,0\n\
+             exchanger HX1 at {x},0\n\
+             pump      W1  at {x},4\n\
+             skip      SK1 at {},0\n\
+             wire R1.heat -> HX1.heat\n\
+             wire W1.water -> HX1.water\n\
+             wire HX1.steam -> SK1.vapour\n",
+            x + 4
+        )
+    };
+
+    // The reactor is four tiles wide, so `at x` is a gap of `x - 4`.
+    let loss = |x: i32| -> u64 {
+        let d = Design::parse(&at(x)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(d.check().is_empty(), "{:?}", d.check()[0].what);
+        let l = d.links().unwrap()[0];
+        assert_eq!(l.gap, x - 4, "the gap is the clear air between the footprints");
+        l.loss_pct
+    };
+
+    assert_eq!(loss(4), 0, "two components that touch pay nothing");
+    assert_eq!(loss(5), 1, "and one tile of daylight is one percent");
+    assert_eq!(loss(10), 6);
+    assert_eq!(loss(22), 18, "as far as a heat connection reaches");
+
+    // Which is not the same for every domain, and the differences are the
+    // argument rather than the numbers. Pumping something cold down a pipe is
+    // the one kind of transport that genuinely does not care.
+    assert_eq!(parts::span(Domain::Fluid).loss_pct, 0, "fluid is free");
+    assert_eq!(parts::span(Domain::Material).loss_pct, 0, "so is material");
+    assert!(parts::span(Domain::Heat).loss_pct > 0, "heat is not");
+    assert_eq!(parts::span(Domain::Electrical).loss_pct, 0, "and nor is wiring");
+    for dom in temporal_rooms::machine::stuff::DOMAINS {
+        assert!(
+            parts::span(dom).reach > 6,
+            "{dom} reaches {} -- every domain should reach further than the six \
+             tiles a pipe existed to extend",
+            parts::span(dom).reach
+        );
+    }
+
+    // And it is not a number in a table: it comes off the wire, tick by tick,
+    // and the connection reports both halves of it.
+    let d = Design::parse(&at(22)).unwrap();
+    let mut m = Machine::new(&d).unwrap();
+    let r1 = m.index_of("R1").unwrap();
+    let main = 0;
+    for _ in 0..400 {
+        m.step();
+    }
+    let (mut moved, mut shed) = (0u64, 0u64);
+    for t in 0..200 {
+        m.step();
+        // Per tick, on every tick, including the ones where nothing moves at
+        // all: what the run kept plus what it delivered is what set out.
+        assert_eq!(
+            m.lost[main] + m.flow[main],
+            m.st[r1].sent[0],
+            "t={t}: the heat main did not account for itself"
+        );
+        moved += m.flow[main];
+        shed += m.lost[main];
+    }
+    assert!(moved > 0, "the exchanger is being fed");
+    assert!(shed > 0, "an eighteen-percent heat main loses something");
+}
+
+/// A chute, as geometry: a material connection that falls reaches further.
+#[test]
+fn material_that_falls_reaches_further() {
+    // A hopper is 3x3 and three storeys tall, so `up 3` stands the second one
+    // clear above the first.
+    let src = |dx: i32, up: i32| {
+        format!(
+            "machine \"Fall\"\nbrief crush\n\
+             hopper H1 at 0,0,{up}\n\
+             hopper H2 at {dx},0\n\
+             wire H1.out -> H2.in\n"
+        )
+    };
+    let ok = |dx: i32, up: i32| {
+        Design::parse(&src(dx, up)).unwrap().check().is_empty()
+    };
+
+    assert!(ok(13, 0), "level, a material connection reaches ten");
+    assert!(!ok(14, 0), "and not eleven");
+    assert!(ok(19, 4), "falling, it reaches six further");
+    assert!(!ok(20, 4), "and not seven");
+
+    // The fall is a fact about solids, not about the `z` field: a component
+    // whose feet are inside the other one's height is not standing over it,
+    // and a hopper is four storeys tall.
+    assert!(!ok(14, 3), "three storeys up is not clear of a four-storey hopper");
+}
+
+/// A belt is a property of a drive, and the only property a wire has.
+///
+/// The catalogue half of the claim. `tests/era.rs` runs the mechanical half --
+/// the same plant belted and rigid, four characters apart -- and this pins the
+/// three numbers that make it a trade rather than a free upgrade.
+#[test]
+fn a_belt_is_a_word_on_a_wire() {
+    for tag in ["heatpipe", "steampipe", "fluidpipe", "chute", "screw", "shaft", "belt"] {
+        assert!(parts::by_tag(tag).is_none(), "`{tag}` is still in the catalogue");
+    }
+
+    let src = |belt: &str| {
+        format!(
+            "machine \"Drive\"\nbrief crush\n\
+             motor   MO1 at 0,0\n\
+             crusher C1  at 2,0\n\
+             wire MO1.rotary -> C1.drive{belt}\n"
+        )
+    };
+    let link = |belt: &str| {
+        let d = Design::parse(&src(belt)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(d.check().is_empty(), "{:?}", d.check()[0].what);
+        d.links().unwrap()[0]
+    };
+
+    let rigid = link("");
+    let slack = link("  belt");
+    assert!(!rigid.belt);
+    assert!(slack.belt);
+
+    // It costs a flat rate rather than a rate per tile, because a belt has no
+    // bearings along its length.
+    assert_eq!(slack.loss_pct, parts::BELT_LOSS_PCT);
+    assert_eq!(rigid.loss_pct, 0, "and these two are touching, so the shaft costs nothing");
+
+    // It carries what a belt carries, whatever the port it is bolted to could
+    // manage. A steam engine makes 180 rotary a tick and a belt will pass 100
+    // of it, which is the trade: the thing that does not shake your frame
+    // apart is also the thing that will not carry your whole engine.
+    let big = parts::part(Kind::SteamEngine).ports[1].rate;
+    assert!(big > parts::BELT_CARRIES, "an engine outruns a belt, which is the point");
+    assert_eq!(slack.carries(big), parts::BELT_CARRIES);
+    assert_eq!(rigid.carries(big), big);
+    // And it does not invent capacity it was never offered.
+    let small = parts::part(Kind::Motor).ports[1].rate;
+    assert!(small < parts::BELT_CARRIES);
+    assert_eq!(slack.carries(small), small);
+
+    // And it reaches further than the rigid drive it replaced, which is the
+    // one thing it is unambiguously better at.
+    assert!(parts::BELT_REACH > parts::reach(temporal_rooms::machine::stuff::Domain::Rotary));
+
+    // Only a rotary connection can be one. A flag that is sometimes read and
+    // sometimes ignored is a flag nobody can reason about, so the document
+    // refuses it rather than dropping it.
+    let d = Design::parse(
+        "machine \"x\"\nbrief power\n\
+         reactor R1 at 0,0\nexchanger HX1 at 5,0\n\
+         wire R1.heat -> HX1.heat  belt\n",
+    )
+    .unwrap();
+    assert!(
+        d.check().iter().any(|f| f.what.contains("belt")),
+        "a heat connection was quietly allowed to be a belt: {:?}",
+        d.check().iter().map(|f| &f.what).collect::<Vec<_>>()
+    );
+}
+
 // ------------------------------------------------------------ the physics
 
 /// Each of the eight components, alone or in the smallest arrangement that
@@ -426,15 +611,13 @@ fn nothing_appears_from_nowhere() {
                 // A component that transforms one stream into another is
                 // allowed to change the total; the ones that only move things
                 // are not.
+                // `left` is what set out down the wires, before the run took
+                // its cut: the loss now happens between two components rather
+                // than inside one, which is the whole of what deleting the
+                // transport family did to this invariant.
                 if matches!(
                     m.kinds[i],
-                    Kind::HeatPipe
-                        | Kind::SteamPipe
-                        | Kind::FluidPipe
-                        | Kind::Chute
-                        | Kind::Shaft
-                        | Kind::Belt
-                        | Kind::Tank
+                    Kind::Tank
                         | Kind::Drum
                         | Kind::Hopper
                         | Kind::Flywheel
@@ -828,26 +1011,31 @@ fn a_press_below_its_floor_makes_nothing() {
     assert!(found.contains("flywheel"), "and names a way out: {found}");
 }
 
-/// Two substances will not share a port. A pipe full of water does not accept
+/// Two substances will not share a port. A drum full of water does not accept
 /// crude, and the component says which port is holding what.
 #[test]
 fn one_port_holds_one_substance() {
-    let src = "machine \"mixed\"\nbrief distil\n\
-               pump P1 at 0,0\npump P2 at 0,4 draws crude\n\
-               fluidpipe FP1 at 4,2\n\
-               wire P1.water -> FP1.in\nwire P2.water -> FP1.in\n";
+    let src = "machine \"mixed\"
+brief distil
+               pump P1 at 0,0
+pump P2 at 0,4 draws crude
+               drum D1 at 4,1
+               wire P1.water -> D1.in
+wire P2.water -> D1.in
+";
     let d = Design::parse(src).unwrap();
     assert!(d.check().is_empty(), "the document is legal; the physics is not");
     let mut m = Machine::new(&d).unwrap();
     for _ in 0..50 {
         m.step();
     }
-    let fp = m.index_of("FP1").unwrap();
+    let fp = m.index_of("D1").unwrap();
     let held = m.st[fp].buf[0].stuff.subst;
     assert!(held == Subst::Water || held == Subst::Crude, "it holds one of them");
-    // And the other one never got in: the pipe's contents are all one substance.
+    // And the other one never got in: the drum's contents are all one
+    // substance.
     let all_one = m.st[fp].buf.iter().filter(|b| b.qty > 0).all(|b| b.stuff.subst == held);
-    assert!(all_one, "a pipe carries one thing at a time");
+    assert!(all_one, "a buffer carries one thing at a time");
 }
 
 /// A gearbox trades speed for the ability to turn something heavy, both ways,
@@ -893,7 +1081,7 @@ fn blending_is_weighted_and_stays_whole() {
 fn the_infrastructure_primitives_span_more_than_one_brief() {
     let designs: Vec<Design> = every().iter().map(|p| load(p)).collect();
     let uses = eval::reuse(&designs);
-    for tag in ["reactor", "pump", "exchanger", "turbine", "shaft", "motor", "outlet"] {
+    for tag in ["reactor", "pump", "exchanger", "turbine", "gearbox", "motor", "outlet"] {
         let u = uses
             .iter()
             .find(|u| u.kind.tag() == tag)

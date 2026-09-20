@@ -165,7 +165,7 @@ pub static SITES: &[Site] = &[
                footprint is its design's footprint, so the way to win space here is to open \
                one up.",
         needs: &[],
-        gives: &["motor", "gearbox", "shaft"],
+        gives: &["motor", "gearbox", "clutch"],
         kit: &[
             fix("grid", 30, 2, None),
             ship("depot", 30, 8, "Coal"),

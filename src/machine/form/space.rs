@@ -99,10 +99,10 @@ pub fn minds_heat(k: Kind) -> bool {
     )
 }
 
-/// Whether anybody ever has to get to it. A pad, a kerb and a length of pipe
-/// do not need standing room; everything with moving parts does.
+/// Whether anybody ever has to get to it. A pad and a kerb do not need
+/// standing room; everything with moving parts does.
 pub fn serviceable(a: Arch) -> bool {
-    !matches!(a, Arch::Pad | Arch::Run)
+    !matches!(a, Arch::Pad)
 }
 
 /// Whether it is heavy enough that the ground has to be underneath it. A

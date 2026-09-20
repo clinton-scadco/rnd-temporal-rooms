@@ -1,19 +1,21 @@
 # The same brief as 07-crushline, answered without touching the grid.
 #
-# Four turbines drive two line shafts directly. No generator, no motor, no
-# electricity anywhere in the machine: rotary is a domain, and a turbine already
-# makes it, so putting it through a generator and back through a motor would be
-# two conversions and 19% for nothing.
+# Four turbines drive two crushers, a mill and a separator directly. No
+# generator, no motor, no electricity anywhere in the machine: rotary is a
+# domain, and a turbine already makes it, so putting it through a generator and
+# back through a motor would be two conversions and 19% for nothing.
 #
 # What it costs is everything the power brief was trying to minimise -- a
-# reactor, four exchangers, three pumps, 350 water a tick and the wasted heat of
-# two heat pipes. Twenty-five components against fifteen, on twice the plot, for
-# roughly the same ore. That is the trade, stated in numbers, and neither
-# answer is wrong.
+# reactor, four exchangers, three pumps, 350 water a tick and a long heat main
+# across the plant to the pair of exchangers that could not fit beside the
+# reactor. Twenty components against fifteen, on twice the plot, for roughly the
+# same ore. That is the trade, stated in numbers, and neither answer is wrong.
 #
 # This is also the design the note that started experiment 07 asked for: several
-# machines hanging off one shared shaft, which nothing anywhere had to be told
-# was allowed.
+# machines hanging off one drive, which nothing anywhere had to be told was
+# allowed -- and which, as it turns out, never needed a line shaft to say so.
+# T3 and T4 both feed the mill and both feed the separator, four wires, and the
+# ports divide what arrives.
 
 machine "Steam Crusher"
 brief crush
@@ -26,28 +28,22 @@ separator S1  at 19,0
 outlet    O1  at 24,0
 skip      SK1 at 24,3
 
-shaft     SH1 at 6,5
-shaft     SH2 at 16,5
 gearbox   GB1 at 5,7   ratio 4
 
 turbine   T1  at 0,5
 turbine   T2  at 11,5
-turbine   T3  at 22,5
-turbine   T4  at 22,8
+turbine   T3  at 18,5
+turbine   T4  at 18,8
 
 exchanger HX1 at 0,8
 exchanger HX2 at 11,8
-exchanger HX3 at 26,5
-exchanger HX4 at 26,9
+exchanger HX3 at 23,5
+exchanger HX4 at 23,9
 
-heatpipe  HP1 at 14,13
-heatpipe  HP2 at 20,13
-heatpipe  HP3 at 22,11
-
-reactor   R1  at 5,12
+reactor   R1  at 10,12
 pump      W1  at 0,12
-pump      W2  at 11,12
-pump      W3  at 30,7
+pump      W2  at 16,12
+pump      W3  at 28,7
 
 wire I1.out -> C1.in
 wire C1.out -> C2.in
@@ -58,11 +54,8 @@ wire S1.tails -> SK1.solid
 
 wire R1.heat -> HX1.heat
 wire R1.heat -> HX2.heat
-wire R1.heat -> HP1.in
-wire HP1.out -> HP2.in
-wire HP2.out -> HP3.in
-wire HP3.out -> HX3.heat
-wire HP3.out -> HX4.heat
+wire R1.heat -> HX3.heat
+wire R1.heat -> HX4.heat
 
 wire W1.water -> HX1.water
 wire W2.water -> HX2.water
@@ -74,13 +67,12 @@ wire HX2.steam -> T2.steam
 wire HX3.steam -> T3.steam
 wire HX4.steam -> T4.steam
 
-wire T1.rotary -> SH1.in
-wire T2.rotary -> SH1.in
-wire T3.rotary -> SH2.in
-wire T4.rotary -> SH2.in
-
-wire SH1.out -> GB1.in
+wire T1.rotary -> GB1.in
+wire T2.rotary -> GB1.in
 wire GB1.out -> C1.drive
 wire GB1.out -> C2.drive
-wire SH2.out -> MI1.drive
-wire SH2.out -> S1.drive
+
+wire T3.rotary -> MI1.drive
+wire T4.rotary -> MI1.drive
+wire T3.rotary -> S1.drive
+wire T4.rotary -> S1.drive

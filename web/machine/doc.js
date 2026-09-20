@@ -2,16 +2,15 @@
 //
 //     state(design, t)
 //
-// The browser owns the design and nothing else. It does not know that a heat
-// pipe leaks 2%, what a turbine does below its threshold, or how long a tank
-// takes to fill; it posts the document, gets back the machine at a tick, and
-// draws it.
+// The browser owns the design and nothing else. It does not know what a
+// turbine does below its threshold, or how long a tank takes to fill; it posts
+// the document, gets back the machine at a tick, and draws it.
 //
 // What it *does* own a copy of is the catalogue -- footprints, port names,
 // domains, the reach limit -- because refusing to draw an illegal wire is a
 // thing that has to happen while the pointer is still moving. That copy is
 // fetched from the server at startup rather than typed in here, so the
-// thirty-eight components still have exactly one definition and it is in Rust.
+// thirty-seven components still have exactly one definition and it is in Rust.
 //
 // Experiment 07 added a second thing worth saying about the boundary: what a
 // wire carries is now a *stuff* rather than a number, and the browser is told
@@ -85,6 +84,35 @@ export function gap(a, b) {
   return dx + dy + dz;
 }
 
+/// Whether `a` stands clear above `b`, which is the one thing the third axis
+/// tells a material connection: it falls, so it is a chute and reaches
+/// further. All that is left of the chute component.
+export function falls(a, b) {
+  const A = box(a), B = box(b);
+  return A.z >= B.z + B.d;
+}
+
+/// How far a connection of this shape reaches, and what a tile of it costs.
+/// The same table the compiler uses, served from Rust at startup -- see
+/// `parts::span_of`.
+export function span(dom, falling, belt) {
+  const c = state.cat.constants;
+  if (belt && dom === 'rotary') return { reach: c.beltReach, lossPct: 0 };
+  const s = (c.spans && c.spans[dom]) || { reach: 6, lossPct: 0 };
+  return {
+    reach: s.reach + (falling && dom === 'material' ? c.fallBonus : 0),
+    lossPct: s.lossPct,
+  };
+}
+
+/// What a connection of this length loses, in percent of what it carries.
+export function lossPct(dom, g, belt) {
+  const c = state.cat.constants;
+  if (belt && dom === 'rotary') return c.beltLossPct;
+  const s = (c.spans && c.spans[dom]) || { lossPct: 0 };
+  return Math.min(90, s.lossPct * Math.max(0, g));
+}
+
 /// Whether a component put at these tiles would be inside another one.
 /// Sharing a footprint is not a clash -- it is a stack, which is the whole
 /// point of the third tile. Sharing a footprint at the same height is.
@@ -103,7 +131,7 @@ export function overlaps(u, x, y, z, ignore) {
 /// Exactly the rule the compiler uses, so nothing can be drawn that will then
 /// be refused -- and when it cannot be drawn, the reason is the one the server
 /// would have given.
-export function wireProblem(a, ai, b, bi) {
+export function wireProblem(a, ai, b, bi, belt) {
   if (!a || !b || a === b) return 'a component cannot be wired to itself';
   const pa = part(a.kind).ports[ai], pb = part(b.kind).ports[bi];
   if (!pa || !pb) return 'no such port';
@@ -112,16 +140,23 @@ export function wireProblem(a, ai, b, bi) {
   // not: a generator that runs a conveyor motor and exports the difference is
   // a design, so the only rule left is the domain.
   if (pa.type !== pb.type) return `${pa.name} carries ${pa.type}, ${pb.name} takes ${pb.type}`;
+  if (belt && pa.type !== 'rotary') return 'only a rotary connection can be a belt';
   const g = gap(a, b);
-  // Experiment 14: how far a connection reaches depends on the domain, because
-  // plumbing is a design decision and wiring is not.
-  const reach = pa.type === 'electrical'
-    ? state.cat.constants.reachPower
-    : state.cat.constants.reach;
+  // How far a connection reaches depends on the domain, on whether it falls,
+  // and on whether the player has called it a belt. That table is what the
+  // transport family turned into when it was deleted.
+  const down = falls(a, b);
+  const reach = span(pa.type, down, belt).reach;
   if (g > reach) {
-    return pa.type === 'electrical'
-      ? `${g} tiles apart — even a power connection only reaches ${reach}`
-      : `${g} tiles apart — a ${pa.type} connection reaches ${reach}. Move them together, stack them, or put a pipe in between`;
+    const head = `${g} tiles apart — a ${pa.type} connection reaches ${reach}`;
+    if (pa.type === 'electrical') return `${head}, and that is the longest in the plant`;
+    if (pa.type === 'material' && !down) {
+      return `${head}. Move them together, or stand ${a.name} above ${b.name} and let it fall`;
+    }
+    if (pa.type === 'rotary' && !belt) {
+      return `${head}. Move them together, stack them, or make it a belt`;
+    }
+    return `${head}. Move them together, or stack them`;
   }
   if (state.design.wires.some(w =>
       w.from === a.name && w.fromPort === pa.name && w.to === b.name && w.toPort === pb.name)) {
@@ -247,8 +282,31 @@ export function connect(a, ai, b, bi) {
   state.design.wires.push({
     from: a.name, fromPort: part(a.kind).ports[ai].name,
     to: b.name, toPort: part(b.kind).ports[bi].name,
+    belt: false,
   });
   changed(true);
+}
+
+/// Slack or rigid, on a rotary connection: the one property a wire has, and
+/// the whole of what is left of the belt. It costs 8% flat and carries 100 a
+/// tick, and it does not pass vibration.
+///
+/// Refused rather than silently ignored when the wire cannot be one, and
+/// refused when it would put the two ends out of each other's reach -- a
+/// control that offers an illegal edit is a control that lies.
+export function setBelt(i, belt) {
+  const w = state.design.wires[i];
+  if (!w) return 'no such connection';
+  const a = unitOf(w.from), b = unitOf(w.to);
+  if (!a || !b) return 'no such connection';
+  const ai = part(a.kind).ports.findIndex(q => q.name === w.fromPort);
+  const bi = part(b.kind).ports.findIndex(q => q.name === w.toPort);
+  const problem = wireProblem(a, ai, b, bi, belt);
+  // `already wired` is this very wire, which is not a reason to refuse.
+  if (problem && problem !== 'already wired') return problem;
+  w.belt = belt;
+  changed(true);
+  return null;
 }
 
 export function unwire(i) {

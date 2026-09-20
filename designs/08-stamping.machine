@@ -22,7 +22,6 @@ press     P1  at 15,0
 outlet    O1  at 20,0
 
 crank     CR1 at 15,5
-shaft     SH1 at 10,4
 motor     MO1 at 10,7
 motor     MO2 at 13,7
 mains     M1  at 4,10
@@ -36,8 +35,8 @@ wire P1.out -> O1.solid
 
 wire M1.power -> MO1.power
 wire M1.power -> MO2.power
-wire MO1.rotary -> SH1.in
-wire MO2.rotary -> SH1.in
-wire SH1.out -> R1.drive
-wire SH1.out -> CR1.drive
+wire MO1.rotary -> R1.drive
+wire MO2.rotary -> R1.drive
+wire MO1.rotary -> CR1.drive
+wire MO2.rotary -> CR1.drive
 wire CR1.stroke -> P1.drive

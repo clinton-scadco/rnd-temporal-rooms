@@ -24,7 +24,7 @@
 //! between eras is not the crusher. It is everything around it:
 //!
 //! ```text
-//!   water      water wheel -> line shaft -> belt -> pulley -> crusher
+//!   water      water wheel -> belt -> pulley -> crusher
 //!   steam      boiler -> steam engine -> gearbox -> crusher
 //!   electric   mains -> motor -> coupling -> crusher
 //! ```
@@ -149,9 +149,9 @@ impl Era {
     /// What building a plant out of this family actually feels like.
     pub fn blurb(self) -> &'static str {
         match self {
-            Era::Any => "a bin, a chute and a crusher are the same in every century",
+            Era::Any => "a bin, a hopper and a crusher are the same in every century",
             Era::Water => {
-                "one prime mover, one line shaft, and belts to everything -- slow, \
+                "one prime mover, and a belt to everything it turns -- slow, \
                  torquey, cold, and only as strong as the timber it is bolted to"
             }
             Era::Steam => {
@@ -252,9 +252,10 @@ impl Mat {
     ///
     /// This is the number that makes the first era a different machine. A
     /// crusher shakes at 7. Timber rates 4. So a water-wheel plant cannot bolt
-    /// its crusher to its line shaft, and the belt -- which is slack, and
-    /// therefore passes torque without passing shake -- stops being a lossy
-    /// pipe and becomes the reason the layout is shaped the way it is.
+    /// its crusher straight to its wheel, and the belt -- which is slack, and
+    /// therefore passes torque without passing shake -- stops being a way of
+    /// spending eight percent and becomes the reason the layout is shaped the
+    /// way it is.
     pub fn tol(self) -> u8 {
         match self {
             Mat::Wood => 4,
@@ -348,7 +349,7 @@ impl fmt::Display for Band {
 
 /// The physical facts about one kind of component.
 ///
-/// A row of zeroes is a legitimate row: a chute has no heat, no vibration and
+/// A row of zeroes is a legitimate row: an outlet has no heat, no vibration and
 /// no opinion about what it is made of, and saying so explicitly is cheaper
 /// than an `Option` on every field and more honest than leaving it out.
 pub struct Phys {
@@ -391,7 +392,7 @@ pub struct Phys {
 
 impl Phys {
     /// Whether this component has a body worth tracking the temperature of. A
-    /// chute does not; a steam engine emphatically does.
+    /// hopper does not; a steam engine emphatically does.
     pub fn thermal(&self) -> bool {
         self.heat > 0 && self.mass > 0
     }
@@ -537,9 +538,9 @@ pub fn shake_note(load: u8, mat: Mat, worst: &str) -> String {
         );
     }
     let cure = match mat {
-        Mat::Wood => "put it on cast iron, or break the drive with a belt",
-        Mat::CastIron => "put it on steel, or break the drive with a belt",
-        Mat::Steel => "break the drive with a belt -- there is nothing stiffer to bolt it to",
+        Mat::Wood => "put it on cast iron, or make the drive wire a belt",
+        Mat::CastIron => "put it on steel, or make the drive wire a belt",
+        Mat::Steel => "make the drive wire a belt -- there is nothing stiffer to bolt it to",
     };
     format!(
         "{} shakes at {load} and {} rates {} -- {cure}",

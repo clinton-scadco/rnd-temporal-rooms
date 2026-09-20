@@ -19,7 +19,7 @@
 //! last decimal place.
 
 use temporal_rooms::machine::design::Design;
-use temporal_rooms::machine::form::layout::{Arch, Mount};
+use temporal_rooms::machine::form::layout::Mount;
 use temporal_rooms::machine::form::{self, kit, Ask, Grade, Style, FAR, MEDIUM};
 use temporal_rooms::machine::{eval, orbit};
 
@@ -121,7 +121,7 @@ fn a_different_world_seed_is_a_different_plant() {
 
 // ---------------------------------------------------------- 3. reactivity
 
-/// Move the generator; the shaft that drives it, and the plinth under it, must
+/// Move the generator; the drive that turns it, and the plinth under it, must
 /// move too -- and the reactor at the other end of the plant must not so much
 /// as change a handwheel.
 #[test]
@@ -169,12 +169,7 @@ fn adding_a_component_has_visible_consequences() {
         face: None,
         tune: t1.tune,
     });
-    more.wires.push(temporal_rooms::machine::design::Wire {
-        from: "HX2".into(),
-        from_port: "steam".into(),
-        to: "T3".into(),
-        to_port: "steam".into(),
-    });
+    more.wires.push(temporal_rooms::machine::design::Wire::new("HX2", "steam", "T3", "steam"));
     assert!(more.check().is_empty(), "{:?}", more.check());
     let after = built(&more);
 
@@ -266,9 +261,6 @@ fn routes_go_round_equipment_rather_than_through_it() {
                 continue;
             }
             for (i, u) in plan.units.iter().enumerate() {
-                if u.arch == Arch::Run {
-                    continue;
-                }
                 // Its own two ends are allowed to be inside the things they
                 // are bolted to.
                 if r.name.starts_with(&format!("{}.", u.name))
@@ -334,8 +326,8 @@ fn the_library_stays_small() {
     // Experiment 08 held this at eight and experiment 09 raised it to twelve,
     // which is a ceiling being moved on purpose rather than a limit failing:
     // the material *language* needed four more distinctions than the material
-    // *library* had. It is still a library -- thirty-eight components, twelve
-    // materials -- and the day it is thirty-eight materials it is not.
+    // *library* had. It is still a library -- thirty-seven components, twelve
+    // materials -- and the day it is thirty-seven materials it is not.
     assert!(kit::MATS.len() <= 14, "one material library, not one per asset");
     for m in kit::MESHES {
         let g = kit::geom(m);
@@ -624,16 +616,13 @@ fn turning_a_machine_turns_its_nozzles() {
     }
 }
 
-/// Nothing floats. Everything either stands on the ground, stands on something
-/// that stands on the ground, or is a pipe.
+/// Nothing floats. Everything either stands on the ground or stands on
+/// something that stands on the ground.
 #[test]
 fn everything_that_is_up_is_held_up() {
     for (path, d) in all_designs() {
         let plan = form::layout::plan(&d);
         for u in &plan.units {
-            if u.arch == Arch::Run {
-                continue;
-            }
             if u.lift > 0 {
                 assert!(
                     matches!(u.mount, Mount::Plinth | Mount::Legs | Mount::Frame),

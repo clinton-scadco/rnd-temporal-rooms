@@ -16,6 +16,7 @@ import {
   unitOf,
   retune,
   unwire,
+  setBelt,
   num,
   toNum,
   brief,
@@ -41,10 +42,10 @@ const el = (tag, cls, text) => {
 export function renderPalette(onPick) {
   const box = $('#palette');
   box.replaceChildren();
-  // Thirty-eight buttons in one column is a list nobody reads, so they come out
-  // in the families they were designed in -- and the family headings are the
-  // argument of the experiment: sources, sinks, transport, stores, control,
-  // heat, mechanical, process, and nothing that is only ever one machine.
+  // Thirty-seven buttons in one column is a list nobody reads, so they come
+  // out in the families they were designed in -- and the family headings are
+  // the argument of the experiment: sources, sinks, stores, control, heat,
+  // mechanical, process, and nothing that is only ever one machine.
   let shown = null;
   for (const kind of state.cat.order) {
     const p = state.cat.parts[kind];
@@ -431,14 +432,14 @@ function bodyPane(box, snap) {
       `shaken at ${b.shaken}` +
       (b.shakenBy ? ` by ${b.shakenBy}` : '') +
       `, and ${b.materialTitle.toLowerCase()} carries ${b.tolerates}` +
-      (over ? ' \u2014 put a belt in the drive, or a stiffer frame under it' : '')));
+      (over ? ' \u2014 mark the drive wire a belt, or put a stiffer frame under it' : '')));
   }
   box.appendChild(wrap);
 }
 
 /// The components with a decision in them. Everything else is what it is.
 ///
-/// Nine kinds have a tunable and twenty-nine do not, so the shape of this
+/// Nine kinds have a tunable and the rest do not, so the shape of this
 /// function is a switch rather than a form: a slider for a throttle, a select
 /// for a substance, a number for a threshold. The catalogue says which kinds
 /// have one at all, so a component that stops being tunable in Rust stops
@@ -594,12 +595,59 @@ function wirePane(box, i) {
     if (live.carrying) why.appendChild(el('div', null, `carrying ${live.carrying}`));
     why.appendChild(el('div', null, `${live.type}: ${live.flow} of ${live.rate} per tick`));
     why.appendChild(el('div', null, `${(frac * 100).toFixed(1)}% of what this connection can carry`));
-    why.appendChild(el('div', null, `${live.gap} tiles apart, of ${state.cat.constants.reach} reachable`));
+    why.appendChild(el('div', null, `${live.gap} tiles apart, of ${live.reach} reachable`));
+    // The price of distance, which used to be a component you could click on
+    // and is now a line on the connection itself. Silent at zero: a run that
+    // costs nothing has nothing to say, and most of them do not.
+    if (live.lossPct > 0) {
+      why.appendChild(el('div', 'cost',
+        `losing ${live.lossPct}% on the way — ${live.lost}/tick`));
+    }
     box.appendChild(why);
   }
+  beltToggle(box, i, w);
   const b = el('button', null, 'remove this connection');
   b.addEventListener('click', () => { unwire(i); select(null); });
   box.appendChild(b);
+}
+
+/// The one property a connection has.
+///
+/// Only offered on a rotary wire, because it is the only place it means
+/// anything -- and offered there whatever the drive is currently doing,
+/// because the reason to reach for it is usually that something in the cluster
+/// is SHAKING and the panel has just said so.
+function beltToggle(box, i, w) {
+  const a = unitOf(w.from);
+  if (!a) return;
+  const p = part(a.kind).ports.find(q => q.name === w.fromPort);
+  if (!p || p.type !== 'rotary') return;
+
+  const row = el('label', 'belt');
+  const cb = el('input');
+  cb.type = 'checkbox';
+  cb.checked = !!w.belt;
+  const note = el('div', 'why');
+  const say = () => {
+    note.replaceChildren(el('div', null, w.belt
+      ? `slack: ${state.cat.constants.beltLossPct}% and at most `
+        + `${state.cat.constants.beltCarries}/tick, and it does not pass shake`
+      : 'rigid: a shaft and two couplings, and vibration goes straight through'));
+  };
+  cb.addEventListener('change', () => {
+    const problem = setBelt(i, cb.checked);
+    if (problem) {
+      cb.checked = !!w.belt;
+      note.replaceChildren(el('div', 'bad', problem));
+      return;
+    }
+    say();
+  });
+  row.appendChild(cb);
+  row.appendChild(el('span', null, 'belt drive'));
+  box.appendChild(row);
+  say();
+  box.appendChild(note);
 }
 
 // ------------------------------------------------------- holding it back
@@ -727,6 +775,8 @@ export function emit() {
     s += '\n';
   }
   if (d.wires.length) s += '\n';
-  for (const w of d.wires) s += `wire ${w.from}.${w.fromPort} -> ${w.to}.${w.toPort}\n`;
+  for (const w of d.wires) {
+    s += `wire ${w.from}.${w.fromPort} -> ${w.to}.${w.toPort}${w.belt ? '  belt' : ''}\n`;
+  }
   return s;
 }

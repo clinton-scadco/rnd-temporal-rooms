@@ -77,7 +77,6 @@ pub fn apply(
         let o = &owners[p.of as usize];
         let mat = match o.class {
             Owns::Unit => match plan.find(&o.name) {
-                Some(u) if u.arch == Arch::Run => transport(u, routes, p),
                 Some(u) => unit(u, p),
                 None => p.mat,
             },
@@ -188,20 +187,6 @@ fn unit(u: &Placed, p: &Piece) -> Mat {
             _ => skin(u),
         },
     }
-}
-
-/// A transport component draws its own run, so it is painted as pipework --
-/// in the service of whatever is actually flowing through it, which is found
-/// by asking the routes that arrive at it.
-fn transport(u: &Placed, routes: &[Run], p: &Piece) -> Mat {
-    let dom = parts::part(u.kind).ports.first().map(|q| q.dom).unwrap_or(Domain::Fluid);
-    let serve = routes
-        .iter()
-        .filter(|r| r.dom == dom && (r.name.starts_with(&format!("{}.", u.name)) || r.name.contains(&format!("-> {}.", u.name))))
-        .map(|r| r.serve)
-        .next()
-        .unwrap_or_else(|| dom.rest());
-    line(dom, serve, p)
 }
 
 // ---------------------------------------------------------------- pipework

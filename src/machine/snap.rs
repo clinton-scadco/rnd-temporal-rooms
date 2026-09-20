@@ -49,8 +49,16 @@ pub fn render(d: &Design, m: &Machine, r: &Report) -> Json {
                 .set("toPort", parts::part(m.kinds[l.to]).ports[l.to_port].name)
                 .set("type", p.dom.tag())
                 .set("flow", m.flow[i] as i64)
-                .set("rate", p.rate as i64)
-                .set("gap", d.units[l.from].gap_to(&d.units[l.to]) as i64)
+                .set("rate", l.carries(p.rate) as i64)
+                // What the run itself is: how long it is, what it takes on the
+                // way, and whether it is slack. This is the whole of the
+                // transport family as the panel now sees it -- three numbers
+                // on a connection rather than a component to click on.
+                .set("gap", l.gap as i64)
+                .set("reach", parts::span_of(p.dom, d.units[l.from].falls_to(&d.units[l.to]), l.belt).reach as i64)
+                .set("lossPct", l.loss_pct as i64)
+                .set("lost", m.lost[i] as i64)
+                .set("belt", l.belt)
                 .set("carrying", if m.flow[i] > 0 { m.carried[i].label() } else { String::new() })
                 .set("stuff", m.carried[i].to_json())
         })
@@ -286,23 +294,6 @@ pub fn why(d: &Design, m: &Machine, i: usize) -> Vec<String> {
             out.push(format!("drawing {} MW this tick", s.made[0]));
             out.push("every unit is a cost on the scoreboard".into());
         }
-        Kind::HeatPipe
-        | Kind::SteamPipe
-        | Kind::FluidPipe
-        | Kind::Chute
-        | Kind::Shaft => {
-            out.push(format!("carrying {}/tick of {}", s.made[1], part.ports[1].rate));
-            out.push(format!("holding: {}", held(m, i, 0)));
-            if s.waste > 0 {
-                out.push(format!("lost on the way: {}/tick", s.waste));
-            }
-            if s.status == Status::Blocked {
-                out.push(format!("the far end is full — {} held back", s.buf[0].qty));
-            }
-            if s.status == Status::Idle {
-                out.push("nothing is arriving".into());
-            }
-        }
         Kind::Hopper | Kind::Tank | Kind::Drum | Kind::Flywheel => {
             let cap = part.ports[0].cap;
             out.push(format!("holding {} of {cap}", s.buf[0].qty));
@@ -379,7 +370,7 @@ pub fn why(d: &Design, m: &Machine, i: usize) -> Vec<String> {
                 out.push(format!("gas condensed and lost: {}/tick", s.waste));
             }
             if s.status == Status::Blocked {
-                out.push("the shaft has nowhere to go — its generator is full".into());
+                out.push("the drive has nowhere to go — its generator is full".into());
             }
             out.push(format!("rotary out: {}/tick at speed {}", s.made[1], parts::DRIVE_SPEED));
         }
@@ -387,7 +378,7 @@ pub fn why(d: &Design, m: &Machine, i: usize) -> Vec<String> {
             out.push(format!("needs: {} rotary/tick", part.ports[0].rate));
             out.push(format!("available: {} rotary/tick", s.got[0]));
             out.push(format!(
-                "and a shaft turning at speed {} or more",
+                "and a drive turning at speed {} or more",
                 parts::GENERATOR_MIN_SPEED
             ));
             if s.status == Status::Refused {
@@ -579,8 +570,8 @@ fn chain_why(m: &Machine, i: usize) -> Vec<String> {
 
 /// What experiment 14 has to say about this component, if anything.
 ///
-/// Deliberately silent for the great majority of the catalogue. A chute has no
-/// body temperature and no vibration and is bolted to nothing, and printing
+/// Deliberately silent for the great majority of the catalogue. An outlet has
+/// no body temperature and no vibration and is bolted to nothing, and printing
 /// "temperature: 0, NORMAL" underneath it would be three experiments' worth of
 /// panel noise in exchange for no information at all.
 fn body_why(m: &Machine, i: usize) -> Vec<String> {
@@ -602,7 +593,7 @@ fn body_why(m: &Machine, i: usize) -> Vec<String> {
                 mat.tol()
             ));
             out.push(
-                "put it on a stiffer frame, or break the drive with a belt -- \
+                "put it on a stiffer frame, or make the drive wire a belt -- \
                  a belt passes torque and does not pass shake"
                     .to_string(),
             );

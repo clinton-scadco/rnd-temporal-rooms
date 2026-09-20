@@ -122,7 +122,7 @@ pub fn infer(
         // each other to reach a deck that already had one.
         let high = u.sockets.iter().any(|s| s.at.y > u.base + REACH)
             || u.top() > u.base + REACH + 3000;
-        if high && u.arch != super::layout::Arch::Run {
+        if high {
             let pid = own(owners, &u.name, "platform", Owns::Frame);
             let n1 = out.len();
             let mut r = seed.at(&u.name, "platform");

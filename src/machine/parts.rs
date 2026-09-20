@@ -1,4 +1,4 @@
-//! The vocabulary: forty-six components in eight families, seven connection
+//! The vocabulary: thirty-seven components in seven families, seven connection
 //! domains, and the numbers that make one design better than another.
 //!
 //! Experiment 06 had eight components and one brief. They were the right eight
@@ -15,7 +15,6 @@
 //! ```text
 //!   source     where matter and energy enter: reactor, burner, pump, inlet, mains
 //!   sink       where it leaves: outlet as product, skip as waste, radiator as heat
-//!   transport  distance, and what it costs: four pipes, a screw, a shaft, a belt
 //!   store      inertia: hopper, tank, drum, flywheel
 //!   control    deterministic thresholds: valve, clutch
 //!   heat       exchanger, preheater, condenser, furnace, heater, fan, jacket
@@ -33,7 +32,6 @@
 //! ```text
 //!   waterwheel    200 water/tick -> 60 rotary at speed 1        water era
 //!   pulley        a ratio, in timber, that slips above 90       water era
-//!   belt          a long rotary span that does not carry shake  water era
 //!   mechpump      40 rotary -> 120 water, because water is not free
 //!   steamengine   120 steam -> 180 rotary, and 500 heat nobody asked for
 //!   fan           15 heat per MW, and it stops when the grid does
@@ -41,6 +39,64 @@
 //! ```
 //!
 //! The crusher is untouched. That is the whole point: see `era`.
+//!
+//! # The transport family, and why there is not one
+//!
+//! There used to be seven more components: a heat pipe, a gas pipe, a fluid
+//! pipe, a chute, a screw conveyor, a line shaft and a belt. They are gone, for
+//! the same reason the power cable went in experiment 14 and with rather more
+//! force, because the argument against them is not one paragraph but three.
+//!
+//! The first is that they carried no information. A connection already knows
+//! its domain -- it is refused unless both ends agree on one -- so the only
+//! thing a `heatpipe` between a reactor and an exchanger ever said was "this is
+//! a heat connection", which the wire had already said. Placing one was not a
+//! decision. It was a tax on having placed two components more than six tiles
+//! apart, payable in three tiles of plot and one line of the file.
+//!
+//! The second is that the visual pipeline had quietly made the point years
+//! earlier. `form::route` lays *every* wire as a physical run -- lagged pipe
+//! for heat, bright shaft for rotary, square chute for material, galvanised
+//! conduit for power -- and it has done since experiment 08. So a design with
+//! a heat pipe in it built a lagged pipe into a small grey box into a lagged
+//! pipe, and a design without one built a lagged pipe. The connection *was*
+//! the pipe. The component was a picture of a pipe standing in the middle of a
+//! pipe.
+//!
+//! The third is the one that decides it: everything those seven did that was
+//! genuinely interesting is a property of the connection, not of a box on the
+//! ground, and says more when it is written that way.
+//!
+//! ```text
+//!   what a pipe did       what the connection does now
+//!   ------------------------------------------------------------------
+//!   bought distance       every domain has its own reach, and they are
+//!                         all longer than the six tiles a pipe existed
+//!                         to extend
+//!   charged for it        loss is per tile of run, continuous rather
+//!                         than in three-tile steps -- so moving a
+//!                         condenser two tiles closer is worth something,
+//!                         which it never was before
+//!   a chute ran downhill  a material connection that falls reaches
+//!                         further than one that does not, which makes
+//!                         the third axis pay for itself
+//!   a belt broke shake    `wire A.out -> B.in belt`
+//! ```
+//!
+//! The belt is the whole of the case for connection properties. A belt was
+//! never really a component: it was a *kind of rotary connection*, slack rather
+//! than rigid, and the entire first era is built out of the one thing that
+//! follows from that -- it passes torque and does not pass vibration. As a
+//! component that cost five tiles of plot to say. As a property it costs a
+//! word, it can be turned on and off while looking at the drive it fixes, and
+//! -- the part that matters -- it is now obvious that it is a property of the
+//! *drive* rather than an object sitting in it.
+//!
+//! What was lost, and is not mourned: the screw conveyor's 20 rotary to move
+//! material uphill. That one really was a mechanic, and it cannot be a
+//! connection property without giving connections ports, which would be
+//! inventing the component again under a different name. Material transport is
+//! free now, and the fall rule is what is left of the decision.
 //!
 //! # A component is a transformation with constraints
 //!
@@ -348,7 +404,6 @@ impl Recipe {
 pub enum Family {
     Source,
     Sink,
-    Transport,
     Store,
     Control,
     Heat,
@@ -361,7 +416,6 @@ impl Family {
         match self {
             Family::Source => "source",
             Family::Sink => "sink",
-            Family::Transport => "transport",
             Family::Store => "store",
             Family::Control => "control",
             Family::Heat => "heat",
@@ -391,38 +445,130 @@ pub const REACTOR_TEMP: u8 = 6;
 pub const BURNER_TEMP: u8 = 5;
 pub const HEATER_TEMP: u8 = 4;
 
-/// The fraction a heat pipe loses to the room, and a line shaft to its
-/// bearings.
-pub const PIPE_LOSS_PCT: u64 = 2;
-pub const SHAFT_LOSS_PCT: u64 = 1;
+// ---------------------------------------------- what a connection costs
+//
+// The seven transport components used to live here, and what is left after
+// deleting them is this: a table of how far each domain reaches and what a
+// tile of it costs. The module note argues the case; these are the numbers.
 
-/// Clear tiles between two components that a direct connection can still span.
+/// How far a connection in this domain reaches, in clear tiles between the two
+/// footprints, and what each of those tiles costs in percent of what is
+/// carried.
 ///
-/// Without this a pipe is a component with no reason to exist. With it, the
-/// tile grid is load bearing: things that work together sit together, a pipe is
-/// how you buy distance, and the price of distance is the loss.
-pub const REACH: i32 = 6;
+/// Every reach is longer than the six tiles the old `REACH` allowed, because
+/// six tiles was the number a pipe existed to extend and there is no longer a
+/// pipe. Every loss is charged *per tile of gap*, so two components that touch
+/// pay nothing and the grid stays load bearing -- things that work together
+/// still sit together, but now the pressure to move them one tile closer is
+/// continuous rather than a cliff at the point where a pipe becomes necessary.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Span {
+    /// Clear tiles the connection can cross.
+    pub reach: i32,
+    /// Percent of throughput lost, per clear tile crossed.
+    pub loss_pct: u64,
+}
+
+/// The reach and the price of every domain.
+///
+/// # Why they are not all the same
+///
+/// Heat is the expensive one, at one percent a tile over eighteen. A heat main
+/// is a real route with a real bore and it is cooling the whole way, which is
+/// exactly the decision the heat pipe was pretending to be: put the exchanger
+/// next to the reactor or pay for the distance.
+///
+/// Gas is charged too, and for the same reason -- a steam main that runs the
+/// length of a plant arrives as wet steam -- but at half the rate, because a
+/// turbine hall genuinely is somewhere else.
+///
+/// Fluid and material are free, and long. Pumping something cold down a pipe
+/// is the one kind of transport that really does not care, and the chute's
+/// only interesting property was that it ran downhill, which `span_between`
+/// keeps.
+///
+/// Rotary and mech are short and lossy, because that is what a line of
+/// bearings is. Twelve tiles is about as far as a plant ever drove anything
+/// mechanically before somebody invented the generator, and the one percent a
+/// tile is what a shaft charged.
+///
+/// Electrical is experiment 14's rule, unchanged: twenty-four tiles and
+/// nothing to pay. Wiring is not a design decision and pretending otherwise
+/// produced a plant that read as a cable tray with some machinery caught in
+/// it.
+pub fn span(dom: Domain) -> Span {
+    match dom {
+        Domain::Heat => Span { reach: 18, loss_pct: 1 },
+        Domain::Gas => Span { reach: 16, loss_pct: 1 },
+        Domain::Fluid => Span { reach: 16, loss_pct: 0 },
+        Domain::Material => Span { reach: 10, loss_pct: 0 },
+        Domain::Rotary => Span { reach: 12, loss_pct: 1 },
+        Domain::Mech => Span { reach: 8, loss_pct: 1 },
+        Domain::Electrical => Span { reach: REACH_POWER, loss_pct: 0 },
+    }
+}
+
+/// How far a connection in this domain reaches.
+pub fn reach(dom: Domain) -> i32 {
+    span(dom).reach
+}
 
 /// How far a *power* connection reaches, which is a great deal further.
 ///
 /// Experiment 14 deleted the power cable, and this constant is why it could.
 /// A cable was a three-tile component that carried four hundred megawatts, lost
 /// one percent, and asked the player a question with one answer: yes, run the
-/// cable. That is not a design decision, it is stationery, and a plant built
-/// out of it reads as a cable tray with some machinery caught in it.
-///
-/// Plumbing stays a decision, because it genuinely is one -- a heat main is a
-/// route, a bore and a loss, and where it goes changes the plant. Wiring is
-/// not. So electricity crosses the plot and the pipes do not, and the rule is
-/// one line rather than a component.
+/// cable. That is not a design decision, it is stationery.
 pub const REACH_POWER: i32 = 24;
 
-/// How far a connection in this domain reaches.
-pub fn reach(dom: Domain) -> i32 {
-    match dom {
-        Domain::Electrical => REACH_POWER,
-        _ => REACH,
+/// What a falling material run is allowed on top of its own reach.
+///
+/// The chute's one good line -- "40 material/tick downhill, for nothing at
+/// all" -- said as geometry instead of as a component. A material connection
+/// whose source sits above its destination is a chute, so it reaches half as
+/// far again; one that runs level or climbs is a conveyor somebody has to have
+/// built, and it does not.
+pub const FALL_BONUS: i32 = 6;
+
+/// A rotary connection the player has marked as a belt: slack rather than
+/// rigid.
+///
+/// Three differences from a shaft coupling, and the third is the only one
+/// anybody builds a plant around:
+///
+/// ```text
+///   it loses 8% flat          rather than 1% a tile: a belt has no bearings
+///                             along its length, so length is not what costs
+///   it carries 100 a tick     and drops whatever is offered above that
+///   it does not pass shake    which is the whole of the first era
+/// ```
+pub const BELT_LOSS_PCT: u64 = 8;
+pub const BELT_CARRIES: u64 = 100;
+/// A belt spans a mill, and the loss does not grow with the span.
+pub const BELT_REACH: i32 = 14;
+
+/// The span of one connection, given the domain, whether it falls, and whether
+/// the player has called it a belt.
+pub fn span_of(dom: Domain, falls: bool, belt: bool) -> Span {
+    if belt && dom == Domain::Rotary {
+        return Span { reach: BELT_REACH, loss_pct: 0 };
     }
+    let mut s = span(dom);
+    if falls && dom == Domain::Material {
+        s.reach += FALL_BONUS;
+    }
+    s
+}
+
+/// What a connection of this length loses, in percent of what it carries.
+///
+/// A belt is the flat rate and does not care about distance; everything else
+/// is the domain's price times the tiles of clear air it crosses.
+pub fn loss_pct(dom: Domain, gap: i32, belt: bool) -> u64 {
+    if belt && dom == Domain::Rotary {
+        return BELT_LOSS_PCT;
+    }
+    (span(dom).loss_pct * gap.max(0) as u64).min(90)
 }
 
 // --------------------------------------------------- experiment 10: upwards
@@ -457,7 +603,6 @@ pub fn height(k: Kind) -> u32 {
         Outlet => 1800,
         Skip => 2200,
         Radiator => 2800,
-        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft => 1000,
         Hopper => 4600,
         Tank => 7000,
         Drum => 3000,
@@ -479,12 +624,10 @@ pub fn height(k: Kind) -> u32 {
         Press => 6000,
         Lathe => 2200,
         Column => 15000,
-        // A water wheel is the tallest thing in a first-era plant and a
-        // coupling is the shortest thing in a third-era one, which is most of
-        // what those two plants look like from the road.
+        // A water wheel is the tallest thing in a first-era plant, and most
+        // of what a first-era plant looks like from the road.
         WaterWheel => 7200,
         Pulley => 2200,
-        Belt => 1000,
         MechPump => 1600,
         SteamEngine => 3800,
         Fan => 1800,
@@ -504,10 +647,8 @@ pub fn lift(k: Kind) -> u32 {
     match k {
         // On the slab.
         Heater | Mains | Outlet | Skip | Lathe | Column | Valve | Clutch => 0,
-        HeatPipe | SteamPipe | FluidPipe | Chute | Screw | Shaft => 0,
-        // A wheel stands in the race it is turned by, and a belt is a run like
-        // any other.
-        WaterWheel | Belt => 0,
+        // A wheel stands in the race it is turned by.
+        WaterWheel => 0,
         // On legs, because something has to fit underneath.
         Inlet | Hopper | Separator => 2400,
         // On a steel frame, at working height.
@@ -575,13 +716,6 @@ pub enum Kind {
     Outlet,
     Skip,
     Radiator,
-    // transport
-    HeatPipe,
-    SteamPipe,
-    FluidPipe,
-    Chute,
-    Screw,
-    Shaft,
     // store
     Hopper,
     Tank,
@@ -614,14 +748,13 @@ pub enum Kind {
     // was written against the order above.
     WaterWheel,
     Pulley,
-    Belt,
     MechPump,
     SteamEngine,
     Fan,
     Jacket,
 }
 
-pub const KINDS: [Kind; 44] = [
+pub const KINDS: [Kind; 37] = [
     Kind::Reactor,
     Kind::Burner,
     Kind::Heater,
@@ -631,12 +764,6 @@ pub const KINDS: [Kind; 44] = [
     Kind::Outlet,
     Kind::Skip,
     Kind::Radiator,
-    Kind::HeatPipe,
-    Kind::SteamPipe,
-    Kind::FluidPipe,
-    Kind::Chute,
-    Kind::Screw,
-    Kind::Shaft,
     Kind::Hopper,
     Kind::Tank,
     Kind::Drum,
@@ -661,7 +788,6 @@ pub const KINDS: [Kind; 44] = [
     Kind::Column,
     Kind::WaterWheel,
     Kind::Pulley,
-    Kind::Belt,
     Kind::MechPump,
     Kind::SteamEngine,
     Kind::Fan,
@@ -726,30 +852,6 @@ static SKIP_PORTS: [Port; 3] = [
     ext("vapour", GAS, IN, 200, 200),
 ];
 static RADIATOR_PORTS: [Port; 1] = [ext("heat", HEAT, IN, 500, 500)];
-
-// ---------------------------------------------------------------- transport
-
-static HEATPIPE_PORTS: [Port; 2] =
-    [p("in", HEAT, IN, 400, 400), p("out", HEAT, OUT, 400, 400)];
-static STEAMPIPE_PORTS: [Port; 2] =
-    [p("in", GAS, IN, 150, 150), p("out", GAS, OUT, 150, 150)];
-static FLUIDPIPE_PORTS: [Port; 2] =
-    [p("in", FLUID, IN, 150, 150), p("out", FLUID, OUT, 150, 150)];
-static CHUTE_PORTS: [Port; 2] =
-    [p("in", MAT, IN, 40, 40), p("out", MAT, OUT, 40, 40)];
-
-static SCREW_PORTS: [Port; 3] = [
-    p("drive", ROTARY, IN, 20, 20),
-    p("in", MAT, IN, 150, 150),
-    p("out", MAT, OUT, 150, 150),
-];
-static SCREW_DRAWS: [Draw; 2] =
-    [needs(0, 2, &[Need::MinSpeed(1)]), draw(1, 15)];
-static SCREW_MAKES: [Make; 1] = [make(2, 15, 1, &[])];
-static SCREW: Recipe = Recipe { draws: &SCREW_DRAWS, makes: &SCREW_MAKES, rate: 10, floor: 0 };
-
-static SHAFT_PORTS: [Port; 2] =
-    [p("in", ROTARY, IN, 400, 400), p("out", ROTARY, OUT, 400, 400)];
 
 // ------------------------------------------------------------------- stores
 
@@ -980,10 +1082,6 @@ static PULLEY_PORTS: [Port; 2] =
 pub const PULLEY_LOSS_PCT: u64 = 6;
 pub const PULLEY_SLIP: u64 = 90;
 
-static BELT_PORTS: [Port; 2] =
-    [p("in", ROTARY, IN, 100, 100), p("out", ROTARY, OUT, 100, 100)];
-pub const BELT_LOSS_PCT: u64 = 8;
-
 static MECHPUMP_PORTS: [Port; 2] =
     [p("drive", ROTARY, IN, 40, 40), p("water", FLUID, OUT, 120, 240)];
 static MECHPUMP_DRAWS: [Draw; 1] = [needs(0, 4, &[Need::MinSpeed(1)])];
@@ -1054,7 +1152,7 @@ static JACKET: Recipe =
 
 // ------------------------------------------------------------------- the table
 
-static PARTS: [Part; 44] = [
+static PARTS: [Part; 37] = [
     Part { kind: Kind::Reactor, tag: "reactor", title: "Fuel / Heat Source",
         blurb: "burns fuel at its throttle whether or not the heat is wanted",
         family: Family::Source, w: 4, h: 4, ports: &REACTOR_PORTS, recipe: None },
@@ -1083,25 +1181,6 @@ static PARTS: [Part; 44] = [
     Part { kind: Kind::Radiator, tag: "radiator", title: "Heat Sink",
         blurb: "dumps 500 heat/tick to the sky so something upstream can keep going",
         family: Family::Sink, w: 2, h: 2, ports: &RADIATOR_PORTS, recipe: None },
-
-    Part { kind: Kind::HeatPipe, tag: "heatpipe", title: "Heat Pipe",
-        blurb: "carries 400 heat/tick, and loses 2% of it",
-        family: Family::Transport, w: 3, h: 1, ports: &HEATPIPE_PORTS, recipe: None },
-    Part { kind: Kind::SteamPipe, tag: "steampipe", title: "Gas Pipe",
-        blurb: "carries 150 gas/tick",
-        family: Family::Transport, w: 3, h: 1, ports: &STEAMPIPE_PORTS, recipe: None },
-    Part { kind: Kind::FluidPipe, tag: "fluidpipe", title: "Fluid Pipe",
-        blurb: "carries 150 fluid/tick",
-        family: Family::Transport, w: 3, h: 1, ports: &FLUIDPIPE_PORTS, recipe: None },
-    Part { kind: Kind::Chute, tag: "chute", title: "Chute",
-        blurb: "40 material/tick downhill, for nothing at all",
-        family: Family::Transport, w: 3, h: 1, ports: &CHUTE_PORTS, recipe: None },
-    Part { kind: Kind::Screw, tag: "screw", title: "Screw Conveyor",
-        blurb: "150 material/tick, if you can spare 20 rotary to turn it",
-        family: Family::Transport, w: 3, h: 2, ports: &SCREW_PORTS, recipe: Some(&SCREW) },
-    Part { kind: Kind::Shaft, tag: "shaft", title: "Line Shaft",
-        blurb: "carries 400 rotary/tick at 99%, and reaches four tiles further",
-        family: Family::Transport, w: 4, h: 1, ports: &SHAFT_PORTS, recipe: None },
 
     Part { kind: Kind::Hopper, tag: "hopper", title: "Hopper",
         blurb: "holds 2000 of a material; in pulse mode it fills quietly and empties hard",
@@ -1180,9 +1259,6 @@ static PARTS: [Part; 44] = [
     Part { kind: Kind::Pulley, tag: "pulley", title: "Pulley Pair",
         blurb: "a ratio in timber: 6% to get it, and it slips above 90 rotary/tick",
         family: Family::Mechanical, w: 2, h: 2, ports: &PULLEY_PORTS, recipe: None },
-    Part { kind: Kind::Belt, tag: "belt", title: "Belt Drive",
-        blurb: "carries 100 rotary/tick at 92%, and -- the point of it -- no vibration",
-        family: Family::Transport, w: 5, h: 1, ports: &BELT_PORTS, recipe: None },
     Part { kind: Kind::MechPump, tag: "mechpump", title: "Mechanical Pump",
         blurb: "40 rotary/tick lifts 120 water, because a mill pond does not fill itself",
         family: Family::Source, w: 2, h: 2, ports: &MECHPUMP_PORTS, recipe: Some(&MECHPUMP) },
@@ -1205,7 +1281,6 @@ const WOOD: Mat = Mat::Wood;
 const IRON: Mat = Mat::CastIron;
 const STEEL: Mat = Mat::Steel;
 
-static ONLY_WOOD: [Mat; 1] = [WOOD];
 static ONLY_STEEL: [Mat; 1] = [STEEL];
 static WOOD_IRON: [Mat; 2] = [WOOD, IRON];
 static IRON_STEEL: [Mat; 2] = [IRON, STEEL];
@@ -1234,7 +1309,7 @@ const fn inert(kind: Kind, power: i64) -> Phys {
     }
 }
 
-/// The physical properties of all forty-six, in the order `KINDS` is in.
+/// The physical properties of all thirty-seven, in the order `KINDS` is in.
 ///
 /// # How to read a row, and how the numbers were chosen
 ///
@@ -1252,7 +1327,7 @@ const fn inert(kind: Kind, power: i64) -> Phys {
 /// trips at 220, which is to say: it cannot be built without a cooling decision.
 /// And what runs *cold* is the whole first era, which has no thermal problem at
 /// all and a vibration problem instead.
-static PHYS: [Phys; 44] = [
+static PHYS: [Phys; 37] = [
     // ------------------------------------------------------------- sources
     // A reactor, a burner and a furnace are hot, and none of them has a body
     // temperature: their heat is the product, it goes out of a port, and it is
@@ -1268,24 +1343,6 @@ static PHYS: [Phys; 44] = [
     inert(Kind::Outlet, 0),
     inert(Kind::Skip, 0),
     inert(Kind::Radiator, -500),
-    // ----------------------------------------------------------- transport
-    inert(Kind::HeatPipe, 0),
-    inert(Kind::SteamPipe, 0),
-    inert(Kind::FluidPipe, 0),
-    inert(Kind::Chute, 0),
-    // Transmission runs the length of a plant and does almost no work, so it
-    // carries no body temperature: what it carries is shake, and what decides
-    // whether it survives that is the frame.
-    Phys { kind: Kind::Screw, era: Era::Any, power: -20, torque: 2, speed: 1,
-        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
-        mat: STEEL, mats: &ALL_THREE, vib: 1 },
-    // The line shaft is the component the first era is built around and the
-    // third era does not own one of. It is here, unchanged, in all three
-    // materials -- which is the whole of "better bearings" as a mechanic: the
-    // same shaft, on a frame that will carry what is bolted to it.
-    Phys { kind: Kind::Shaft, era: Era::Any, power: 400, torque: 6, speed: 0,
-        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
-        mat: STEEL, mats: &ALL_THREE, vib: 0 },
     // -------------------------------------------------------------- stores
     Phys { kind: Kind::Hopper, era: Era::Any, power: 0, torque: 0, speed: 0,
         heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
@@ -1356,12 +1413,6 @@ static PHYS: [Phys; 44] = [
     Phys { kind: Kind::Pulley, era: Era::Water, power: 90, torque: 4, speed: 0,
         heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
         mat: WOOD, mats: &WOOD_IRON, vib: 1 },
-    // Slack, and therefore the only drive component in the catalogue that
-    // passes torque without passing shake. Everything about the first era's
-    // layout follows from that one line.
-    Phys { kind: Kind::Belt, era: Era::Water, power: 100, torque: 3, speed: 0,
-        heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
-        mat: WOOD, mats: &ONLY_WOOD, vib: 0 },
     Phys { kind: Kind::MechPump, era: Era::Water, power: -40, torque: 3, speed: 1,
         heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
         mat: WOOD, mats: &WOOD_FIRST, vib: 2 },

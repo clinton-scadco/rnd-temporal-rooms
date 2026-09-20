@@ -172,6 +172,15 @@ pub struct Run {
     /// Experiment 10: which set of rules this run had to be laid under, and
     /// whether it could be laid at all.
     pub tier: Tier,
+    /// A rotary run the document has called a belt: slack rather than rigid.
+    ///
+    /// The one place the visual pipeline is told something about a connection
+    /// that is not derivable from its two ends, and it is here because a belt
+    /// and a line shaft are not the same object. A shaft is a bright steel bar
+    /// with couplings on it that will not bend; a belt is a flat dark loop
+    /// that will. Since the player now says which one they are building by
+    /// marking the wire, the plant can draw what they said.
+    pub belt: bool,
 }
 
 /// How hard the router had to try.
@@ -291,7 +300,12 @@ impl Rules {
 /// The rules for one run, which depend on the domain and on how big the line
 /// is: a 900mm lagged main is not allowed the bends a garden hose is.
 pub fn rules(dom: Domain, bore: Mm) -> Rules {
-    let t = treat(dom);
+    rules_for(dom, bore, false)
+}
+
+/// The same, told whether the run is a belt.
+pub fn rules_for(dom: Domain, bore: Mm, belt: bool) -> Rules {
+    let t = treat_of(dom, belt);
     let od = outer(dom, bore);
     // Three diameters of long-radius bend, which is what makes a corner look
     // like a fitting rather than a crease.
@@ -338,6 +352,34 @@ struct Treat {
 /// straight through it.
 pub fn outer(dom: Domain, bore: Mm) -> Mm {
     (bore * treat(dom).wide / 100).max(90)
+}
+
+/// How a run is made, given its domain and whether the player called it a
+/// belt.
+///
+/// A belt is the only thing in this file that is not a fact about a domain,
+/// and it earns the exception: a flat dark loop over a pair of pulleys and a
+/// bright steel bar with couplings along it are different objects, and drawing
+/// them the same way would throw away the one thing the player said.
+fn treat_of(d: Domain, belt: bool) -> Treat {
+    if belt && d == Domain::Rotary {
+        return Treat {
+            // Flat and wide rather than round and thin, which is the whole of
+            // what a belt looks like from across a mill.
+            mesh: Mesh::Box,
+            mat: Mat::Rubber,
+            wide: 240,
+            trim: None,
+            elbow: false,
+            // A belt will go round a corner -- that is what a jockey pulley is
+            // for -- but not cheaply, and not in a short straight.
+            bend_cost: 90,
+            min_straight: 3000,
+            layer: Layer::Drive,
+            span: 6000,
+        };
+    }
+    treat(d)
 }
 
 fn treat(d: Domain) -> Treat {
@@ -623,7 +665,7 @@ pub fn run(d: &Design, plan: &Plan, seed: &Seed) -> Vec<Run> {
         let held: Vec<Vec<(usize, u8)>> =
             kin.iter().map(|&k| release(&mut g, &laid[k].2)).collect();
 
-        let (r, taken) = one(&mut g, sa, sb, dom, serve, name);
+        let (r, taken) = one(&mut g, sa, sb, dom, serve, name, d.wires[i].belt);
 
         for saved in held {
             for (i, m) in saved {
@@ -662,9 +704,10 @@ fn one(
     dom: Domain,
     serve: Subst,
     name: String,
+    belt: bool,
 ) -> (Run, Vec<(i32, i32, i32)>) {
     let bore = sa.bore.max(sb.bore);
-    let rule = rules(dom, bore);
+    let rule = rules_for(dom, bore, belt);
 
     let mut laid: Option<(Tier, Vec<(i32, i32, i32)>, Vec<P3>)> = None;
     for tier in [Tier::Clean, Tier::Tight] {
@@ -704,7 +747,19 @@ fn one(
     }
     let props = if path.len() >= 2 { props_along(&path, rule.span) } else { Vec::new() };
     (
-        Run { name, dom, serve, bore, ends: (sa.bore, sb.bore), path, length, bends, props, tier },
+        Run {
+            name,
+            dom,
+            serve,
+            bore,
+            ends: (sa.bore, sb.bore),
+            path,
+            length,
+            bends,
+            props,
+            tier,
+            belt,
+        },
         took,
     )
 }
@@ -1129,7 +1184,7 @@ fn simplify(mut p: Vec<P3>) -> Vec<P3> {
 /// Public so the invariant can be asserted from outside: no straight is ever
 /// asked to give up more length than it has.
 pub fn elbows_of(r: &Run) -> Vec<bool> {
-    elbows(&r.path, bend_of(r), treat(r.dom).elbow)
+    elbows(&r.path, bend_of(r), treat_of(r.dom, r.belt).elbow)
 }
 
 /// The bend radius a run's elbows are drawn at, which is the length each of
@@ -1241,7 +1296,7 @@ pub fn dress(r: &Run, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) 
     if !r.laid() {
         return;
     }
-    let t = treat(r.dom);
+    let t = treat_of(r.dom, r.belt);
     let od = outer(r.dom, r.bore);
     let bend = bend_of(r);
     let mut rng = seed.at(&r.name, "run");
@@ -1557,7 +1612,7 @@ pub fn junctions(runs: &[Run], owners: &[Owner], grade: Grade, out: &mut Vec<Pie
         let Some(id) = owners.iter().position(|o| o.class == Owns::Run && o.name == r.name) else {
             continue;
         };
-        let t = treat(r.dom);
+        let t = treat_of(r.dom, r.belt);
         let od = outer(r.dom, r.bore);
         let d = r.path[1].sub(at);
         if d.len() < od * 3 {
@@ -1573,26 +1628,6 @@ pub fn junctions(runs: &[Run], owners: &[Owner], grade: Grade, out: &mut Vec<Pie
     }
 }
 
-/// The straight bit of pipe a transport component *is*.
-pub fn straight(a: P3, b: P3, bore: Mm, dom: Domain, out: &mut Vec<Piece>) {
-    let t = treat(dom);
-    let od = outer(dom, bore);
-    out.push(Piece::span(t.mesh, t.mat, a, b, od).lod(FAR));
-    let len = b.sub(a).len();
-    if let Some((tm, tmat, gap)) = t.trim {
-        let n = len / gap;
-        for k in 1..=n {
-            let at = a.add(unit_mm(b.sub(a), (k * len) / (n + 1)));
-            out.push(Piece::new(tm, tmat, at, b.sub(a), p3(od * 13 / 10, od / 4, od * 13 / 10)).lod(CLOSE));
-        }
-    }
-    for (p, q) in [(a, b), (b, a)] {
-        out.push(
-            Piece::new(Mesh::Flange, Mat::Steel, p, q.sub(p), p3(od * 15 / 10, od / 3, od * 15 / 10))
-                .lod(MEDIUM),
-        );
-    }
-}
 
 /// `d`, rescaled to length `k`. Integer, and therefore off by up to a
 /// millimetre, which nothing in a plant has ever minded.

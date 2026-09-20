@@ -168,12 +168,6 @@ impl Tune {
                 | Kind::Outlet
                 | Kind::Skip
                 | Kind::Radiator
-                | Kind::HeatPipe
-                | Kind::SteamPipe
-                | Kind::FluidPipe
-                | Kind::Chute
-                | Kind::Screw
-                | Kind::Shaft
                 | Kind::Exchanger
                 | Kind::Preheater
                 | Kind::Condenser
@@ -247,6 +241,17 @@ impl Unit {
         dx + dy + dz
     }
 
+    /// Whether this component's bottom is above the other's top, which is the
+    /// one thing the third axis can tell a material connection: it falls.
+    ///
+    /// All that survives of the chute, and better than the chute was. A chute
+    /// was a component that said "downhill, for nothing at all" and then sat
+    /// flat on the slab in every design that used one, because nothing checked.
+    /// This checks.
+    pub fn falls_to(&self, other: &Unit) -> bool {
+        self.z >= other.z + other.tall()
+    }
+
     /// Two components share a piece of the world.
     ///
     /// Experiment 08 asked this in two dimensions because the document had
@@ -264,12 +269,58 @@ impl Unit {
 }
 
 /// A connection, named the way the player drew it: component and port.
+///
+/// # The property
+///
+/// `belt` is the whole of what is left of the transport family, and it is on
+/// the wire rather than in the catalogue because that is what it always was: a
+/// statement about a *drive*, not an object standing in one. A rigid rotary
+/// connection is a shaft and a pair of couplings -- it passes torque, it loses
+/// one percent a tile, and it passes vibration straight through to whatever is
+/// on the other end. A slack one is a belt: eight percent flat, a hundred a
+/// tick and no more, and it does not pass shake at all.
+///
+/// That last line is the first era. A crusher shakes at 7 and a timber frame
+/// carries 4, so a water-powered mill cannot bolt its crushers to the same
+/// rigid drive as its wheel. It has to break the drive, and the way you break
+/// a drive is to mark the wire.
+///
+/// It is deliberately one flag rather than a `Fit` enum with a variant per
+/// domain. Every other thing a connection could be told -- how far it reaches,
+/// what it loses, whether it falls -- is derivable from the two components it
+/// joins, and a property the document can work out for itself is a property
+/// the document should not be storing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Wire {
     pub from: String,
     pub from_port: String,
     pub to: String,
     pub to_port: String,
+    /// Rotary only: slack rather than rigid. See above.
+    pub belt: bool,
+}
+
+impl Wire {
+    /// A plain connection, which is nearly all of them.
+    pub fn new(from: &str, from_port: &str, to: &str, to_port: &str) -> Wire {
+        Wire {
+            from: from.into(),
+            from_port: from_port.into(),
+            to: to.into(),
+            to_port: to_port.into(),
+            belt: false,
+        }
+    }
+
+    /// Whether two wires are the same connection, which has nothing to do with
+    /// what either of them is made of: wiring the same two ports twice is a
+    /// mistake whether or not one of them is a belt.
+    fn same(&self, o: &Wire) -> bool {
+        self.from == o.from
+            && self.from_port == o.from_port
+            && self.to == o.to
+            && self.to_port == o.to_port
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -283,12 +334,36 @@ pub struct Design {
 }
 
 /// A resolved wire: indices, so the simulator never looks up a string.
+///
+/// Since the transport family went, a link is also where the two things a pipe
+/// used to be arrive: how long the run is and what it is made of. Both are
+/// settled here, once, at compile time -- the simulator never measures a
+/// distance and the router never asks what a wire costs.
 #[derive(Clone, Copy, Debug)]
 pub struct Link {
     pub from: usize,
     pub from_port: usize,
     pub to: usize,
     pub to_port: usize,
+    /// Clear tiles between the two footprints. Zero when they touch.
+    pub gap: i32,
+    /// Slack rather than rigid, on a rotary connection.
+    pub belt: bool,
+    /// Percent of what it carries that does not arrive, worked out from the
+    /// domain, the gap and the belt.
+    pub loss_pct: u64,
+}
+
+impl Link {
+    /// What this connection will carry at most in a tick, which is the port's
+    /// own rate unless a belt is in the way.
+    pub fn carries(&self, port_rate: u64) -> u64 {
+        if self.belt {
+            port_rate.min(parts::BELT_CARRIES)
+        } else {
+            port_rate
+        }
+    }
 }
 
 /// Something wrong with the document, said in the shortest true way, and
@@ -447,7 +522,7 @@ impl Design {
                 out.push(fault(e, Some(&w.from)));
                 continue;
             }
-            if self.wires[..i].contains(w) {
+            if self.wires[..i].iter().any(|o| o.same(w)) {
                 out.push(fault(
                     format!("{}.{} is already wired to {}.{}", w.from, w.from_port, w.to, w.to_port),
                     Some(&w.from),
@@ -460,15 +535,17 @@ impl Design {
     /// Whether a wire *could* be drawn, which the canvas wants to know while
     /// the pointer is still moving. Same rule the compiler uses, so nothing can
     /// be drawn that will then be refused.
-    pub fn can_wire(&self, from: &str, from_port: &str, to: &str, to_port: &str) -> Result<(), String> {
-        let w = Wire {
-            from: from.into(),
-            from_port: from_port.into(),
-            to: to.into(),
-            to_port: to_port.into(),
-        };
+    pub fn can_wire(
+        &self,
+        from: &str,
+        from_port: &str,
+        to: &str,
+        to_port: &str,
+        belt: bool,
+    ) -> Result<(), String> {
+        let w = Wire { belt, ..Wire::new(from, from_port, to, to_port) };
         self.resolve_one(&w)?;
-        if self.wires.contains(&w) {
+        if self.wires.iter().any(|o| o.same(&w)) {
             return Err("already wired".into());
         }
         Ok(())
@@ -510,30 +587,76 @@ impl Design {
                 w.from, w.from_port, a.dom, w.to, w.to_port, b.dom
             ));
         }
+        // A belt is a rotary connection and nothing else is, so the document
+        // refuses the flag rather than quietly ignoring it. A property that is
+        // sometimes read and sometimes not is a property nobody can reason
+        // about.
+        if w.belt && a.dom != super::stuff::Domain::Rotary {
+            return Err(format!(
+                "{}.{} carries {} and only a rotary connection can be a belt",
+                w.from, w.from_port, a.dom
+            ));
+        }
         // Three dimensions since experiment 10: stacking a component on top of
         // the one it feeds is a legitimate way of being next to it.
         //
-        // Since experiment 14 the reach depends on the domain, for one reason:
-        // plumbing is a design decision and wiring is not. See
-        // `parts::REACH_POWER`.
+        // The reach depends on the domain, and since the transport family went
+        // it depends on the run as well: a material connection that falls is a
+        // chute and reaches further, and a belt reaches further than the rigid
+        // drive it replaces. See `parts::span_of`.
         let gap = self.units[from].gap_to(&self.units[to]);
-        let far = parts::reach(a.dom);
+        let falls = self.units[from].falls_to(&self.units[to]);
+        let far = parts::span_of(a.dom, falls, w.belt).reach;
         if gap > far {
-            return Err(if a.dom == super::stuff::Domain::Electrical {
-                format!(
-                    "{} and {} are {gap} tiles apart, and even a power connection \
-                     only reaches {far}",
-                    w.from, w.to
-                )
-            } else {
-                format!(
-                    "{} and {} are {gap} tiles apart and a {} connection reaches {far} \
-                     -- move them together, stack them, or put a pipe between them",
-                    w.from, w.to, a.dom
-                )
-            });
+            return Err(self.too_far(w, a.dom, gap, far, falls));
         }
-        Ok(Link { from, from_port: fi, to, to_port: ti })
+        Ok(Link {
+            from,
+            from_port: fi,
+            to,
+            to_port: ti,
+            gap,
+            belt: w.belt,
+            loss_pct: parts::loss_pct(a.dom, gap, w.belt),
+        })
+    }
+
+    /// Why a connection could not be drawn, said in terms of what the player
+    /// can do about it.
+    ///
+    /// Worth its own function because the answer differs per domain and the
+    /// old one ended "or put a pipe between them", which is advice this
+    /// document can no longer take.
+    fn too_far(
+        &self,
+        w: &Wire,
+        dom: super::stuff::Domain,
+        gap: i32,
+        far: i32,
+        falls: bool,
+    ) -> String {
+        use super::stuff::Domain;
+        let head = format!(
+            "{} and {} are {gap} tiles apart and a {dom} connection reaches {far}",
+            w.from, w.to
+        );
+        let fix = match dom {
+            Domain::Electrical => {
+                " -- and that is the longest connection in the plant".to_string()
+            }
+            Domain::Material if !falls => format!(
+                " -- move them together, or stand {} above {} and let it fall, which is worth {} more tiles",
+                w.from,
+                w.to,
+                parts::FALL_BONUS
+            ),
+            Domain::Rotary if !w.belt => format!(
+                " -- move them together, stack them, or make it a belt, which reaches {}",
+                parts::BELT_REACH
+            ),
+            _ => " -- move them together, or stack them".to_string(),
+        };
+        head + &fix
     }
 
     /// The wires, as indices. Only callable on a document that passed `check`.
@@ -634,8 +757,27 @@ impl Design {
                     .split_once("->")
                     .ok_or_else(|| at("a wire is `wire A.port -> B.port`".into()))?;
                 let (from, from_port) = split_port(a.trim()).map_err(|e| at(e))?;
-                let (to, to_port) = split_port(b.trim()).map_err(|e| at(e))?;
-                d.wires.push(Wire { from, from_port, to, to_port });
+                // Anything after the far end is a property of the connection.
+                // There is one, and it goes at the end of the line rather than
+                // in the middle of the arrow because `wire M1.rotary ->
+                // CR1.drive belt` reads as a sentence and `wire M1.rotary
+                // -belt-> CR1.drive` reads as a diagram somebody has had to
+                // learn.
+                let mut rest = b.trim().split_whitespace();
+                let end = rest
+                    .next()
+                    .ok_or_else(|| at("a wire is `wire A.port -> B.port`".into()))?;
+                let (to, to_port) = split_port(end).map_err(|e| at(e))?;
+                let mut wire = Wire { from, from_port, to, to_port, belt: false };
+                for word in rest {
+                    match word {
+                        "belt" => wire.belt = true,
+                        other => {
+                            return Err(at(format!("`{other}` is not a thing a wire can be")))
+                        }
+                    }
+                }
+                d.wires.push(wire);
                 continue;
             }
             let kind = parts::by_tag(head)
@@ -773,8 +915,14 @@ impl Design {
         }
         for w in &self.wires {
             s.push_str(&format!(
-                "wire {}.{} -> {}.{}\n",
-                w.from, w.from_port, w.to, w.to_port
+                "wire {}.{} -> {}.{}{}\n",
+                w.from,
+                w.from_port,
+                w.to,
+                w.to_port,
+                // Written only when it is set, so every file experiments 06 to
+                // 14 could read is still a file this emits.
+                if w.belt { "  belt" } else { "" }
             ));
         }
         s
@@ -829,6 +977,7 @@ impl Design {
                                 .set("fromPort", w.from_port.clone())
                                 .set("to", w.to.clone())
                                 .set("toPort", w.to_port.clone())
+                                .set("belt", w.belt)
                         })
                         .collect(),
                 ),
@@ -890,6 +1039,7 @@ impl Design {
                 from_port: w.at("fromPort").as_str().unwrap_or("").to_string(),
                 to: w.at("to").as_str().unwrap_or("").to_string(),
                 to_port: w.at("toPort").as_str().unwrap_or("").to_string(),
+                belt: w.at("belt").as_bool().unwrap_or(false),
             });
         }
         Ok(d)

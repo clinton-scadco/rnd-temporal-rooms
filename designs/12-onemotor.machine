@@ -1,7 +1,7 @@
 # The stamping line with one motor instead of two, which is not half a stamping
 # line.
 #
-# One motor makes 54 rotary and the shaft splits it fairly: 27 to the rolling
+# One motor makes 54 rotary and its port splits it fairly: 27 to the rolling
 # mill, 27 to the crank. The mill is happy to run slowly and does. The crank is
 # happy to run slowly and does, at 23 strokes a tick. The press is not -- a
 # press fed half the strokes it needs does not make half a gear, it fails to
@@ -25,7 +25,6 @@ press     P1  at 15,0
 outlet    O1  at 20,0
 
 crank     CR1 at 15,5
-shaft     SH1 at 10,4
 motor     MO1 at 10,7
 mains     M1  at 10,10
 
@@ -37,7 +36,6 @@ wire R1.out -> P1.in
 wire P1.out -> O1.solid
 
 wire M1.power -> MO1.power
-wire MO1.rotary -> SH1.in
-wire SH1.out -> R1.drive
-wire SH1.out -> CR1.drive
+wire MO1.rotary -> R1.drive
+wire MO1.rotary -> CR1.drive
 wire CR1.stroke -> P1.drive

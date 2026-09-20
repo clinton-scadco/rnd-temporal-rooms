@@ -6,26 +6,24 @@
 # not, and the gearbox is the only part of the machine that does nothing to the
 # ore.
 #
-# The mill is the bottleneck and says so: two motors on a shared shaft give it
-# 67 rotary of the 80 it wants, so the line runs at 80/tick rather than 100 and
+# The mill is the bottleneck and says so: two motors on one drive give it 67
+# rotary of the 80 it wants, so the line runs at 80/tick rather than 100 and
 # everything upstream backs up behind it.
 #
-# Experiment 10 found something else wrong with it, which is the first time a
-# design in this repository has been contradicted by its own geometry.
+# "Two motors on one drive" used to be two motors bolted to one line shaft, and
+# the shaft is gone. Nothing about the sharing went with it -- a port takes as
+# many wires as you draw into it and divides what arrives -- which is the
+# shortest statement of why the transport family was deleted. The shaft was
+# never what let six machines hang off one engine. Fan-out was.
 #
-# `MO2.rotary -> SH1.in` has no valid route. Both motors are bolted to the same
-# end of the same shaft, and only one of them can be: a coupling is a straight
-# line between two flanges, MO1 is already on that line, and MO2 is three and a
-# half metres to the south of it. Experiment 08 drew it anyway -- a shaft with
-# two right angles in it, arriving at a flange sideways -- and nobody noticed
-# for two experiments, which is exactly the class of defect the note said would
-# start undermining the mechanic.
-#
-# It is left here rather than fixed. `machine space designs/07-crushline.machine`
-# says so in one line, the plant has a visible hole where the drive should be,
-# and the fix is a thing the player does: give the second motor its own shaft,
-# or move it onto the line of the first. That is the whole argument for letting
-# the router refuse.
+# What did go with it is the defect this file was kept unfixed to display.
+# Experiment 10's router refused `MO2.rotary -> SH1.in`, because both motors
+# were bolted to the same end of the same shaft and only one of them can be: a
+# coupling is a straight line between two flanges, MO1 was already on that
+# line, and MO2 was three and a half metres south of it. There is no shaft now,
+# so each motor gets its own straight line to the gearbox and both of them can
+# have one. The refusal was real and the router was right; it was a fact about
+# a component that no longer exists.
 
 machine "Crush Line"
 brief crush
@@ -40,8 +38,6 @@ outlet    O1  at 19,0
 skip      SK1 at 19,3
 
 gearbox   GB1 at 0,7   ratio 4
-shaft     SH1 at 2,10
-shaft     SH2 at 12,6
 
 mains     M1  at 10,9
 motor     MO1 at 6,9
@@ -54,16 +50,15 @@ wire M1.power -> MO2.power
 wire M1.power -> MO3.power
 wire M1.power -> MO4.power
 
-wire MO1.rotary -> SH1.in
-wire MO2.rotary -> SH1.in
-wire SH1.out -> GB1.in
+wire MO1.rotary -> GB1.in
+wire MO2.rotary -> GB1.in
 wire GB1.out -> C1.drive
 wire GB1.out -> C2.drive
 
-wire MO3.rotary -> SH2.in
-wire MO4.rotary -> SH2.in
-wire SH2.out -> MI1.drive
-wire SH2.out -> S1.drive
+wire MO3.rotary -> MI1.drive
+wire MO4.rotary -> MI1.drive
+wire MO3.rotary -> S1.drive
+wire MO4.rotary -> S1.drive
 
 wire I1.out -> C1.in
 wire C1.out -> C2.in

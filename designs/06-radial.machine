@@ -1,10 +1,15 @@
-# The same 216 MW as 02-more-of-everything, on two thirds of the land, with
-# fifteen components instead of seventeen and nothing wasted at all.
+# The same 216 MW as 02-more-of-everything, on two thirds of the land, and
+# nothing wasted at all.
 #
-# Two things changed. The reactor sits in the middle, so all four exchangers
-# are within reach of it and the two heat pipes -- and their 2% -- are gone.
-# And the throttle is set to what four exchangers can actually swallow, which
-# is 800 of its 1000 heat, so the stack is cold.
+# Two things changed. The reactor sits in the middle, and all four exchangers
+# are bolted *against* it rather than near it -- not one tile of clear air
+# between any of them, so not one percent of its heat goes into the plant on
+# the way. And the throttle is set to what four exchangers can actually
+# swallow, which is 800 of its 1000 heat, so the stack is cold.
+#
+# The four zeroes are the whole design. 02-more-of-everything makes the same
+# power with the same components and loses ten a tick, because two of its
+# exchangers are six tiles from the reactor and six tiles is six percent.
 #
 # It is not the smallest answer to the brief. 03-compact is a third of the plot
 # for half the power. Which of the two is better depends on something this
@@ -14,9 +19,9 @@ machine "Radial"
 
 reactor   R1  at 4,4  throttle 80
 
-exchanger HX1 at 4,0
+exchanger HX1 at 4,1
 exchanger HX2 at 4,8
-exchanger HX3 at 0,4
+exchanger HX3 at 1,4
 exchanger HX4 at 8,4
 
 pump      W1  at 0,0

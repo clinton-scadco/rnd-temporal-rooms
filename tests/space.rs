@@ -347,89 +347,42 @@ fn a_short_section_is_a_price_the_router_pays() {
     );
 }
 
-/// A transport component is a straight line, and both its ends are on it.
-///
-/// A shaft, a belt, a chute and a conveyor are drawn as a thin body down the
-/// middle of their own tiles, so unlike every other component in the plant
-/// their two ports are not on a box -- they are the two ends of the line
-/// itself. Three separate defects came out of forgetting that: a belt with its
-/// in and its out bolted to the same end of itself, a shaft whose body ran
-/// east-west while its couplings left by the two faces at right angles to it,
-/// and a line shaft solved onto one machine's axis at one end and another's at
-/// the other, which is a picture of a bent shaft.
-#[test]
-fn a_transport_component_is_a_straight_line() {
-    for (path, d) in all_designs() {
-        let plan = form::layout::plan(&d);
-        for u in plan.units.iter().filter(|u| u.arch == Arch::Run) {
-            let along = form::layout::face(u.yaw);
-            let Some(first) = u.sockets.first() else { continue };
-            for s in &u.sockets {
-                // Every port is on one of the two ends, because there are no
-                // other ends: the body is a line down the middle of its tiles.
-                assert!(
-                    s.out == along || s.out == along.neg(),
-                    "{path}: {} lies along {along} and a port leaves it by {}",
-                    u.name,
-                    s.out
-                );
-                // And all of them are on the line itself: the only thing that
-                // may differ between two ports of a run is how far along it
-                // they are.
-                let off = s.at.sub(first.at);
-                let across = match along.axis() {
-                    Some(0) => off.y.abs() + off.z.abs(),
-                    Some(1) => off.x.abs() + off.z.abs(),
-                    _ => off.x.abs() + off.y.abs(),
-                };
-                assert_eq!(
-                    across, 0,
-                    "{path}: {} is bent -- its ports are {across}mm off its own line",
-                    u.name
-                );
-            }
-            assert!(
-                u.sockets.iter().any(|s| s.out == along)
-                    && u.sockets.iter().any(|s| s.out == along.neg()),
-                "{path}: {} takes everything in and out of the same end of itself",
-                u.name
-            );
-        }
-    }
-}
-
 /// A coupling that can be straight is straight.
 ///
 /// The drive solver's whole contract, on the smallest design that states it: a
-/// motor, a line shaft and a gearbox that a player has put in a row but not on
-/// the same line, because tiles are two metres wide and a shaft is not. Each
-/// of the three can reach the others' axis by sliding a flange along its own
-/// face -- so all three should end up on one, with nothing reported and no
+/// motor, a gearbox and a crusher that a player has put in a row but not on
+/// the same line, because tiles are two metres wide and a coupling is not.
+/// Each of the three can reach the others' axis by sliding a flange along its
+/// own face -- so all three should end up on one, with nothing reported and no
 /// corner in the drive train.
 ///
 /// The second half is the honest one. The fourth machine is a motor parked
-/// three tiles to the south, which cannot reach the shaft's line however the
+/// five tiles to the south, which cannot reach the gearbox's line however the
 /// flanges are slid, and the plant is expected to say so rather than to draw
 /// it anyway.
+///
+/// It used to be a motor, a *line shaft* and a gearbox, and the shaft had to
+/// go with the rest of the transport family. Nothing about the rule went with
+/// it: a rotary connection is still a straight bright line between two
+/// flanges, because it always was -- the shaft was a component standing in the
+/// middle of one.
 #[test]
 fn a_coupling_that_can_be_straight_is_straight() {
     let d = Design::parse(
         "machine \"Drive\"\n\
          brief crush\n\
          motor   MO1 at 0,0\n\
-         shaft   SH1 at 4,1\n\
-         gearbox GB1 at 9,1\n\
+         gearbox GB1 at 5,1\n\
          motor   MO2 at 0,6\n\
-         crusher C1  at 13,1\n\
-         wire MO1.rotary -> SH1.in\n\
-         wire SH1.out -> GB1.in\n\
+         crusher C1  at 9,1\n\
+         wire MO1.rotary -> GB1.in\n\
          wire GB1.out -> C1.drive\n\
-         wire MO2.rotary -> SH1.in\n",
+         wire MO2.rotary -> GB1.in\n",
     )
     .expect("it parses");
     assert!(d.check().is_empty(), "{:?}", d.check().iter().map(|f| &f.what).collect::<Vec<_>>());
     let s = built(&d);
-    for name in ["MO1.rotary -> SH1.in", "SH1.out -> GB1.in", "GB1.out -> C1.drive"] {
+    for name in ["MO1.rotary -> GB1.in", "GB1.out -> C1.drive"] {
         let r = s.routes.iter().find(|r| r.name == name).expect("it is routed");
         assert_eq!(
             r.bends, 0,
@@ -443,8 +396,11 @@ fn a_coupling_that_can_be_straight_is_straight() {
         );
     }
     assert!(
-        s.issues.iter().any(|i| i.rule == "shaft alignment" && i.of == "MO2.rotary -> SH1.in"),
-        "the motor three tiles off the shaft was not reported: {:?}",
+        s.issues
+            .iter()
+            .any(|i| (i.rule == "shaft alignment" || i.rule == "no route")
+                && i.of == "MO2.rotary -> GB1.in"),
+        "the motor five tiles off the drive line was not reported: {:?}",
         s.issues.iter().map(|i| &i.what).collect::<Vec<_>>()
     );
 }
@@ -465,11 +421,16 @@ fn socket_at(plan: &form::layout::Plan, at: form::P3) -> Option<form::Mm> {
 /// end: build a design whose connection genuinely cannot be made, and assert
 /// that the plant has a hole in it rather than a pipe through a machine.
 ///
-/// The design below is a chute wedged between the machine feeding it and the
-/// machine it feeds, with both of its two allowed faces pressed against them.
-/// A chute is the right thing to wedge because it is an `Inline` archetype:
-/// its ports are pinned to one face each, so unlike a vessel it has nowhere
-/// else to put them and no way out.
+/// The design below is a valve wedged between the pump feeding it and the
+/// exchanger it feeds, with both of its two allowed faces pressed against
+/// them. A valve is the right thing to wedge because it is an `Inline`
+/// archetype: its ports are pinned to one face each, so unlike a vessel it has
+/// nowhere else to put them and no way out.
+///
+/// It used to be a chute, which is gone with the rest of the transport family.
+/// The valve is the same shape of trap for the same reason, which is the point
+/// worth noticing: what made a chute wedgeable was its archetype, not its
+/// domain, and `Inline` is still here.
 ///
 /// If a later change to the router makes this route, the fix is not to loosen
 /// this test -- it is to find a new arrangement that cannot be routed, because
@@ -483,16 +444,15 @@ reactor   R1  at 0,0
 exchanger HX1 at 5,0
 turbine   T1  at 9,0
 generator G1  at 12,0
-pump      W1  at 0,5
-inlet     I1  at 5,5
-chute     CH1 at 7,5
-crusher   C1  at 10,5
+pump      W1  at 3,5
+valve     V1  at 5,5
+drum      DR1 at 7,4
 wire R1.heat -> HX1.heat
-wire W1.water -> HX1.water
+wire W1.water -> V1.in
+wire V1.out -> DR1.in
+wire DR1.out -> HX1.water
 wire HX1.steam -> T1.steam
 wire T1.rotary -> G1.rotary
-wire I1.out -> CH1.in
-wire CH1.out -> C1.in
 ";
     let d = Design::parse(src).expect("it parses");
     assert!(d.check().is_empty(), "{:?}", d.check().iter().map(|f| &f.what).collect::<Vec<_>>());
@@ -537,20 +497,24 @@ fn nothing_unlaid_is_ever_drawn() {
     }
 }
 
-/// Almost every connection in the repository is laid under the full rules.
+/// Every connection in the repository is laid under the full rules.
 ///
 /// Not a property of the router so much as a property of the repository, and
 /// worth pinning: rules are only worth having if a plant built by somebody who
-/// had never heard of them still satisfies them. Every design here was drawn
-/// against experiment 08, which had no rules at all, and all but three of its
-/// connections still satisfy every one of them.
+/// had never heard of them still satisfies them.
 ///
-/// The exceptions are the interesting part, and all three are the same thing:
-/// a drive shaft with a dog-leg in it. Two are squeezed through and separately
-/// reported as misaligned; the third -- `MO2.rotary -> SH1.in` in
-/// `07-crushline` -- is refused outright, because two motors cannot both be
-/// bolted to the same end of the same shaft. Experiment 08 drew all three. See
-/// the comment at the top of that design.
+/// It used to be "almost every", and the three exceptions were all the same
+/// thing: a drive shaft with a dog-leg in it, two squeezed through under the
+/// relaxed rules and one -- `MO2.rotary -> SH1.in` in `07-crushline` --
+/// refused outright, because two motors cannot both be bolted to the same end
+/// of the same line shaft. All three went when the shaft did, and not because
+/// anything here got more permissive. A rotary wire between two machines is a
+/// straight line the router is free to aim at both ends; a rotary wire into a
+/// four-tile component that has already picked a direction is a straight line
+/// with one end nailed down. Deleting the transport family took the whole
+/// repository from 263 runs with 4 relaxed and 1 refused to 242 runs with
+/// neither, and roughly halved the number of things standing in something
+/// else's way.
 #[test]
 fn the_repository_routes() {
     let (mut runs, mut tight) = (0usize, 0usize);
@@ -572,12 +536,8 @@ fn the_repository_routes() {
         }
     }
     assert!(
-        lost.iter().all(|(_, dom)| matches!(dom, Domain::Rotary | Domain::Mech)),
-        "something other than a drive shaft was refused: {lost:?}"
-    );
-    assert!(
-        lost.len() <= 1,
-        "{} connections were refused, and the repository is meant to have one: {lost:?}",
+        lost.is_empty(),
+        "{} connections were refused, and the repository is meant to have none since the transport family went: {lost:?}",
         lost.len()
     );
     assert!(
@@ -640,48 +600,53 @@ fn a_verdict_agrees_with_the_issues_behind_it() {
 
 /// Putting a machine inside another one is seen, said, and coloured.
 ///
-/// The document refuses this in *tiles*, and for everything with a body inside
-/// its own tile box that is the whole story. The case the tiles cannot see is
-/// a transport component: a heat pipe does not stand on its tiles, it lives at
-/// the rack elevation its domain belongs to -- four and a quarter metres up,
-/// wherever its tiles are. So a heat pipe on the ground and a drum on the
-/// second storey can be a legal document and two objects in the same place,
-/// and this is the pass that notices.
+/// The document refuses this in *tiles*, and this pass is the net underneath
+/// it: it compares solids rather than footprints, so a document that got past
+/// `check` -- because it was written by hand, or by an older version of the
+/// editor, or over a wire by something that never called `check` at all --
+/// still cannot produce a plant with two machines in the same cubic metre and
+/// no comment about it.
+///
+/// The case this test used to use was a transport component, and it is worth
+/// saying what it was because it is the best single illustration of why the
+/// family is gone: a heat pipe did not stand on its own tiles. It lived at the
+/// rack elevation its domain belonged to, four and a quarter metres up,
+/// wherever the player had put it. So a heat pipe on the ground and a drum on
+/// the second storey were a legal document and two objects in the same place,
+/// and the tile grid -- the thing the whole game is played on -- could not see
+/// it. There is no component like that any more. A run goes where the router
+/// puts it, and the router does not put runs through machines.
+///
+/// `form::build` refuses a document `check` would refuse, so the spatial pass
+/// is reached directly here rather than through it. That is the point: this is
+/// the pass that runs when the front door was not used.
 #[test]
 fn a_machine_inside_another_one_is_red() {
-    let src = "\
-machine \"Through The Floor\"
-brief power
-reactor   R1  at 0,0
-heatpipe  HP1 at 5,0
-exchanger HX1 at 9,0
-turbine   T1  at 13,0
-generator G1  at 16,0
-pump      W1  at 9,4
-drum      DR1 at 5,0,2
-wire R1.heat -> HP1.in
-wire HP1.out -> HX1.heat
-wire W1.water -> HX1.water
-wire HX1.steam -> T1.steam
-wire T1.rotary -> G1.rotary
-";
-    let d = Design::parse(src).expect("it parses");
+    let mut d = design("designs/03-compact.machine");
+    // Two components, same tiles, same storey. `check` refuses it in one line;
+    // nothing below calls `check`.
+    let hx = d.index_of("HX1").unwrap();
+    let t = d.index_of("T1").unwrap();
+    d.units[t].x = d.units[hx].x;
+    d.units[t].y = d.units[hx].y;
+    d.units[t].z = d.units[hx].z;
+    assert!(!d.check().is_empty(), "the document should mind, even though nobody asked it");
     assert!(
-        d.check().is_empty(),
-        "the tile grid should be happy with this: {:?}",
-        d.check().iter().map(|f| &f.what).collect::<Vec<_>>()
+        form::build(&d, Ask { style: Style::Yard, world: 0, grade: form::Grade::Full }).is_err(),
+        "and so should the front door"
     );
 
-    let s = built(&d);
+    let plan = form::layout::plan(&d);
+    let (placements, issues) = form::space::check(&plan, &[]);
     assert!(
-        s.issues.iter().any(|i| i.rule == "collision" && i.bad),
-        "a drum was parked on top of a heat main and nobody minded: {:?}",
-        s.issues.iter().map(|i| i.rule).collect::<Vec<_>>()
+        issues.iter().any(|i| i.rule == "collision" && i.bad),
+        "a turbine was parked inside an exchanger and nobody minded: {:?}",
+        issues.iter().map(|i| i.rule).collect::<Vec<_>>()
     );
-    let hp = s.units.iter().find(|u| u.name == "HP1").unwrap();
-    let dr = s.units.iter().find(|u| u.name == "DR1").unwrap();
-    assert_eq!(hp.verdict, Verdict::Bad, "and the pipe is not red");
-    assert_eq!(dr.verdict, Verdict::Bad, "nor is the drum");
+    for name in ["HX1", "T1"] {
+        let i = plan.units.iter().position(|u| u.name == name).unwrap();
+        assert_eq!(placements[i].verdict, Verdict::Bad, "{name} is not red");
+    }
 }
 
 /// A tower on a mezzanine is not a design. This is the note's "big vessels
@@ -700,7 +665,7 @@ fn a_big_vessel_needs_the_ground() {
     );
 }
 
-/// Shafts need alignment, and the rule is stricter than the one for pipes --
+/// Drives need alignment, and the rule is stricter than the one for pipes --
 /// which is the whole reason a rotary port has an axis and a fluid one does
 /// not.
 #[test]

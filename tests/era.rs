@@ -31,8 +31,9 @@ use temporal_rooms::machine::parts::{self, Kind};
 use temporal_rooms::machine::sim::{Machine, Status};
 use temporal_rooms::machine::{orbit, snap};
 
-/// The thirty-eight components that existed before experiment 14.
-const BEFORE: usize = 38;
+/// The components that existed before experiment 14, minus the six of them
+/// that were transport and went when the family did.
+const BEFORE: usize = 32;
 
 fn parse(src: &str) -> Design {
     let d = Design::parse(src).unwrap_or_else(|e| panic!("{e}"));
@@ -127,7 +128,7 @@ fn one_brief_three_machines() {
     // And the parts lists overlap only on the ore path.
     let kinds = |d: &Design| -> BTreeSet<Kind> { d.units.iter().map(|u| u.kind).collect() };
     let ore: BTreeSet<Kind> =
-        [Kind::Inlet, Kind::Crusher, Kind::Screw, Kind::Outlet].into_iter().collect();
+        [Kind::Inlet, Kind::Crusher, Kind::Outlet].into_iter().collect();
     for (i, (an, a)) in designs.iter().enumerate() {
         for (bn, b) in designs.iter().skip(i + 1) {
             let ka = kinds(a);
@@ -190,36 +191,39 @@ fn there_is_exactly_one_of_each_machine() {
 
 // --------------------------------------------------------- the first era
 
-/// A crusher shakes at 7 and timber carries 4, so the obvious drive train --
-/// bolt the crusher to the line shaft -- pulls the mill apart. The belt is
-/// what makes the first era buildable, and it is a component rather than a
-/// modifier because what it does is *topological*: it breaks the rigid cluster
-/// in two.
+/// A crusher shakes at 7 and a timber wheel carries 4, so the obvious drive
+/// train -- bolt the crusher straight to the wheel -- pulls the mill apart.
+/// The belt is what makes the first era buildable, and what it does is
+/// *topological*: it breaks the rigid cluster in two.
+///
+/// It used to be a five-tile component and is now one word at the end of a
+/// wire, and this test is the argument for the change in its shortest form.
+/// The two documents below differ by four characters.
 #[test]
-fn a_timber_shaft_will_not_carry_a_crusher() {
-    let bolted = parse(
-        r#"
-machine "Bolted"
+fn a_timber_drive_will_not_carry_a_crusher() {
+    let src = |belt: &str| {
+        format!(
+            r#"
+machine "Drive"
 brief line
 pump       P1  at 0,0   draws water
 waterwheel W1  at 4,0
-shaft      SH1 at 4,6   frame wood
-crusher    C1  at 4,8   frame iron
-inlet      I1  at 9,8   draws ore
-outlet     O1  at 0,8
+crusher    C1  at 4,6   frame iron
+inlet      I1  at 9,6   draws ore
+outlet     O1  at 0,6
 wire P1.water -> W1.water
-wire W1.rotary -> SH1.in
-wire SH1.out -> C1.drive
+wire W1.rotary -> C1.drive{belt}
 wire I1.out -> C1.in
 wire C1.out -> O1.solid
-"#,
-    );
+"#
+        )
+    };
+
+    let bolted = parse(&src(""));
     let m = run(&bolted, 200);
-    let sh = at(&m, "SH1");
     let w1 = at(&m, "W1");
-    assert_eq!(m.shake[sh], 7, "the crusher's shake reaches the shaft");
-    assert_eq!(m.st[sh].status, Status::Shaking);
-    assert_eq!(m.st[w1].status, Status::Shaking, "and the wheel driving it");
+    assert_eq!(m.shake[w1], 7, "the crusher's shake reaches the wheel");
+    assert_eq!(m.st[w1].status, Status::Shaking, "and the wheel driving it stops");
     // The crusher itself is fine -- cast iron carries exactly 7 -- and that is
     // the point worth being precise about. It is not the crusher that fails,
     // it is everything the crusher is bolted to, and the crusher then starves
@@ -228,35 +232,19 @@ wire C1.out -> O1.solid
     assert_eq!(m.st[at(&m, "C1")].status, Status::Starved);
     assert_eq!(m.st[at(&m, "C1")].made[2], 0, "and the machine crushes nothing at all");
 
-    let why = snap::why(&bolted, &m, sh).join(" ");
+    let why = snap::why(&bolted, &m, w1).join(" ");
     assert!(why.contains("SHAKING"), "it says so: {why}");
     assert!(why.contains("belt"), "and names the way out: {why}");
 
-    // The same machine with a belt in the drive, and nothing else changed.
-    let belted = parse(
-        r#"
-machine "Belted"
-brief line
-pump       P1  at 0,0   draws water
-waterwheel W1  at 4,0
-shaft      SH1 at 4,6   frame wood
-belt       B1  at 9,6
-crusher    C1  at 4,8   frame iron
-inlet      I1  at 9,10  draws ore
-outlet     O1  at 0,8
-wire P1.water -> W1.water
-wire W1.rotary -> SH1.in
-wire SH1.out -> B1.in
-wire B1.out -> C1.drive
-wire I1.out -> C1.in
-wire C1.out -> O1.solid
-"#,
-    );
+    // The same machine with the drive wire marked `belt`, and nothing else
+    // changed at all -- not a component, not a tile, not a frame.
+    let belted = parse(&src("  belt"));
+    assert_eq!(belted.units.len(), bolted.units.len(), "a belt is not a component");
     let m2 = run(&belted, 200);
     for i in 0..m2.len() {
         assert_ne!(m2.st[i].status, Status::Shaking, "{} still shaking", m2.names[i]);
     }
-    assert_eq!(m2.shake[at(&m2, "SH1")], 2, "the shaft now only carries the wheel");
+    assert_eq!(m2.shake[at(&m2, "W1")], 2, "the wheel now only carries itself");
     assert_eq!(m2.shake[at(&m2, "C1")], 7, "and the crusher only carries itself");
     assert_eq!(m2.st[at(&m2, "C1")].status, Status::Running, "and it runs");
     assert!(m2.st[at(&m2, "C1")].made[2] > 0, "and ore comes out of it");
@@ -343,20 +331,43 @@ wire C1.out -> O1.solid
         "on air alone this engine is above its own ceiling before anything is run"
     );
 
-    let mut seen_tripped = false;
+    // It trips, cools, restarts and trips again, so what is asserted is the
+    // *cycle* rather than the state at one arbitrary tick. Which half of the
+    // cycle tick 1500 lands in is a fact about the arithmetic of the whole
+    // plant, and pinning it here made this test fail the first time anything
+    // upstream of the engine changed by one unit.
+    let mut tripped = 0;
     let mut m2 = Machine::new(&bare).unwrap();
+    let mut worst = 0;
     for _ in 0..1_500 {
         m2.step();
         if m2.st[se].tripped {
-            seen_tripped = true;
+            tripped += 1;
         }
+        worst = worst.max(m2.temp(se));
     }
-    assert!(seen_tripped, "an uncooled engine trips on temperature");
-    assert!(m.st[se].tripped, "and it is still tripped fifteen hundred ticks later");
-    assert_eq!(m.duty(se), 0);
-    assert_eq!(m.st[se].status, Status::Overheated);
+    assert!(tripped > 0, "an uncooled engine trips on temperature");
+    assert!(
+        tripped * 4 > 1_500,
+        "an uncooled engine should spend most of its life tripped, and this one spent {tripped} ticks of fifteen hundred"
+    );
+    assert!(
+        worst >= ph.ceiling(Mat::CastIron),
+        "and it should have reached its own ceiling to get there: {worst}"
+    );
 
-    let why = snap::why(&bare, &m, se).join(" ");
+    // And at whichever point it is tripped, it says so in the words a player
+    // can act on.
+    let hot = (0..1_500)
+        .scan(Machine::new(&bare).unwrap(), |mm, _| {
+            mm.step();
+            Some(mm.clone())
+        })
+        .find(|mm| mm.st[se].status == Status::Overheated)
+        .expect("it trips");
+    assert_eq!(hot.duty(se), 0);
+    assert_eq!(hot.st[se].status, Status::Overheated);
+    let why = snap::why(&bare, &hot, se).join(" ");
     assert!(why.contains("OVERHEATED"), "it says so: {why}");
     assert!(why.contains("waste port is not wired"), "and what is missing: {why}");
 
@@ -611,7 +622,7 @@ fn a_warm_machine_still_settles() {
 /// free, and silently wrong the first time somebody inserts a row in the middle.
 #[test]
 fn the_physical_table_is_in_order() {
-    assert_eq!(parts::KINDS.len(), 44);
+    assert_eq!(parts::KINDS.len(), 37);
     for (i, &k) in parts::KINDS.iter().enumerate() {
         assert_eq!(k as usize, i);
         let ph = parts::phys(k);

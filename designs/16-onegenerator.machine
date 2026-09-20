@@ -1,0 +1,41 @@
+# Two turbines onto one generator that cannot eat them.
+#
+# A turbine makes 120 rotary and a generator takes 70 a tick and not one more,
+# so half of what the second turbine makes turns against a full port and goes
+# nowhere. The fix is a second generator, and the reason to build this first is
+# that the drive makes the mistake *visible*: two straight bright lines
+# converging on a machine plainly too small for both of them.
+#
+# The version of this design before the transport family went had a line shaft
+# in the middle, and it is worth saying what the shaft was actually doing here,
+# because the answer is nothing. Two turbines could always feed one port; the
+# port shares what arrives; six machines could always hang off one drive. None
+# of that was the shaft. The shaft was a four-tile component that let the two
+# turbines sit four tiles further from the generator than they needed to, and
+# charged one percent for it.
+
+machine "One Generator"
+brief power
+
+reactor   R1  at 0,0   throttle 50
+
+exchanger HX1 at 5,0
+exchanger HX2 at 5,4
+
+turbine   T1  at 9,0
+turbine   T2  at 9,4
+
+generator G1  at 14,2
+
+pump      W1  at 0,5
+
+wire R1.heat -> HX1.heat
+wire R1.heat -> HX2.heat
+wire W1.water -> HX1.water
+wire W1.water -> HX2.water
+
+wire HX1.steam -> T1.steam
+wire HX2.steam -> T2.steam
+
+wire T1.rotary -> G1.rotary
+wire T2.rotary -> G1.rotary

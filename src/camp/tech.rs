@@ -17,7 +17,7 @@
 //! # Twelve components, and what each of them opens
 //!
 //! ```text
-//!   motor gearbox shaft      a drive train: something to turn a crusher with
+//!   motor gearbox clutch     a drive train: something to turn a crusher with
 //!   separator                a split, and therefore a byproduct
 //!   preheater condenser      heat and vapour that come back rather than leave
 //!   furnace rollmill press   hot metal, and a shape to put it in
@@ -26,7 +26,7 @@
 //!   column                   the crude chain, which nobody has touched yet
 //! ```
 //!
-//! Twenty-six of the catalogue are there from the first minute,
+//! Twenty-five of the catalogue are there from the first minute,
 //! because a first room with six parts in it is a tutorial rather than a
 //! factory. The twelve that are not are the twelve that change what a machine
 //! can *be*.
@@ -67,9 +67,9 @@ pub static UNLOCKS: &[Unlock] = &[
         opens: "speed traded for the ability to turn something heavy: a crusher wants slow",
     },
     Unlock {
-        part: "shaft",
-        title: "Line Shaft",
-        opens: "one drive reaching four components instead of one",
+        part: "clutch",
+        title: "Clutch",
+        opens: "a drive that stutters turning something that must not be turned slowly",
     },
     Unlock {
         part: "separator",

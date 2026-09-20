@@ -48,8 +48,7 @@
 use super::kit::{Mat, Mesh};
 use super::layout::{Arch, Placed, Plan};
 use super::seed::Seed;
-use super::{p3, route, Grade, Mm, Piece, CLOSE, FAR, MEDIUM, P3};
-use crate::machine::parts::{self, Dir};
+use super::{p3, Grade, Mm, Piece, CLOSE, FAR, MEDIUM, P3};
 use crate::machine::stuff::Domain;
 
 /// Eight directions round a circle, in thousandths. Integer trigonometry for
@@ -72,7 +71,7 @@ const RING: [(Mm, Mm); 8] = [
 /// function's contract: the same canonical meshes dress the same logical
 /// component. Detailed grades refine support clearances and casing joints;
 /// neither the interfaces nor the routed connections move with those details.
-pub fn dress(u: &Placed, plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) {
+pub fn dress(u: &Placed, _plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) {
     let mut r = seed.at(&u.name, "body");
     let wear = r.range(0, 6) as u8;
     let n0 = out.len();
@@ -91,7 +90,6 @@ pub fn dress(u: &Placed, plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &
         Arch::Inline => inline(u, &mut r, out),
         Arch::Bank => bank(u, &mut r, g, out),
         Arch::Turbine => turbine(u, &mut r, g, out),
-        Arch::Run => transport(u, plan, &mut r, out),
     }
 
     // Every port gets a stub, whatever the archetype: it is what makes a pipe
@@ -100,9 +98,6 @@ pub fn dress(u: &Placed, plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: &
         matches!(p.mesh, Mesh::Box | Mesh::Cyl | Mesh::Fins | Mesh::Cone | Mesh::Dome) && p.mat != Mat::Dark
     }).cloned().collect();
     for s in &u.sockets {
-        if u.arch == Arch::Run {
-            continue;
-        }
         let b = s.bore;
         if g.detailed() {
             if let Some(start) = neck_start(s, &bodies, u.vol.size().len()) {
@@ -844,23 +839,6 @@ fn bank(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
         }
     }
 }
-
-/// A transport component is its own connection: it draws the run between its
-/// own two ports, in the treatment its domain gets, and the router then joins
-/// the ends of it to whatever it was wired to.
-fn transport(u: &Placed, _plan: &Plan, _r: &mut super::seed::Rng, out: &mut Vec<Piece>) {
-    let part = parts::part(u.kind);
-    let ins: Vec<&super::layout::Socket> =
-        u.sockets.iter().filter(|s| part.ports[s.port].dir == Dir::In).collect();
-    let outs: Vec<&super::layout::Socket> =
-        u.sockets.iter().filter(|s| part.ports[s.port].dir == Dir::Out).collect();
-    let (Some(a), Some(b)) = (ins.first(), outs.first()) else {
-        return;
-    };
-    let dom = part.ports[0].dom;
-    route::straight(a.at, b.at, a.bore, dom, out);
-}
-
 fn anchors(u: &Placed, out: &mut Vec<Piece>) {
     let s = u.vol.size();
     let f = u.vol.foot();

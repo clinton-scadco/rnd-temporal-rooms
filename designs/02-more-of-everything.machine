@@ -1,10 +1,13 @@
 # The second design everybody builds: if one of each made 54 MW, four of each
 # will make four times as much.
 #
-# It does, roughly. It also needs heat pipes to reach the far half of the plot,
-# which cost 2% each, a second pump, and nineteen times the land. Compare it
-# with 03-compact, which makes half as much power on a quarter of the plot and
-# wastes nothing at all.
+# It does, roughly. It also needs a second pump, two heat mains six tiles long
+# to reach the far half of the plot, and nineteen times the land. The mains are
+# where the sprawl shows up as a number rather than as a shape: distance is
+# charged a percent a tile, so the two exchangers at the bottom of the plot get
+# six percent less heat than the two bolted to the reactor -- for no reason
+# except that they are down there. Compare it with 03-compact, which makes half
+# as much power on a quarter of the plot and wastes nothing at all.
 
 machine "More Of Everything"
 
@@ -20,12 +23,10 @@ generator G2  at 13,4
 
 pump      W1  at 1,5
 
-heatpipe  HP1 at 0,8
 exchanger HX3 at 0,10
 turbine   T3  at 0,14
 generator G3  at 0,17
 
-heatpipe  HP2 at 4,8
 exchanger HX4 at 4,10
 turbine   T4  at 4,14
 generator G4  at 4,17
@@ -34,10 +35,8 @@ pump      W2  at 8,10
 
 wire R1.heat -> HX1.heat
 wire R1.heat -> HX2.heat
-wire R1.heat -> HP1.in
-wire R1.heat -> HP2.in
-wire HP1.out -> HX3.heat
-wire HP2.out -> HX4.heat
+wire R1.heat -> HX3.heat
+wire R1.heat -> HX4.heat
 
 wire W1.water -> HX1.water
 wire W1.water -> HX2.water

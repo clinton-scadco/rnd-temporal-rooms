@@ -447,16 +447,24 @@ fn the_library_is_still_small() {
 /// one with a four-cornered detour. Across these eight designs that is a third
 /// of the corners gone. Same plant, same materials, same connections; fewer
 /// elbows, and the ones that are left are load bearing.
+///
+/// Deleting the transport family moved exactly three of these eight, and that
+/// is the number worth keeping. `07-crushline`, `11-steamcrusher` and
+/// `13-longreach` each lost components and had to be rewritten; the other
+/// five never had a pipe or a shaft in them, and they are bit-for-bit the
+/// plants they were. A change that deleted seven components and an archetype
+/// and moved nothing it did not touch is a change that was about the
+/// catalogue rather than about the renderer.
 #[test]
 fn grade_a_is_experiment_08_exactly() {
     for (name, want) in [
         ("01-first-try", 0x0ef5_7ae0u32),
         ("03-compact", 0x8500_64c1),
-        ("07-crushline", 0xc8f3_081f),
+        ("07-crushline", 0x42cb_8c07),
         ("09-machining", 0x4773_386f),
         ("10-refinery", 0x437c_e68c),
-        ("11-steamcrusher", 0xab45_004b),
-        ("13-longreach", 0x7a49_ab15),
+        ("11-steamcrusher", 0x50e5_68f7),
+        ("13-longreach", 0x0698_3beb),
         ("15-turbinehall", 0x50b6_4ae0),
     ] {
         let d = design(&format!("designs/{name}.machine"));
