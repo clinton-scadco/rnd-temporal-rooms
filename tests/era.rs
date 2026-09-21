@@ -25,15 +25,11 @@
 
 use std::collections::BTreeSet;
 use temporal_rooms::machine::design::Design;
-use temporal_rooms::machine::era::{Band, Era, Mat};
+use temporal_rooms::machine::era::{self, Band, Era, Mat};
 use temporal_rooms::machine::eval::{self, Brief};
 use temporal_rooms::machine::parts::{self, Kind};
 use temporal_rooms::machine::sim::{Machine, Status};
 use temporal_rooms::machine::{orbit, snap};
-
-/// The components that existed before experiment 14, minus the six of them
-/// that were transport and went when the family did.
-const BEFORE: usize = 32;
 
 fn parse(src: &str) -> Design {
     let d = Design::parse(src).unwrap_or_else(|e| panic!("{e}"));
@@ -441,28 +437,57 @@ fn waste_heat_is_low_grade_on_purpose() {
 
 // --------------------------------------------------------- the whole model
 
-/// Temperature is exact; behaviour is not. Between two thresholds nothing
-/// about a component changes, which is the whole reason the bands exist.
+/// Temperature is exact, and so is what it does about it.
+///
+/// This test used to assert the opposite -- that between two thresholds
+/// nothing about a component changed, *which is the whole reason the bands
+/// exist*. The bands still exist; they are what the panel calls the place on
+/// the curve. What has gone is the claim that a degree only matters when it
+/// crosses one of them, and it went because a step function that feeds its own
+/// input chatters on the edge. See `Phys::duty_at`.
 #[test]
-fn behaviour_changes_only_at_thresholds() {
+fn a_degree_is_worth_something_everywhere_it_can_be() {
     let ph = parts::phys(Kind::SteamEngine);
     let m = Mat::CastIron;
     let top = ph.ceiling(m);
-    let mut seen: Vec<(Band, u64)> = Vec::new();
+
+    // The five labels still exist, in order, each entered exactly once.
+    let mut seen: Vec<Band> = Vec::new();
     for t in 0..=top + 20 {
         let b = ph.band(t, m);
-        if seen.last().map(|(x, _)| *x) != Some(b) {
-            seen.push((b, b.duty()));
+        if seen.last() != Some(&b) {
+            seen.push(b);
         }
     }
-    let bands: Vec<Band> = seen.iter().map(|(b, _)| *b).collect();
     assert_eq!(
-        bands,
+        seen,
         vec![Band::Cold, Band::Normal, Band::Warm, Band::Hot, Band::Overheated],
         "five bands, in order, and each of them entered exactly once"
     );
-    let duties: Vec<u64> = seen.iter().map(|(_, d)| *d).collect();
-    assert_eq!(duties, vec![600, 1000, 950, 750, 0], "and these are the numbers");
+
+    // And the duty is monotone across the whole scale, rated through the
+    // operating range and nowhere else, ending at nothing.
+    let duty: Vec<u64> = (0..=top).map(|t| ph.duty_at(t, m)).collect();
+    for t in 1..=top as usize {
+        if t <= ph.lo as usize {
+            assert!(duty[t] >= duty[t - 1], "warming up should never be worse: at {t}");
+        } else if t > ph.hi as usize {
+            assert!(duty[t] <= duty[t - 1], "getting hotter should never be better: at {t}");
+        }
+    }
+    assert_eq!(duty[ph.lo as usize], era::DUTY_RATED, "rated at the bottom of the range");
+    assert_eq!(duty[ph.hi as usize], era::DUTY_RATED, "and at the top of it");
+    assert_eq!(ph.duty_at(top, m), 0, "and nothing at the trip");
+    assert_eq!(duty[0], era::DUTY_FLOOR, "stone cold is the floor, not a stop");
+
+    // The part five steps could not do: between `hi` and the trip, moving one
+    // degree is worth something almost everywhere.
+    let band = (ph.hi + 1)..top;
+    let moved = band.clone().filter(|&t| ph.duty_at(t, m) != ph.duty_at(t - 1, m)).count();
+    assert!(
+        moved * 2 > band.count(),
+        "only {moved} degrees above the range changed anything"
+    );
 
     // A component with no operating floor has no cold band at all: a crusher is
     // not worse in the morning.
@@ -526,14 +551,25 @@ fn air_around_a_machine_is_cooling() {
     let packed = run(&parse(&plan(0)), 800);
     let spaced = run(&parse(&plan(4)), 800);
     let mo = |m: &Machine| m.index_of("MO1").unwrap();
-    assert_eq!(m_util(&packed, mo(&packed)), m_util(&spaced, mo(&spaced)), "same work");
-    assert!(m_util(&packed, mo(&packed)) > 0, "and it is actually working");
+    assert!(m_util(&packed, mo(&packed)) > 0, "it is actually working");
     assert!(
         packed.temp(mo(&packed)) > spaced.temp(mo(&spaced)),
         "packed {} should be hotter than spaced {}",
         packed.temp(mo(&packed)),
         spaced.temp(mo(&spaced))
     );
+    // And the degrees are worth output. This assertion used to be `same work`,
+    // written when the table was loaded so lightly that no amount of packing
+    // could move a motor out of its operating range -- so air changed the
+    // temperature and nothing else, which is a statistic rather than a
+    // decision.
+    assert!(
+        m_util(&spaced, mo(&spaced)) > m_util(&packed, mo(&packed)),
+        "air bought nothing: packed {} against spaced {}",
+        m_util(&packed, mo(&packed)),
+        m_util(&spaced, mo(&spaced))
+    );
+    assert_eq!(spaced.duty(mo(&spaced)), era::DUTY_RATED, "and four tiles is enough");
 }
 
 fn m_util(m: &Machine, i: usize) -> u32 {
@@ -542,56 +578,99 @@ fn m_util(m: &Machine, i: usize) -> u32 {
 
 // ------------------------------------------------------- the guard rail
 
-/// The promise experiment 14 made to the thirteen before it.
+/// The rule the heat table is set by, and the one experiment 14's guard rail
+/// used to hold shut.
 ///
-/// Every component that existed before this experiment settles inside its
-/// operating range on the frame it comes on, with no clearance at all and at
-/// full output. So `duty` is one thousand per mille for all of them in every
-/// design written before this file existed, and the arithmetic of experiments
-/// 06 to 13 is bit-for-bit what it was. The thermal model is not switched off
-/// for them -- it is running, and it is telling the truth, and the truth is
-/// that an idealised steel crusher in still air runs warm rather than hot.
+/// That guard rail asserted the opposite of this: that every component
+/// predating experiment 14 settled *inside* its operating range on its own
+/// frame with no clearance at all, so that thirteen experiments' worth of
+/// scoreboards would not move. It did its job and it cost more than it was
+/// worth. Under it nothing in the catalogue but the steam engine could reach
+/// even the WARM band on any frame at any spacing, so four of the five bands
+/// were unreachable, three cooling components existed to cool one machine, and
+/// the whole thermal model was arithmetic nobody could get to.
+///
+/// What replaces it is a rule rather than an exemption, and it is the rule
+/// `heat` is now derived from:
+///
+/// ```text
+///   packed against its neighbours   -> above `hi`, and derated
+///   two clear tiles                 -> back inside the range, and rated
+/// ```
+///
+/// So spacing is a decision on every machine in the kit, it is worth
+/// something on every tile rather than at one threshold, and no component is
+/// asked to run permanently derated just for standing in a line.
 #[test]
-fn the_older_designs_are_the_same_machines() {
-    for &k in parts::KINDS.iter().take(BEFORE) {
+fn spacing_is_a_decision_on_every_machine() {
+    let mut checked = 0;
+    for &k in parts::KINDS.iter() {
         let ph = parts::phys(k);
-        if !ph.thermal() {
+        if !ph.thermal() || k == Kind::SteamEngine {
+            // The engine is the one component that is meant to be a cooling
+            // problem on its own account, rather than a spacing decision. It
+            // has its own test.
             continue;
         }
-        let settles = ph.settles_at(ph.mat, 0);
+        checked += 1;
+        let packed = ph.settles_at(ph.mat, 0);
+        let roomy = ph.settles_at(ph.mat, 2);
         assert!(
-            settles <= ph.hi,
-            "{} settles at {settles} against a range that ends at {} -- \
-             that would re-score every design that uses one",
+            packed > ph.hi,
+            "{}: packed it settles at {packed}, inside a range that ends at {} -- \
+             nothing would ever make it warm and the model would be unreachable",
             k.tag(),
             ph.hi
         );
-        assert_eq!(ph.band(settles, ph.mat), Band::Normal, "{}", k.tag());
+        assert!(
+            roomy <= ph.hi,
+            "{}: even with two clear tiles it settles at {roomy} against a range \
+             ending at {} -- spacing has to be a decision that can be taken",
+            k.tag(),
+            ph.hi
+        );
+        // And being warm must cost output without stopping the machine: a
+        // component that trips on nothing but standing next to something is
+        // not a decision, it is a trap.
+        assert!(
+            packed < ph.ceiling(ph.mat),
+            "{}: packed it trips, with no cooling decision available",
+            k.tag()
+        );
+        let hot = ph.duty_at(packed, ph.mat);
+        let cool = ph.duty_at(roomy, ph.mat);
+        assert!(hot < cool, "{}: {hot} packed against {cool} spaced", k.tag());
+        assert_eq!(cool, era::DUTY_RATED, "{}: two tiles should be rated", k.tag());
     }
+    assert!(checked >= 11, "only {checked} components have a body worth spacing");
+}
 
-    // And nothing in the eighteen older designs is shaking or derated.
-    for path in std::fs::read_dir("designs").unwrap().flatten() {
-        let p = path.path();
-        if p.extension().is_none_or(|x| x != "machine") {
-            continue;
-        }
-        let name = p.to_string_lossy().into_owned();
-        let d = load(&name);
-        if d.brief == Brief::Line {
-            continue;
-        }
-        let m = run(&d, 2_000);
-        for i in 0..m.len() {
-            assert_eq!(
-                m.duty(i),
-                1000,
-                "{name}: {} is derated, and no design older than experiment 14 should be",
-                m.names[i]
-            );
-            assert_ne!(m.st[i].status, Status::Shaking, "{name}: {}", m.names[i]);
-            assert_ne!(m.st[i].status, Status::Overheated, "{name}: {}", m.names[i]);
-        }
+/// Every tile of air is worth something, which five bands could not say.
+///
+/// The band model gave a crusher on cast iron three distinct duties across the
+/// whole range of spacings -- 750, then 950 for three tiles running, then
+/// 1000 -- so a player who moved it from one clear tile to two got exactly
+/// nothing, twice. The curve answers every tile.
+#[test]
+fn every_tile_of_air_is_worth_something() {
+    let ph = parts::phys(Kind::Crusher);
+    let m = Mat::CastIron;
+    let duties: Vec<u64> =
+        (0..=era::CLEAR_MAX).map(|c| ph.duty_at(ph.settles_at(m, c), m)).collect();
+
+    for pair in duties.windows(2) {
+        assert!(
+            pair[1] >= pair[0],
+            "more air made it worse: {duties:?}"
+        );
     }
+    assert!(
+        duties.first() < duties.last(),
+        "air bought nothing at all: {duties:?}"
+    );
+    // Four of the five steps do something. Under the bands it was two.
+    let moved = duties.windows(2).filter(|p| p[1] > p[0]).count();
+    assert!(moved >= 4, "only {moved} of the four tiles changed anything: {duties:?}");
 }
 
 /// A body temperature is state, and `orbit` compiles a design by watching its

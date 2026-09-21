@@ -1175,39 +1175,51 @@ a vocabulary rather than an elaborate way of writing `Boiler Mk2`.
 ```text
 GENERATE ELECTRICITY  --  heat, fluid, gas, rotary, electrical
 design                          made     grid   water  wasted     plot  parts  util  start   period
-01-first-try                   54.00      0.0    81.0   797.5     15x6      5   66%    386        2
-02-more-of-everything         216.00      0.0   324.0   190.0    15x19     15   88%    437        4
-03-compact                    108.00      0.0   160.0     0.0     12x6      8   81%    426        2
+01-first-try                   54.00      0.0    81.0   797.5     15x6      5   66%    334        2
+02-more-of-everything         216.00      0.0   324.0   190.0    15x19     15   88%    384        4
+03-compact                    102.00      0.0   160.0     0.0     12x6      8   79%    492        2
 04-stalled                      0.00      0.0    80.0     0.0     16x8     10   18%    122        3
-05-pulsed                      51.19      0.0    80.0     0.0     16x8     10   36%    729       42
-06-radial                     216.00      0.0   320.0     0.0    14x13     15   87%    449        4
+05-pulsed                      51.19      0.0    80.0     0.0     16x8     10   36%    766       21
+06-radial                     207.00      0.0   320.0     0.0    14x13     15   85%    492        4
 
 CRUSH ORE  --  motor, gearbox, rotary, material transformation
-07-crushline                   33.33    225.4     0.0     1.0    21x14     13   69%    263       72
-11-steamcrusher                38.67      0.0   326.0   187.0    30x16     20   75%    646       12
+07-crushline                   33.33    225.4     0.0     1.0    21x14     13   69%    607      144
+11-steamcrusher                38.67      0.0   326.0   187.0    30x16     20   75%    520       36
 
 DISTIL MIXED FLUID  --  heat, phase change, fluid separation
 10-refinery                    35.56      0.0    17.8    34.8    26x10     10   46%    125      204
 
 MANUFACTURE GEARS  --  material handling, forming, buffering
-08-stamping                    48.25    120.0     0.0     9.2    22x12     11   60%    416     1710
-09-machining                   24.00    133.3     0.0     0.0     11x9      8   54%    533       36
-12-onemotor                    17.14     60.0     0.0    18.0    22x12     10   28%    259       70
+08-stamping                    44.01    111.6     0.0    10.1    22x12     11   55%    336     2470
+09-machining                   24.00    133.3     0.0     0.0     11x9      8   54%    246       36
+12-onemotor                    17.14     60.0     0.0    18.0    22x12     10   28%    285       70
 ```
+
+(The fifth brief, `line`, has four designs of its own and lives in the
+experiment 14 section.)
 
 Experiment 06's six were unchanged to the decimal place through experiment 14,
 which was a constraint rather than a coincidence: they are the regression test
 for everything underneath.
 
-Deleting the transport family is the first change that moved them, and it moved
-them in the one way it was always going to. Distance is now charged per tile of
-clear air rather than per pipe, so every connection longer than nothing costs a
-little and the designs that sprawl say so: `01-first-try` pays one extra unit of
-water, `02-more-of-everything` loses 10 a tick on the two heat mains that reach
-the bottom of its plot, `06-radial` — whose exchangers are bolted against the
-reactor with nothing between them — pays nothing at all and is the only one of
-the six that did not move. Three of the eleven designs above lost components and
-were rewritten; the rest are the same documents.
+Two changes have moved them since, and both moved them in the one direction
+they were always going to.
+
+Deleting the transport family charged distance per tile of clear air rather
+than per pipe, so every connection longer than nothing costs a little and the
+designs that sprawl say so: `01-first-try` pays one extra unit of water,
+`02-more-of-everything` loses 10 a tick on the two heat mains that reach the
+bottom of its plot. Three of the eleven designs above lost components and were
+rewritten; the rest are the same documents.
+
+Loading the thermal table properly charged *density*, which is the opposite
+axis. `03-compact` and `06-radial` are the two tightest plants in the file and
+they are the two that pay — 102 and 207 against 108 and 216 — because their
+turbines have no air. `02-more-of-everything` sprawls and pays nothing. So the
+two changes pull against each other on purpose: distance costs heat in the
+mains, density costs output in the machines, and there is no arrangement that
+escapes both. See the experiment 14 section for what that does to
+`03-compact` when you try.
 
 ### The same brief, twice, differently
 
@@ -1330,21 +1342,20 @@ paragraph:
 ```
 
 ```text
-pump         source            15       21  power distil crush line
-exchanger    heat              13       27  power crush line
+pump         source            16       22  power distil crush line
 reactor      source            13       13  power distil crush
+exchanger    heat              15       31  power crush line
 turbine      mechanical        12       32  power crush
+outlet       sink              11       11  crush gears distil line
 generator    mechanical        11       27  power
-outlet       sink              10       10  crush gears distil line
-inlet        source             9       12  crush gears line
+inlet        source            10       14  crush gears line
 motor        mechanical         6       14  crush gears line
-gearbox      mechanical         5        7  crush line
+gearbox      mechanical         6        8  crush line
 ...
-  infrastructure   22 of 30 used, 12 of them across more than one brief
+  infrastructure   23 of 30 used, 12 of them across more than one brief
   process          7 of 7 used, 1 of them across more than one brief
 
-  used by no shipped design: heater, hopper, drum, flywheel, clutch, pulley,
-  mechpump, fan
+  used by no shipped design: heater, hopper, drum, flywheel, clutch, pulley, fan
 ```
 
 The infrastructure passed: reactors, pumps, exchangers, turbines, gearboxes,
@@ -1353,7 +1364,7 @@ that was built for a power plant now heats a distillation column. The process
 components did not span briefs and were never going to — a crusher belongs to
 the crush brief the way a verb belongs to a sentence.
 
-**Eight components earn nothing, and that is the most useful thing the
+**Seven components earn nothing, and that is the most useful thing the
 experiment produced.** It is not that they are badly designed. It is that
 *every port already has a capacity*, so every component in the kit is already a
 buffer, and a dedicated store has nothing left to do. Experiment 06's Steam
@@ -1460,7 +1471,8 @@ property without giving connections ports — which is inventing the component
 again under a different name. Material transport is free now, and the fall rule
 is what is left of the decision.
 
-What it cost, across the repository:
+What it cost, across the repository, measured at the time (the counts have
+moved since, because `22-radiator` was added afterwards):
 
 ```text
                           before   after
@@ -2343,7 +2355,7 @@ cable and driving a twenty-unit gearbox faces the gearbox, because the cable can
 be routed round the answer and the shaft cannot. No amount of solving afterwards
 can fix that one, since a flange slides along its face and never leaves it.
 
-What it is worth, across all twenty-one designs:
+What it was worth at the time, across every design then on disk:
 
 ```text
                       before   after
@@ -2356,8 +2368,9 @@ components merely awkward  20      12
 
 Two corners in five, and the ones left are load bearing. `01-first-try` went
 from seventeen corners to three; `13-longreach` from twenty-one to seven. The
-one refusal is still `07-crushline`'s second motor, which is still bolted to
-the same end of the same shaft and still cannot be.
+one refusal was `07-crushline`'s second motor, bolted to the same end of the
+same line shaft as the first; it went when the shafts did, and the repository
+now refuses nothing.
 
 The report gained the two columns that find the rest: `over` is how much
 further a run went than the shortest orthogonal path between its own two
@@ -3187,21 +3200,26 @@ What changes between eras is not the crusher. It is everything around it.
 
 The brief is the smallest one in the file — extract ore, crush ore, move
 crushed ore, forty a tick at an outlet — and it deliberately asks for nothing
-that any one century has and another does not. Three designs on disk answer it.
+that any one century has and another does not. Four designs on disk answer it;
+the first three are the centuries and the fourth is a cooling decision with the
+century stripped out of it.
 
 ```text
 $ machine era
 
   design               made    plot  parts    grid    fuel  water wasted
   --------------------------------------------------------------------------
-  19-waterline       100.00     273      8     0.0     0.0  373.3    0.0
+  19-waterline        90.00     273      8     0.0     0.0  326.7    0.0
   20-steamline        93.33     336     14     0.0     8.6   12.0  120.0
   21-electricline    100.00     144      9   116.0     0.0    0.0    2.0
+  22-radiator         70.69     290     18     0.0    12.4   98.0  245.0
 
   19-waterline     crusher inlet outlet pump waterwheel
   20-steamline     burner crusher exchanger gearbox inlet jacket outlet pump
                    radiator skip steamengine valve
   21-electricline  crusher gearbox inlet mains motor outlet
+  22-radiator      burner crusher exchanger gearbox inlet mechpump outlet pump
+                   radiator skip steamengine
 ```
 
 Three power systems, three shapes on the ground, three columns of the
@@ -3221,8 +3239,8 @@ electric   mains -> motor -> gearbox -> crusher
 
 The shared half of those parts lists is the ore path — inlet, crusher, outlet —
 which is the half that genuinely does not change between centuries. Across every
-pair of designs, 11 of 35 distinct components are shared, and every one of them
-is ore handling.
+pair of designs, 29 of 73 distinct components are shared, and the shared ones
+are ore handling and boiler plant.
 
 Those three rows got shorter when the transport family went, and the first one
 got shorter than the other two. The water plant used to be fourteen components
@@ -3263,22 +3281,55 @@ table, so a timber press is refused by `Design::check` before anything is
 simulated — it is not a trade-off, it is a category error.
 
 **Temperature.** A body temperature is an integer, held exactly, moved by whole
-units of heat every tick. Behaviour moves only at thresholds:
+units of heat every tick, and what it does about it is a curve:
 
 ```text
-COLD          60%     below its operating range
-NORMAL       100%
-WARM          95%
-HOT           75%
-OVERHEATED     0%     and it will not restart until it is NORMAL again
+temp < lo      60% at stone cold, sliding up to rated at `lo`
+lo ..= hi      100%
+hi .. max      rated, sliding down to 60% at the trip
+temp >= max    0%, and it latches until the body is back inside the range
 ```
 
-A continuous derating curve would give the player a number that always moves a
-little and never means anything; a band gives them something that is true or
-false, a warning before it is false, and a sentence to read when it is. It also
-keeps the state space finite, which is not a detail — `orbit` compiles a design
-by watching its state repeat, and it can only do that because a body temperature
-is one of a few hundred integers rather than one of infinitely many floats.
+Piecewise linear on `lo`, `hi` and `max` — the three numbers already in the
+part table, so a curve costs no more data than five thresholds did.
+
+**It was five thresholds, and this paragraph used to argue for them.** The
+argument was that a continuous derating curve gives the player a number that
+always moves a little and never means anything, where a band gives them
+something true or false with a sentence to read; and that steps keep the state
+space finite, which matters because `orbit` compiles a design by watching its
+state repeat. Both halves turned out to be wrong, and the second was wrong in
+the interesting direction.
+
+A step function that feeds its own input chatters. The duty sets the heat, the
+heat sets the temperature, and the temperature sets the duty — so an
+equilibrium landing on a band edge straddles it forever, flipping between two
+duties at whatever rate the rest of the plant wobbles. That is not cosmetic. A
+chattering component is a period of its own and it multiplies into the plant's
+mechanical period: on the reloaded heat table, `08-stamping` compiled to an
+orbit of **12,720** ticks with bands and **2,470** with the curve, and the
+repository's longest orbit went from 12,580 ticks to 6,290. The state space got
+finer and the orbits got shorter, because what was costing them was not the
+number of values, it was the oscillation.
+
+Bands were not deleted. They are `COLD NORMAL WARM HOT OVERHEATED` still, and
+they are still derived from the same three numbers — but they are now a *label*
+for where a body is on the curve rather than the mechanic itself. The panel
+reads `WARM · 91%`, which is better than either half alone: the word says what
+kind of trouble, the number says how much. Two machines can both read WARM and
+be four percent apart, which is exactly the distinction the five steps could not
+make.
+
+The one discontinuity left is the trip, and it should be: a thermal cutout
+genuinely is a step, the machine stops, and it latches out until the body is
+back inside its operating range. That latch is the oldest part of the model and
+the only hysteresis anywhere in it.
+
+This is the same correction `era.rs` already records making once, about
+`WASTE_COND`: *a flat rate turns out to be a small disaster, and cooling has to
+care what it is cooling.* `shed`, `cool` and `wasteable` were all proportional
+already. The output response was the last step in the model, and it sat exactly
+where the model feeds back on itself.
 
 **Vibration.** A crusher shakes at 7. Timber carries 4. Vibration travels
 through every rigid rotary connection — which is what a rotary wire is unless it
@@ -3338,9 +3389,16 @@ it cannot be built without a cooling decision. One wire is the difference:
 ```text
   component  kind          frame    air  temp   band        duty
   ---------------------------------------------------------------
-  SE1        steamengine   iron       0   152  TRIPPED         0%     no radiator
-  SE1        steamengine   iron       0   108   NORMAL       100%     one radiator
+  SE1        steamengine   iron       0   122  TRIPPED         0%     no radiator
+  SE1        steamengine   iron       0   159      HOT        84%     one radiator
 ```
+
+`designs/22-radiator.machine` is that second row, and the file carries what the
+wire is worth: 70.69/tick of crushed ore with it and 27.12/tick without, which
+is the difference between meeting the brief and missing it. The 84% is the part
+worth looking at twice. Under the five bands, anything from 121 degrees to 219
+was a flat 750, so an engine a degree over its range and an engine a degree from
+destroying itself were the same machine.
 
 And the waste heat is not thrown away. Heat leaving a `waste` port carries a
 *grade* — the body temperature it came off at, on the same scale everything else
@@ -3357,12 +3415,19 @@ bug with a diagram.
 
 ### Two things that were not designed and turned up anyway
 
-**Thermal derating is a stabilising loop.** The HOT band takes a quarter off a
-component's output, which takes a quarter off its heat, which is negative
-feedback — so a hot machine mostly settles *just* below its trip rather than
-running away to it. Reaching OVERHEATED takes a machine that is both fully
+**Thermal derating is a stabilising loop.** Running hot takes output off a
+component, which takes heat off it in the same proportion, which is negative
+feedback — so a hot machine settles *just* below its trip rather than running
+away to it. `22-radiator` parks its engine at 159 degrees against a ceiling of
+220 and stays there. Reaching OVERHEATED takes a machine that is both fully
 loaded and packed in with no air, which is a much better failure mode than a
 cliff: it is something the player walks towards and can see coming.
+
+That loop is also why the five bands had to go. Negative feedback through a
+*step* is a thermostat without hysteresis, and it chatters; negative feedback
+through a curve converges. The mechanic that was designed on purpose and the
+one that showed up by accident turned out to be the same mechanic, and it only
+works properly in one of the two shapes.
 
 **A closed steam cycle can be over-fed.** An engine vents a sixth of its steam
 up the stack, so the feedwater loop runs at a deficit and the makeup valve is a
@@ -3373,27 +3438,79 @@ whole thing deadlocks with every buffer full. Nobody wrote that rule. It falls
 out of components that block when they are full, which is how every component
 in this crate has behaved since experiment 06.
 
-### The promise to the thirteen experiments before it
+### The promise to the thirteen experiments before it, and what it cost
 
 An experiment about thermal limits that silently re-scored eighteen measured
 designs would have proved nothing except that it had changed the subject. So
-every component that existed before experiment 14 settles inside its operating
-range on the frame it comes on, at full output, with no clearance at all — which
-means `duty` is 1000 per mille for all of them, and the arithmetic of
-experiments 06 to 13 is bit-for-bit what it was.
+every component that existed before experiment 14 was given a `heat` low enough
+that it settled inside its operating range on its own frame, at full output,
+with no clearance at all — `duty` was 1000 per mille for all of them, the
+arithmetic of experiments 06 to 13 was bit-for-bit what it had been, and
+`tests/era.rs` held it there from both ends: from the part table, and from
+every design on disk.
 
-The thermal model is not switched off for them. It is running, it is telling the
-truth, and the truth is that an idealised steel crusher in still air runs warm
-rather than hot. `tests/era.rs` asserts it from the part table and then again
-from every design on disk.
+That was the right call for shipping experiment 14 and the wrong one to leave
+standing, and the cost only became visible by counting. On those numbers
+**nothing in the catalogue except the steam engine could reach even the WARM
+band** — on any frame, at any spacing, at full output. So four of the five
+bands were unreachable, the radiator and the fan and the jacket existed to cool
+exactly one machine, `Mat::Wood`'s conductivity and ceiling were consulted by
+nothing at all, and a player could build for an afternoon without ever seeing a
+temperature do anything. A model nobody can reach is not a conservative model,
+it is an absent one.
+
+So the guard rail is gone and `heat` is now derived rather than guessed:
+
+```text
+heat = 1.22 * hi * cond(the frame it comes on) / 100
+```
+
+which puts a component packed against its neighbours just above the top of its
+range, and the same component with two clear tiles just below it. `tests/era.rs`
+asserts *that* now — a rule rather than an exemption. Spacing is a decision on
+every machine in the kit instead of on one of them, and the frame is two
+decisions instead of one: cast iron carries more shake than timber and sheds
+heat worse than steel, which is what `cond` was always for.
+
+What it cost the shipped designs, measured across all twenty-one: **every
+verdict unchanged, fifteen of them numerically identical.** Six moved, and all
+six moved because they are packed:
+
+| design | made | → | why |
+|---|---|---|---|
+| 08-stamping | 48.25 | 43.19 | press, crank and mill all boxed in |
+| 19-waterline | 100.00 | 90.00 | crushers on cast iron, which conducts worse |
+| 03-compact | 108.00 | 102.00 | turbines with no clear air |
+| 17-stacked | 108.00 | 102.00 | the same, one storey up |
+| 06-radial | 216.00 | 207.00 | the tight one |
+| 02-more-of-everything | 216.00 | 216.00 | the sprawl pays nothing |
+
+That last pair is the whole argument on one line. `02` and `06` are the same
+fifteen components against the same brief, and they used to make *identical*
+power — the pairing existed to show that two machines can average the same and
+be different machines. Now the compact one pays four percent for its density,
+which is a better version of the same point: the footprint brief and the
+thermal model finally argue with each other.
+
+And the obvious counter-move does not work. Spreading `03-compact` out until
+its turbines are cool costs twelve units a tick in the heat main — because
+distance is charged per tile since the transport family went — doubles the plot
+and drops it below the 100 MW brief. Two mechanics designed independently, a
+year apart, pushing against each other correctly.
 
 What *did* change is the transient. A body temperature is real state, so every
-design now has a thermal settling time on top of its mechanical one, and several
-have a longer period: `08-stamping` went from 40 ticks to 120, because the
-temperature of a press is a slow integrator that does not close its loop on the
-same tick the drive train does. That is not a regression, it is the experiment
-working — and `machine verify` still agrees with a straight simulation at every
-tick it is asked about.
+design has a thermal settling time on top of its mechanical one, and several
+have a longer period: `08-stamping` went from 40 ticks to 120 when experiment 14
+landed, because the temperature of a press is a slow integrator that does not
+close its loop on the same tick the drive train does. That is not a regression,
+it is the experiment working — and `machine verify` still agrees with a straight
+simulation at every tick it is asked about.
+
+Loading the table properly moved those numbers again and, unexpectedly, mostly
+downwards: the repository's longest orbit is 6,290 ticks against the 12,580 it
+was, because the curve removed chatter that the five bands had been putting in.
+Every design still settles, and `tests/era.rs` and `tests/machine.rs` both
+refuse to let one stop.
 
 ### What it cost, and what it paid back
 
@@ -3726,7 +3843,7 @@ src/why.rs        Prototype 1: why a thing is not running, and what binds
 src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
 src/main.rs       experiment harness, `serve`, `export` and `play`
 web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            211 cross-validation tests
+tests/            262 cross-validation tests
 configs/          the fifteen configurations, plus the first scenario plant
 scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build

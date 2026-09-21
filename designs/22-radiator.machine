@@ -1,0 +1,87 @@
+# The cooling decision, on its own, with nothing else in the way.
+#
+# A steam engine with enough to do -- three pumps and two crushers take
+# everything it makes -- wedged against a skip so it has no clear air at all,
+# and one radiator on the waste port. That radiator is the only cooling in the
+# design. There is no jacket, no spacing and no choice of frame: a steam engine
+# comes on cast iron and the only other thing it may be built out of is steel,
+# which trips at the same 220 the machine itself does.
+#
+# So the engine settles at 159 degrees, which is HOT, which is 84% of rating.
+# It is not a failure and it is not free. That number is the whole of what this
+# file is for, because it is a number the model could not produce until the
+# duty stopped being five steps: under the bands, anything between 120 and 220
+# degrees was a flat 750, so an engine at 121 and an engine at 219 were the
+# same machine. They are not.
+#
+#   20-steamline   engine at  84 degrees   NORMAL   100% of rating
+#   22-radiator    engine at 159 degrees   HOT       84% of rating
+#
+# The difference between those two rows is a jacket and a tile of air.
+#
+# What the one wire is worth, measured:
+#
+#   with    `wire SE1.waste -> RD1.heat`    70.69/tick of crushed ore    MET
+#   without it                              27.12/tick                   missed
+#
+# Take it off and the engine trips at 220, latches out until it is back under
+# 120, cools, restarts, and trips again -- forever. It spends about half its
+# life stopped, the plant makes a third of what it should, and it misses a
+# brief it beats by seventy percent with the wire in.
+#
+# That broken version is not on disk, and the reason is worth writing down
+# rather than hiding: it never settles. Twenty thousand ticks and the engine's
+# trip cycle has still not come back into phase with the crank and the press,
+# so there is no periodic orbit to compile and `machine` can only estimate it.
+# Every design in this repository compiles to a transient plus an exact orbit,
+# and `tests/machine.rs` holds it to that. A machine that cooks itself is a
+# legitimate thing to build and an illegitimate thing to ship.
+
+machine "One Radiator"
+brief line
+
+inlet       F1  at 0,0    draws coal
+burner      BU1 at 3,0
+burner      BU2 at 3,4
+pump        P1  at 0,8    draws water
+exchanger   HX1 at 7,0
+exchanger   HX2 at 7,4
+steamengine SE1 at 11,0
+skip        SK1 at 11,3
+radiator    RD1 at 7,8
+gearbox     GB1 at 16,0   ratio 2
+crusher     C1  at 19,0
+crusher     C2  at 23,0
+inlet       I1  at 19,4   draws ore
+outlet      O1  at 27,0
+mechpump    MP1 at 16,4   frame iron
+mechpump    MP2 at 16,7   frame iron
+mechpump    MP3 at 11,7   frame iron
+skip        SK2 at 19,7
+
+wire F1.out -> BU1.fuel
+wire F1.out -> BU2.fuel
+wire BU1.heat -> HX1.heat
+wire BU2.heat -> HX2.heat
+wire P1.water -> HX1.water
+wire P1.water -> HX2.water
+wire HX1.steam -> SE1.steam
+wire HX2.steam -> SE1.steam
+
+wire SE1.rotary -> GB1.in
+wire GB1.out -> C1.drive
+wire GB1.out -> C2.drive
+wire SE1.rotary -> MP1.drive
+wire SE1.rotary -> MP2.drive
+wire SE1.rotary -> MP3.drive
+wire MP1.water -> SK2.liquid
+wire MP2.water -> SK2.liquid
+wire MP3.water -> SK2.liquid
+
+wire SE1.condensate -> SK1.liquid
+wire SE1.exhaust -> SK1.vapour
+wire SE1.waste -> RD1.heat
+
+wire I1.out -> C1.in
+wire C1.out -> C2.in
+wire C2.out -> O1.solid

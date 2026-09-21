@@ -55,27 +55,46 @@
 //!   vibration    what it shakes, and what has to put up with being shaken
 //! ```
 //!
-//! # Temperature is exact and behaviour is not
+//! # Temperature is exact, and so is what it does about it
 //!
 //! The body temperature of a component is an integer -- degrees above ambient,
-//! held exactly, moved by whole units of heat every tick. Its *behaviour* moves
-//! only at thresholds:
+//! held exactly, moved by whole units of heat every tick. What it *does* about
+//! it is a curve, `Phys::duty_at`, piecewise linear on the three numbers each
+//! row already carries:
 //!
 //! ```text
-//!   COLD          60%     below its operating range
-//!   NORMAL       100%
-//!   WARM          95%
-//!   HOT           75%
-//!   OVERHEATED     0%     and it will not restart until it is NORMAL again
+//!   temp < lo      60% at stone cold, sliding up to rated at `lo`
+//!   lo ..= hi      100%
+//!   hi .. max      rated, sliding down to 60% at the trip
+//!   temp >= max    0%, latched until the body is back inside the range
 //! ```
 //!
-//! That split is the whole design. A continuous derating curve would give the
-//! player a number that always moves a little and never means anything; a band
-//! gives them a thing that is true or false, a warning before it is false, and
-//! a sentence to read when it is. It also keeps the state space finite, which
-//! is not a detail: `orbit` compiles a design by watching for its state to
-//! repeat, and it can only do that because a body temperature is one of a few
-//! hundred integers rather than one of infinitely many floats.
+//! The five bands are still here -- `COLD NORMAL WARM HOT OVERHEATED`, derived
+//! from the same three numbers -- but they are a *label* for where a body is on
+//! that curve rather than the mechanic itself. A panel reads `WARM . 91%`,
+//! which is better than either half alone: the word says what kind of trouble
+//! and the number says how much.
+//!
+//! This paragraph used to argue the other way, and both halves of the argument
+//! turned out to be wrong. The first was that a continuous curve gives the
+//! player a number that always moves a little and never means anything, where a
+//! band gives them something true or false with a sentence to read. The second
+//! was that steps keep the state space finite, which matters because `orbit`
+//! compiles a design by watching for its state to repeat.
+//!
+//! What the first missed is that a step which feeds its own input chatters: the
+//! duty sets the heat, the heat sets the temperature, the temperature sets the
+//! duty, so an equilibrium landing on a band edge straddles it forever. What
+//! the second missed is that the chatter costs far more orbit than the extra
+//! values do. Measured on the reloaded table, `08-stamping` compiled to 12,720
+//! ticks with bands and 2,470 with the curve, and the repository's longest
+//! orbit fell from 12,580 to 6,290. The state space got finer and the periods
+//! got shorter.
+//!
+//! One discontinuity is left, and it earns it: the trip. A thermal cutout
+//! genuinely is a step, and it latches until the body is back inside its
+//! operating range -- the oldest rule in this module and the only hysteresis
+//! anywhere in it.
 //!
 //! # Cooling is a design decision, not a statistic
 //!
@@ -287,6 +306,11 @@ impl fmt::Display for Mat {
 // ------------------------------------------------------------------- bands
 
 /// The five things a body temperature can mean.
+///
+/// A label rather than a mechanic. What a body temperature *does* is
+/// `Phys::duty_at`, which is a curve; this is what a panel calls the place on
+/// it, so that "WARM" and "91% of rating" are two halves of one sentence
+/// rather than two different models.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum Band {
     Cold,
@@ -295,13 +319,6 @@ pub enum Band {
     Hot,
     Overheated,
 }
-
-/// What each band does to output, in per mille.
-///
-/// These five numbers are the whole behavioural model, and they are here rather
-/// than spread through `sim` so that re-tuning the experiment is editing one
-/// screen.
-pub const DUTY: [u64; 5] = [600, 1000, 950, 750, 0];
 
 impl Band {
     pub fn tag(self) -> &'static str {
@@ -314,11 +331,6 @@ impl Band {
         }
     }
 
-    /// Per mille of rated output in this band.
-    pub fn duty(self) -> u64 {
-        DUTY[self as usize]
-    }
-
     /// Whether a component in this band is doing its job.
     pub fn well(self) -> bool {
         matches!(self, Band::Normal | Band::Warm)
@@ -329,8 +341,8 @@ impl Band {
         match self {
             Band::Cold => "below its operating range -- it needs to be run in, or kept warm",
             Band::Normal => "in its operating range",
-            Band::Warm => "above its range, and losing a little to it",
-            Band::Hot => "far above its range -- a quarter of its output is gone",
+            Band::Warm => "above its range, and losing a little of it to that",
+            Band::Hot => "far above its range, and losing output in proportion to how far",
             Band::Overheated => {
                 "tripped on temperature, and it will not restart until it is back \
                  in range -- give it cooling, spacing, or a better frame"
@@ -401,6 +413,54 @@ impl Phys {
     /// lower of what the machine will stand and what the frame will.
     pub fn ceiling(&self, m: Mat) -> u32 {
         self.max.min(m.ceiling())
+    }
+
+    /// What this body is doing, per mille of rating, at this temperature.
+    ///
+    /// A curve rather than five steps, and the reason is the one this module
+    /// already records learning once, a hundred lines down, about `WASTE_COND`:
+    /// *a flat rate turns out to be a small disaster, and a thing that responds
+    /// has to care how far off it is.* `shed`, `cool` and `wasteable` are all
+    /// proportional. The output response was the only step left in the model,
+    /// and it sat exactly where the model feeds back on itself.
+    ///
+    /// That feedback is why steps could not stay. The duty sets the heat, the
+    /// heat sets the temperature, and the temperature sets the duty -- so an
+    /// equilibrium that lands on a band edge straddles it forever, chattering
+    /// between two duties at whatever rate the rest of the plant wobbles. It is
+    /// not a cosmetic problem: a chattering component is a period of its own,
+    /// it multiplies into the plant's mechanical period, and `08-stamping`
+    /// compiled to an orbit of 12,720 ticks instead of 1,710 because of it. A
+    /// curve has no edges to straddle, so it needs no hysteresis anywhere
+    /// except the trip, which has always had one and should.
+    ///
+    /// Piecewise linear on `lo`, `hi` and `max` -- the three numbers already in
+    /// the row, so a curve costs no more table than five thresholds did -- and
+    /// fitted through the band model's own midpoints, which is why swapping one
+    /// for the other moved twenty of twenty-one shipped designs by nothing at
+    /// all.
+    ///
+    /// ```text
+    ///   temp < lo      600 at stone cold, sliding up to rated at `lo`
+    ///   lo ..= hi      rated
+    ///   hi .. max      rated, sliding down to 600 at the trip
+    ///   temp >= max    nothing, and it latches -- see `Machine::thermal`
+    /// ```
+    pub fn duty_at(&self, temp: u32, m: Mat) -> u64 {
+        let max = self.ceiling(m);
+        if temp >= max {
+            return 0;
+        }
+        if temp < self.lo {
+            // Warming up, which is a ramp and not a threshold.
+            return DUTY_FLOOR + (DUTY_RATED - DUTY_FLOOR) * temp as u64 / self.lo.max(1) as u64;
+        }
+        if temp <= self.hi {
+            return DUTY_RATED;
+        }
+        let over = (temp - self.hi) as u64;
+        let span = (max - self.hi).max(1) as u64;
+        DUTY_RATED - ((DUTY_RATED - DUTY_FLOOR) * over / span).min(DUTY_RATED - DUTY_FLOOR)
     }
 
     /// Which band a body temperature falls in.
@@ -482,6 +542,14 @@ pub fn shed(temp: u32, m: Mat, clear: u32) -> u64 {
 /// never worth catching, so the jacket downstream of it sat refusing ambient
 /// heat forever. Cooling has to care what it is cooling.
 pub const WASTE_COND: u64 = 200;
+
+/// The two ends of the duty curve, per mille: what a body does deep in its
+/// operating range, and what it is down to by the time it trips.
+///
+/// Where the five-step `DUTY` table used to be, and they are here for the same
+/// reason it was -- re-tuning the experiment should be editing one screen.
+pub const DUTY_FLOOR: u64 = 600;
+pub const DUTY_RATED: u64 = 1000;
 
 /// The most heat that will leave the body this tick through its waste port.
 pub fn wasteable(temp: u32) -> u64 {
@@ -577,7 +645,6 @@ pub fn bands() -> Json {
             .map(|b| {
                 Json::obj()
                     .set("tag", b.tag())
-                    .set("duty", b.duty() as i64)
                     .set("well", b.well())
                     .set("note", b.note())
             })

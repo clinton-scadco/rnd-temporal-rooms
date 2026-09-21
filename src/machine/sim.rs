@@ -740,7 +740,10 @@ impl Machine {
         }
     }
 
-    /// Which band that temperature falls in, on the frame it was built on.
+    /// Which band it is running in, on the frame it was built on.
+    ///
+    /// A label rather than a mechanic. What decides output is `duty_at`, which
+    /// is a curve; this is what the panel calls the place on it.
     pub fn band(&self, i: usize) -> Band {
         parts::phys(self.kinds[i]).band(self.temp(i), self.mats[i])
     }
@@ -879,10 +882,10 @@ impl Machine {
         if self.st[i].tripped {
             return 0;
         }
-        self.band(i).duty()
+        parts::phys(self.kinds[i]).duty_at(self.temp(i), self.mats[i])
     }
 
-    /// A rated figure, derated by the band the body is in.
+    /// A rated figure, derated by where on the duty curve the body is.
     fn derate(&self, i: usize, rated: u64) -> u64 {
         let q = self.duty(i);
         if q >= 1000 {

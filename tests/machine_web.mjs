@@ -185,7 +185,7 @@ for (const m of cat.materials) {
   ok(m.conducts > 0 && m.ceiling > 0 && m.tolerates > 0, `${m.tag} is a real trade`);
 }
 for (const b of cat.bands) {
-  ok(typeof b.duty === 'number' && !!b.note, `the ${b.tag} band says what it does`);
+  ok(typeof b.well === 'boolean' && !!b.note, `the ${b.tag} band says what it does`);
 }
 for (const kind of cat.order) {
   const p = cat.parts[kind];

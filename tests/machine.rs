@@ -171,19 +171,54 @@ fn a_billion_ticks_costs_hundreds() {
     assert_eq!(b.fuel() - a.fuel(), c.orbit.fuel());
 }
 
-/// Two machines can average the same and be different machines. That is the
-/// distinction the whole module tree exists to keep, so something had better
-/// notice if it stops being true.
+/// Two machines with the same parts list and the same brief are not the same
+/// machine, and the scoreboard has to be able to say so in more than one
+/// column.
+///
+/// `02-more-of-everything` and `06-radial` are built from the same fifteen
+/// components against the same brief. This test used to assert they made
+/// *identical* power, and that the difference between them was only plot and
+/// waste heat -- which was true, and true for a reason worth being annoyed
+/// about: the thermal model was loaded so lightly that packing four exchangers
+/// against a reactor cost nothing at all.
+///
+/// It costs something now. The radial plant is two thirds of the land and its
+/// turbines have no air, so it pays about four percent of its output for the
+/// density. Neither design dominates, which is the point the pairing has
+/// always been making; there are simply three columns in the argument instead
+/// of two.
 #[test]
 fn the_orbit_is_more_than_an_average() {
-    let a = orbit::compile(&load("designs/02-more-of-everything.machine")).unwrap();
-    let b = orbit::compile(&load("designs/06-radial.machine")).unwrap();
-    let ra = eval::report(&load("designs/02-more-of-everything.machine"), &a);
-    let rb = eval::report(&load("designs/06-radial.machine"), &b);
-    assert_eq!(ra.power.value(), rb.power.value(), "the same average output");
+    let sprawl = load("designs/02-more-of-everything.machine");
+    let tight = load("designs/06-radial.machine");
+    let ra = eval::report(&sprawl, &orbit::compile(&sprawl).unwrap());
+    let rb = eval::report(&tight, &orbit::compile(&tight).unwrap());
+
+    assert_eq!(ra.components, rb.components, "the same parts list");
+
+    // The tight one trades output for land, and the trade is real in both
+    // directions.
+    assert!(
+        rb.power.value() < ra.power.value(),
+        "the packed plant should pay for being packed: {} against {}",
+        rb.power.value(),
+        ra.power.value()
+    );
+    assert!(
+        rb.area() < ra.area(),
+        "and be paid in land: {} tiles against {}",
+        rb.area(),
+        ra.area()
+    );
+    // Close enough that it is a trade rather than a mistake. Ten percent is
+    // the point where a player would stop calling it a choice.
+    let gap = (ra.power.value() - rb.power.value()) / ra.power.value();
+    assert!(gap < 0.10, "the packed plant lost {:.1}% and that is not a trade", gap * 100.0);
+
+    // And they are still different machines in every other column too.
     assert_ne!(
-        (ra.wasted.value(), ra.width, ra.components),
-        (rb.wasted.value(), rb.width, rb.components),
+        (ra.wasted.value(), ra.width),
+        (rb.wasted.value(), rb.width),
         "but not the same machine"
     );
 }

@@ -1327,6 +1327,39 @@ const fn inert(kind: Kind, power: i64) -> Phys {
 /// trips at 220, which is to say: it cannot be built without a cooling decision.
 /// And what runs *cold* is the whole first era, which has no thermal problem at
 /// all and a vibration problem instead.
+///
+/// # The reload, and what the guard rail was costing
+///
+/// That paragraph above was written when this table was the one experiment 14
+/// shipped, and it was honest about the compromise: the thirty-eight
+/// components that predated the experiment were deliberately left settling
+/// well inside their operating ranges so that thirteen experiments' worth of
+/// scoreboards would not move. A test enforced it.
+///
+/// The cost of that only became visible by counting. On the old numbers
+/// *nothing in the catalogue but the steam engine could reach even the WARM
+/// band*, on any frame, at any spacing, at full output -- so four of the five
+/// bands were unreachable, the radiator and the fan and the jacket existed to
+/// cool one machine, and a player could build for an afternoon without ever
+/// seeing a temperature do anything. A model nobody can reach is not a
+/// conservative model, it is an absent one.
+///
+/// So `heat` is now set from the component's own operating range rather than
+/// guessed:
+///
+/// ```text
+///   heat = 1.22 * hi * cond(the frame it comes on) / 100
+/// ```
+///
+/// which puts a component packed against its neighbours just above `hi`, and
+/// the same component with two clear tiles just below it. Spacing is a
+/// decision on every machine in the kit rather than on one of them, and the
+/// frame is now two decisions rather than one -- cast iron carries more shake
+/// than timber and sheds heat worse than steel, which is what `cond` was
+/// always for.
+///
+/// The steam engine is untouched at 500. It was the one row that was already
+/// right, and every uniform scaling tried on top of it broke `20-steamline`.
 static PHYS: [Phys; 37] = [
     // ------------------------------------------------------------- sources
     // A reactor, a burner and a furnace are hot, and none of them has a body
@@ -1364,19 +1397,19 @@ static PHYS: [Phys; 37] = [
     inert(Kind::Furnace, 0),
     // ---------------------------------------------------------- mechanical
     Phys { kind: Kind::Turbine, era: Era::Electric, power: 120, torque: 3, speed: DRIVE_SPEED,
-        heat: 90, mass: 120, lo: 0, hi: 90, max: 200,
+        heat: 164, mass: 120, lo: 0, hi: 90, max: 200,
         mat: STEEL, mats: &ONLY_STEEL, vib: 2 },
     Phys { kind: Kind::Generator, era: Era::Electric, power: 200, torque: 4, speed: GENERATOR_MIN_SPEED,
-        heat: 45, mass: 90, lo: 0, hi: 60, max: 140,
+        heat: 109, mass: 90, lo: 0, hi: 60, max: 140,
         mat: STEEL, mats: &ONLY_STEEL, vib: 1 },
     Phys { kind: Kind::Motor, era: Era::Electric, power: -60, torque: 4, speed: DRIVE_SPEED,
-        heat: 45, mass: 90, lo: 0, hi: 60, max: 140,
+        heat: 109, mass: 90, lo: 0, hi: 60, max: 140,
         mat: STEEL, mats: &STEEL_IRON, vib: 1 },
     Phys { kind: Kind::Gearbox, era: Era::Any, power: 300, torque: 8, speed: 0,
-        heat: 36, mass: 90, lo: 0, hi: 60, max: 160,
+        heat: 109, mass: 90, lo: 0, hi: 60, max: 160,
         mat: STEEL, mats: &STEEL_IRON, vib: 2 },
     Phys { kind: Kind::Crank, era: Era::Any, power: 92, torque: 6, speed: 2,
-        heat: 30, mass: 80, lo: 0, hi: 60, max: 140,
+        heat: 109, mass: 80, lo: 0, hi: 60, max: 140,
         mat: STEEL, mats: &STEEL_IRON, vib: 4 },
     // ------------------------------------------------------------- process
     // The one component this experiment is most careful not to touch. There is
@@ -1384,22 +1417,22 @@ static PHYS: [Phys; 37] = [
     // cannot bolt it to a timber shaft and the third era does not have to think
     // about it.
     Phys { kind: Kind::Crusher, era: Era::Any, power: -50, torque: 8, speed: 2,
-        heat: 60, mass: 120, lo: 0, hi: 70, max: 170,
+        heat: 128, mass: 120, lo: 0, hi: 70, max: 170,
         mat: STEEL, mats: &STEEL_IRON, vib: 7 },
     Phys { kind: Kind::Mill, era: Era::Any, power: -80, torque: 5, speed: 4,
-        heat: 75, mass: 130, lo: 0, hi: 70, max: 170,
+        heat: 128, mass: 130, lo: 0, hi: 70, max: 170,
         mat: STEEL, mats: &STEEL_IRON, vib: 5 },
     Phys { kind: Kind::Separator, era: Era::Any, power: -40, torque: 3, speed: 3,
-        heat: 30, mass: 80, lo: 0, hi: 60, max: 140,
+        heat: 109, mass: 80, lo: 0, hi: 60, max: 140,
         mat: STEEL, mats: &STEEL_IRON, vib: 3 },
     Phys { kind: Kind::RollMill, era: Era::Any, power: -60, torque: 7, speed: 3,
-        heat: 60, mass: 120, lo: 0, hi: 70, max: 170,
+        heat: 128, mass: 120, lo: 0, hi: 70, max: 170,
         mat: STEEL, mats: &ONLY_STEEL, vib: 6 },
     Phys { kind: Kind::Press, era: Era::Any, power: -60, torque: 8, speed: 0,
-        heat: 54, mass: 110, lo: 0, hi: 70, max: 170,
+        heat: 128, mass: 110, lo: 0, hi: 70, max: 170,
         mat: STEEL, mats: &ONLY_STEEL, vib: 8 },
     Phys { kind: Kind::Lathe, era: Era::Electric, power: -20, torque: 2, speed: 5,
-        heat: 30, mass: 80, lo: 0, hi: 60, max: 140,
+        heat: 109, mass: 80, lo: 0, hi: 60, max: 140,
         mat: STEEL, mats: &ONLY_STEEL, vib: 2 },
     inert(Kind::Column, 0),
     // ------------------------------------------------- experiment 14: eras

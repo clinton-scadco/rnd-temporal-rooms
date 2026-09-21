@@ -408,8 +408,11 @@ function bodyPane(box, snap) {
     const bands = (state.cat.bands || []).find(x => x.tag === b.band);
     const row = el('div', 'field');
     row.appendChild(el('label', null, `${b.temp}\u00b0`));
+    // The band is the word and the duty is the number, and since the duty
+    // became a curve rather than five steps the number is the one that moves:
+    // two machines can both read WARM and be four percent apart.
     const badge = el('span', 'status ' + (b.tripped ? 'bad' : bands && bands.well ? 'ok' : 'warn'),
-      b.tripped ? 'TRIPPED' : b.band);
+      b.tripped ? 'TRIPPED' : `${b.band} \u00b7 ${Math.round(b.duty / 10)}%`);
     row.appendChild(badge);
     wrap.appendChild(row);
 
@@ -423,7 +426,7 @@ function bodyPane(box, snap) {
     wrap.appendChild(bar);
     wrap.appendChild(el('p', 'hint',
       `range ${b.lo}\u2013${b.hi}, trips at ${b.ceiling}` +
-      (b.duty < 1000 ? ` \u2014 ${b.duty / 10}% of rating` : '') +
+      (b.duty < 1000 ? ` \u2014 ${Math.round(b.duty / 10)}% of rating` : '') +
       (b.shed ? ` \u2014 shedding ${b.shed}/tick to the air` : '')));
   }
   if (b.shaken) {

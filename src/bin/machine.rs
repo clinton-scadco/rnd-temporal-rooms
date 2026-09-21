@@ -699,7 +699,7 @@ fn eras() -> i32 {
         era::Band::Hot,
         era::Band::Overheated,
     ] {
-        println!("  {:<12} {:>4}%   {}", b.tag(), b.duty() / 10, b.note());
+        println!("  {:<12}   {}", b.tag(), b.note());
     }
 
     // And then the same brief, answered three ways, from disk.
@@ -718,7 +718,7 @@ fn eras() -> i32 {
         return 1;
     }
 
-    println!("\nONE BRIEF, THREE MACHINES\n");
+    println!("\nONE BRIEF, EVERY CENTURY THAT ANSWERS IT\n");
     println!(
         "  {:<16} {:>8} {:>7} {:>6} {:>7} {:>7} {:>6} {:>6}",
         "design", "made", "plot", "parts", "grid", "fuel", "water", "wasted"
