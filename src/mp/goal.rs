@@ -430,6 +430,37 @@ pub static TEMPLATES: &[Template] = &[
         note: "No coal, no water, no grid. Everything this room runs on spent two minutes on a train.",
         make: |_| Shape::Sustain { item: s("Gear"), per_sec: 45, secs: 45 },
     },
+    // ---- experiment 15's three regions --------------------------------
+    //
+    // Three problems that only exist because the world has three centuries in
+    // it. None of them can be met by the region it is posed in, alone, and that
+    // is the whole content of the experiment: the valley's powder half needs a
+    // mill a river can turn, the district's concentrate needs ore out of 1890,
+    // and the zone's gears need billet and power from 2037.
+    Template {
+        id: "slice-valley",
+        family: Family::Delivery,
+        title: "1890 Mining Valley",
+        note: "Ore a shovel deep and carts to move it with. The ore half is heads and                bays; the powder half is a mill, and a mill wants speed 4.",
+        make: |_| Shape::DeliverPair {
+            a: (s("IronOre"), 120_000),
+            b: (s("OrePowder"), 9_000),
+        },
+    },
+    Template {
+        id: "slice-district",
+        family: Family::Throughput,
+        title: "2037 Industrial District",
+        note: "Every machine you could want, and eight a second in the ground. Hold                thirty concentrate a second out of somebody else's century.",
+        make: |_| Shape::Sustain { item: s("Concentrate"), per_sec: 30, secs: 45 },
+    },
+    Template {
+        id: "slice-zone",
+        family: Family::Throughput,
+        title: "2070 Manufacturing Zone",
+        note: "The best process on the map, on bare concrete. A machining cell wants                133 MW for its twenty-four gears, and there is nothing here to burn.",
+        make: |_| Shape::Sustain { item: s("Gear"), per_sec: 20, secs: 45 },
+    },
     Template {
         id: "site-final",
         family: Family::Mixed,
@@ -467,8 +498,14 @@ impl Template {
     /// game would be a brief with half its premises missing -- "no coal, no
     /// water, no grid" is a fine problem when there is a railway, and an
     /// unwinnable one when there is not.
+    ///
+    /// Experiment 15's three regions are excluded for the stronger version of
+    /// the same reason: each of them is posed about a century that only means
+    /// something next to the other two, and "hold thirty concentrate a second"
+    /// is not merely hard in a room with eight a second in the ground -- it is
+    /// arithmetically impossible without a fracture.
     pub fn rollable(&self) -> bool {
-        !self.id.starts_with("site-")
+        !self.id.starts_with("site-") && !self.id.starts_with("slice-")
     }
 }
 

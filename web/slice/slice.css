@@ -1,0 +1,512 @@
+/* Experiment 15, on top of Prototype 2's stylesheet.
+ *
+ * Everything the region view needs is already in `room.css` and is not
+ * repeated here. This file is the slice around it: the world map, the fracture
+ * panel, the century panel, the provenance board, the terrain layer behind the
+ * plot, and the prices on the two palettes.
+ *
+ * One colour is new and it is doing real work: `--fracture` is the only thing
+ * on the screen that is not a factory, and both the interface plaque and the
+ * imported-plant readout use it, so that "this came from somewhere else in
+ * time" reads the same wherever it turns up.
+ */
+
+:root {
+  --fracture: #a98bff;
+  --dark: #e0565f;
+}
+
+body[data-view='map'] .onlyworld,
+body[data-view='world'] .onlymap,
+body[data-view='bench'] .onlymap {
+  display: none;
+}
+
+/* ------------------------------------------------------------------ header */
+
+.where {
+  gap: 2px;
+}
+.where button {
+  font: inherit;
+  border: 1px solid var(--line, #2c3440);
+  background: transparent;
+  color: inherit;
+  padding: 2px 9px 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.72;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.15;
+}
+.where button b {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.where button span {
+  font-size: 9px;
+  color: var(--muted);
+}
+.where button.on {
+  background: #1d2733;
+  border-color: #3d5570;
+  opacity: 1;
+}
+.where button.done b::after {
+  content: ' \2713';
+  color: #8ef0a0;
+}
+
+/* The imported-plant readout. In 2037 it says "none landed" and stays out of
+ * the way; in 1890 it is the number the region is really playing against. */
+.crates {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line, #2c3440);
+}
+.crates label {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+.crates output {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fracture);
+}
+.crates.none output {
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------- the world */
+
+#atlas {
+  position: absolute;
+  inset: 0;
+  background: #0d1117;
+}
+#atlascanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ------------------------------------------------------------- the terrain */
+
+/* Behind the plot, and behind `#world` in particular. It is painted by
+ * `terrain.js` from the projection `world.js` exports, which is why this is a
+ * position and nothing else: the renderer on top does not know it is here. */
+#terrain {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: 0;
+}
+#world {
+  position: relative;
+  z-index: 1;
+}
+
+#terrainkey .terr {
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  gap: 2px 7px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line, #2c3440);
+}
+#terrainkey .terr i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: block;
+}
+#terrainkey .terr b {
+  font-size: 11px;
+}
+#terrainkey .terr span {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+#terrainkey .terr.taken b {
+  color: var(--dark);
+}
+
+/* ------------------------------------------------------------- the century */
+
+#roomcard .problem {
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0 0 8px;
+}
+#roomcard .note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0 0 10px;
+}
+#roomcard .stat,
+#century .stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line, #2c3440);
+}
+#roomcard .stat b,
+#century .stat b {
+  color: var(--muted);
+  font-weight: 400;
+}
+#roomcard h3,
+#century h3,
+#gates h3 {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 12px 0 5px;
+}
+#roomcard .row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  padding: 2px 0;
+}
+#roomcard .row.spent {
+  opacity: 0.5;
+}
+#roomcard .row b {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-weight: 400;
+}
+/* Somebody else's building, on ground you were standing on in another century.
+ * Bordered in the fracture colour because that is what it is evidence of. */
+#roomcard .took {
+  border-left: 2px solid var(--dark);
+  padding: 5px 0 5px 8px;
+  margin-bottom: 6px;
+}
+#roomcard .took b {
+  font-size: 11px;
+}
+#roomcard .took span {
+  color: var(--muted);
+  font-size: 10px;
+  margin-left: 6px;
+}
+#roomcard .took p {
+  margin: 3px 0 0;
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+#roomcard button.go {
+  width: 100%;
+  margin-top: 12px;
+  font: inherit;
+  font-size: 11px;
+  padding: 6px;
+  border-radius: 4px;
+  border: 1px solid #3d5570;
+  background: #1d2733;
+  color: inherit;
+  cursor: pointer;
+}
+
+#century .blurb {
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+#century .lack {
+  border-left: 2px solid var(--line, #2c3440);
+  padding: 4px 0 4px 8px;
+  margin-bottom: 5px;
+}
+#century .lack b {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+#century .lack span {
+  color: var(--fracture);
+  font-size: 10px;
+  margin-left: 6px;
+}
+#century .lack p {
+  margin: 2px 0 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------ the fractures */
+
+#gates .gate {
+  border: 1px solid var(--line, #2c3440);
+  border-left-width: 3px;
+  border-radius: 4px;
+  padding: 7px 9px;
+  margin-bottom: 8px;
+}
+#gates .gate.none {
+  border-left-color: var(--line, #2c3440);
+}
+#gates .gate.lit {
+  border-left-color: var(--fracture);
+}
+#gates .gate.dark {
+  border-left-color: var(--dark);
+  background: rgba(224, 86, 95, 0.06);
+}
+#gates .gate .head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+#gates .gate .head span:last-child {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--muted);
+}
+#gates .gate .why {
+  font-size: 10px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+#gates .gate.dark .why b {
+  color: var(--dark);
+}
+#gates .open {
+  display: flex;
+  gap: 5px;
+  margin-top: 6px;
+}
+#gates .open button,
+#lanes .open button {
+  font: inherit;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--line, #2c3440);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+#gates .open button.primary {
+  border-color: var(--fracture);
+  color: var(--fracture);
+}
+
+/* -------------------------------------------------------------- the lanes */
+
+#lanes .lane {
+  border: 1px solid var(--line, #2c3440);
+  border-radius: 4px;
+  padding: 6px 9px;
+  margin-bottom: 7px;
+}
+#lanes .lane .head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+#lanes .lane .head span:first-child {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+#lanes .lane .why {
+  display: block;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+#lanes .lane .made {
+  display: block;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--fracture);
+}
+#lanes .lane .spill {
+  display: block;
+  font-size: 10px;
+  color: var(--signal, #e0565f);
+}
+#lanes .open {
+  display: flex;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+/* --------------------------------------------------------- the provenance */
+
+/* What everything is made of, by the century it came out of. The panel this
+ * experiment exists to be able to draw. */
+#provenance .prov {
+  border-left: 2px solid var(--fracture);
+  padding: 4px 0 5px 8px;
+  margin-bottom: 7px;
+}
+#provenance .prov .head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+#provenance .prov .head span:last-child {
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+}
+#provenance .from {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 1px 0;
+}
+#provenance .from b {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-weight: 400;
+  color: var(--fracture);
+}
+
+/* -------------------------------------------------------------- the feed */
+
+#news .news {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  line-height: 1.6;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line, #2c3440);
+}
+#news .news .at {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+#news .news.done span:last-child,
+#news .news.lit span:last-child {
+  color: #8ef0a0;
+}
+#news .news.dark span:last-child,
+#news .news.lost span:last-child,
+#news .news.spill span:last-child {
+  color: var(--dark);
+}
+#news .news.gate span:last-child {
+  color: var(--fracture);
+}
+
+/* ------------------------------------------------------- what crosses here */
+
+#roomio h3 {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 12px 0 5px;
+}
+#roomio h3:first-child { margin-top: 0; }
+.io {
+  border-left: 2px solid var(--line, #2c3440);
+  padding: 4px 0 5px 8px;
+  margin-bottom: 6px;
+}
+.io.stuck { border-left-color: var(--signal, #e0565f); }
+.io.idle { opacity: 0.65; border-left-style: dashed; }
+.io-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.io-head .n { color: var(--muted); font-family: var(--mono, monospace); font-size: 10px; }
+.io-head .pip {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  background: var(--d, var(--muted));
+}
+/* How far out of its time this flow is. The one line in the panel that could
+ * not have been written for any earlier prototype. */
+.io-years {
+  font-size: 10px;
+  color: var(--fracture);
+  margin-top: 2px;
+}
+.io-where {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono, monospace);
+}
+.io-note { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.io-note.bad { color: var(--signal, #e0565f); }
+
+/* ----------------------------------------------------------- the palettes */
+
+/* A price, not a lock. The whole argument of this experiment is that the wall
+ * is logistical rather than magical, so a component from another century keeps
+ * its button, keeps its tooltip, and gains a number. */
+#palette button,
+#parts button {
+  position: relative;
+}
+#palette button .price,
+#parts button .price {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 9px;
+  font-style: normal;
+  color: var(--fracture);
+  pointer-events: none;
+}
+#palette button.costly,
+#parts button.costly {
+  border-color: rgba(169, 139, 255, 0.45);
+}
+#palette button.illegal,
+#parts button.illegal {
+  opacity: 0.45;
+}
+#palette button.illegal .price,
+#parts button.illegal .price {
+  color: var(--dark);
+}
+
+h2 .century {
+  float: right;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  color: var(--fracture);
+  letter-spacing: 0.04em;
+}
+
+/* What the machine on the bench owes, on the bench's own bar. */
+.owed {
+  font-size: 10px;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.owed.costly {
+  color: var(--fracture);
+}

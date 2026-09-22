@@ -115,7 +115,7 @@ project has spent the promise it has been making since Prototype 1.
 
 ```powershell
 .\run.ps1          # build + run all fifteen configurations
-.\run.ps1 -Test    # 257 cross-validation tests
+.\run.ps1 -Test    # 284 cross-validation tests
 .\run.ps1 -Serve   # the workbench, at http://127.0.0.1:8787
 .\run.ps1 configs/11-railchain.factory                     # just one
 
@@ -151,6 +151,16 @@ project has spent the promise it has been making since Prototype 1.
 .\run.ps1 -Machine era                         # the families, side by side
 .\run.ps1 -Machine heat designs/20-steamline.machine
 .\run.ps1 -Machine run designs/19-waterline.machine
+
+# Experiment 15: three regions of one valley, a hundred and eighty years apart
+.\run.ps1 -Slice                               # three centuries, at :8797
+.\run.ps1 -Slice play                          # the whole slice, played headlessly
+.\run.ps1 -Slice check                         # its front end, without a browser
+.\run.ps1 -Slice map --png slice.png           # 1890, 2037 and 2070, side by side
+.\run.ps1 -Slice land                          # one rectangle, three centuries
+.\run.ps1 -Slice phases                        # what a century can build, and what not
+.\run.ps1 -Slice cross                         # the fractures, and what holds them open
+.\run.ps1 -Slice price --part motor            # what a crate of machinery costs
 
 # Prototype 2: two players, one factory, one clock that does not stop
 .\run.ps1 -Room                                # the game, at :8790
@@ -3587,8 +3597,339 @@ is made and carried, not in what a bin is.
   A design carried into a Prototype 2 room keeps the frames it was designed
   with and can be retuned there, but Prototype 3's twelve unlockable components
   are not era-aware, so "this room has not invented steel yet" is not yet a
-  thing the campaign can say.
+  thing the campaign can say. *Experiment 15, immediately below, is what saying
+  it turned out to require: not a tier on a component, but a date on a region.*
 
+
+## Experiment 15: the temporal fracture world slice
+
+Everything above this line is a factory game that happens to be set somewhere.
+This experiment asks whether the *setting* is worth having:
+
+> **Does a world made of fractured industrial phases create real factory
+> problems — without any of the late-game time manipulation that made the
+> premise attractive in the first place?**
+
+There is no player-created fracture here, no local phasing, and no phasing a
+factory out of the way of the ore body it is standing on. Three regions, two
+joins, and material that remembers which century it came out of. If the setting
+only becomes interesting once a player can edit time, the setting is not doing
+the work, and this is the cheapest way to find out.
+
+```text
+1890 Mining Valley          ore a shovel deep, a river, a forest,
+      │                     cast iron, and no grid at all
+      │  the deep fracture — natural, 147 years, 98 MW to hold open
+      ▼
+2037 Industrial District    a national grid, steel, a caster, rolling stock
+      │                     — and an ore body four generations went through
+      │  the near corridor — engineered, 33 years, already standing
+      ▼
+2070 Manufacturing Zone     two processes nobody else has, standing on
+                            ground with nothing left under it
+```
+
+### The answer
+
+Yes, and it works because the three phases make each other *necessary* without
+anything being locked. The district's crushing line wants 93 ore a second and
+its own ore body yields 8, so the ore comes out of 1890 or it does not come. The
+valley can have motors — they arrive in crates, priced in gears, which somebody
+in a later century has to manufacture and ship backwards through a fracture that
+only stays open while somebody's grid is holding it. And the zone has the best
+process on the map and nothing whatever to put in it.
+
+Nothing in that paragraph is a rule about eras. It is four supply relationships
+and one power bill.
+
+### One rectangle, three histories
+
+`land` is the module that has to make somebody say *this is the same place*. Not
+a similar map and not a reskin: the literal same 72×72 rectangle, with the same
+fifteen features at the same coordinates, asked what it looked like in three
+different years.
+
+```text
+feature           at        1890               2037               2070
+Kestrel Reach     8,6       iron ore 400/s     standing works     sheds
+Kestrel Spoil     24,8      iron ore 180/s     iron ore 8/s       iron ore 8/s
+Lowfield          10,20     iron ore 220/s     iron ore 8/s       scrub
+Blackband Seam    8,30      coal 800/s         coal 45/s          coal 8/s
+Mill Race         2,40      water 1600/s       water 1200/s       water 500/s
+Oakshaw           40,4      oak wood           scrub              scrub
+Long Wood         40,18     oak wood           street             street
+The Drove         0,16      cart track         metalled road      metalled road
+Tarrant Castings  54,30     open ground        iron billet 500/s  iron billet 24/s
+The Pylon Line    0,2       open ground        pylons             pylons
+The Rift          62,8      an open fracture   a gantry           a gantry
+```
+
+The obvious implementation is three maps, and it is also the implementation that
+quietly stops being the same place the first time somebody nudges a seam twelve
+tiles east in one of them. So there is **one list of features, each carrying
+three faces**, and the three maps are a fold over it. The Kestrel ore body cannot
+be moved in 1890 without moving the foundry standing on it in 2037, because they
+are the same row of the same table.
+
+The test the brief asks for is two of those rows, on purpose:
+
+```text
+1890   Kestrel Reach: 400 iron ore a second, at the surface
+2037   Kestrel Reach: Kestrel Foundry, put up in 1951 — and nothing may be built there
+2037   Kestrel Spoil: the same body on the side nobody built on, open, worth 8
+```
+
+Together they say the two different things a player has to understand: somebody
+took the ore, and somebody built on the hole. The refusal says both out loud:
+
+```text
+there is no room at 8,6: Kestrel Reach is standing works in 2037
+— in 1890 it is open ground with 400 iron ore a second under it
+```
+
+### "The world changes clearly" is a claim, so it gets a number
+
+Experiment 09 measured whether its readability pass had done anything rather
+than looking at two pictures and being pleased. Same discipline here:
+
+```text
+1890 → 2037   1,221 of 5,184 tiles (23%)
+              419 resource, 175 vegetation, 312 roads,
+              207 buildings, 72 infrastructure, 36 fracture
+2037 → 2070     482 of 5,184 tiles (9%)
+```
+
+Something changes in every layer the brief lists, and the short crossing changes
+less than the long one, which is the right way round. `slice map` prints the
+plot one character per tile and `slice map --png` writes the three panels side
+by side through experiment 08's PNG writer.
+
+### A phase is a date laid over experiment 14's table
+
+Experiment 14 put an `Era` on every component and a `Mat` on every frame, and
+those two fields already encode most of what separates one century from the next.
+So `phase` adds four statements per phase and one table of eight rows:
+
+```text
+year     when it is
+grid     whether there is a national supply to connect to
+mats     what its foundries and forges can turn out
+ARRIVES  the eight components that did not exist yet
+```
+
+Twenty-nine of the thirty-seven components are available in all three centuries,
+and **that ratio is the claim.** A hopper is a hopper. There is exactly one
+crusher, in every century, which is what experiment 14 spent a whole sprint
+refusing to compromise on. What differs is how power is made and carried — six
+rows — and two processes at the far end.
+
+This is also where the experiment's sharpest correction happened. The first
+version read `ONLY_STEEL` in experiment 14's table as *this component is a steel
+artefact*, so 1890 could not build a hopper, a pump, an inlet or an outlet — and
+an extraction head cost 9,600 gears of imported machinery, which is not a claim
+about 1890, it is a misreading of a default. `ONLY_STEEL` means *this component
+has no frame decision*. The rule now asks only where the table was answering:
+
+```text
+crusher   offered on steel or cast iron   → 1890 builds it, on cast iron, free
+generator offered on steel only           → no frame decision, and 1890 has no
+                                            generators at all, for other reasons
+hopper    offered on all three            → 1890 builds it, in timber
+```
+
+Which is the difference between a tech tree and this. The valley is not short of
+crushers. It is short of *steel*, and steel is a frame, and a frame is a line in
+a design document.
+
+### A fracture is held open by somebody's grid
+
+There is no research and no build cost. An interface is opened by a command and
+then, every five simulated seconds, it either holds or it does not:
+
+```text
+draw  = 40 MW + 4 MW per decade of displacement it is carrying
+gauge = 4,000 × 50 / (50 + years) units a second
+```
+
+| years | what it is | MW | gauge/s |
+|---|---|---|---|
+| 0 | same phase — ordinary logistics, no interface at all | — | unlimited |
+| 33 | 2037 → 2070 | 53 | 2,409 |
+| 147 | 1890 → 2037, the deep fracture's own gap | 98 | 1,015 |
+| 180 | 1890 material shipped on raw, all the way to 2070 | 112 | 869 |
+
+When the grid is short the interface goes **dark**: nothing new departs, what is
+already inside it still lands, and the panel says which region was short and by
+how much. That is the whole economy of the experiment — technology in the Mining
+Valley is not gated by a tree, it is gated by whether somebody a hundred and
+forty-seven years away is keeping the lights on.
+
+The numbers are pitched so the slice can be *started*. The deep fracture wants
+98 MW; 45 coal a second will keep one compact plant alight, which is 108 — so
+2037 opens a hundred-and-forty-seven-year fracture on **one boiler and a water
+wheel**, and only then does the coal it actually wants start arriving. The hydro
+station comes down twenty minutes later, because on that river a megawatt of
+steam costs a quarter of the water a megawatt of falling water does.
+
+### An origin is carried, not inferred
+
+Every load has a phase stamped on it, and a region's exports are drawn **FIFO out
+of what it imported**; only the remainder is stamped with the region's own phase.
+Two queues, never one — a route fills to its own cap, which has nothing to do
+with what was produced, so a single queue let a route lift parcels the depot had
+not counted yet and the delta that arrived a moment later stamped the wrong
+century on them.
+
+Nothing anywhere special-cases processing, and yet:
+
+```text
+1890 ore → 2037 → shipped on raw     still 1890 ore: 180 years, 112 MW
+1890 ore → 2037 → crushed → 2070     2037 concentrate: 33 years, 53 MW
+```
+
+Concentrate is simply a *different item*, so its provenance queue is empty and
+the district's own date is what is left to stamp it with. Carrying is not making,
+and one subtraction is what says so — which makes the play the brief wanted
+(mine cheaply, move, process locally) the *cheap* play, without a rule about it.
+
+### Machinery that goes backwards
+
+A region's imported machinery is two terms, both recomputed from state that
+already exists:
+
+```text
+gears delivered into it out of a later phase
+  −  the crating cost of every design standing in it
+```
+
+so deleting a machine frees its machinery because the sum is one term shorter,
+and a replica arrives at the same number without being told. Crating is 400 gears
+per tile of footprint, per fracture crossed:
+
+```text
+generator   4 tiles, out of 2037   1,600 gears in 1890
+lathe       6 tiles, out of 2070   4,800 gears in 1890 — two fractures away
+column     18 tiles, out of 2070  14,400 gears in 1890
+mains                              no crate of one would help
+```
+
+That last row is the only real wall in the experiment, and it is about the
+century rather than the component: a grid connection in 1890 is a wire with
+nothing on the end of it. Everything else is a price.
+
+### Two designs, and the one the valley builds instead
+
+`designs/19-waterline.machine` ends with a note predicting this experiment:
+
+> The pulley is the one first-era component this design does not use… Ask the
+> same era for the `crush` brief — which needs a mill, and a mill wants speed 4
+> — and the pulley train stops being optional.
+
+`designs/23-watermill.machine` is that design. A wheel turns at speed 1, a mill
+wants 4, so two wheels go into one pulley geared up four times: 120 rotary in,
+90 gripped, 84 out against the 80 the mill draws, and the surplus is the belt
+slipping. Against `18-powderline`, which is the same mill on a grid:
+
+| | 23-watermill | 18-powderline |
+|---|---|---|
+| powder | **90.00/tick** | 67.50/tick |
+| water | 727/tick | 0 |
+| grid | 0 | 139 MW |
+| tiles | 286 | 204 |
+| drive | 4 wheels, 1 pulley | 3 motors, 2 gearboxes |
+
+Note which way the first row points. The first era is not worse — it is *larger
+and thirstier and free*, and it does not wait a century and a half for a grid.
+
+`designs/24-hydro.machine` is the other half of the argument: four local wheels,
+one timber pulley, and **two imported generators**, for 126 MW in 1890. Against a
+compact steam plant's twenty-six tiles of turbines and generators, it is eight —
+because the first era already owns a prime mover and only needs to import the one
+component that turns torque into electricity. Its scoreboard is honest about the
+cost: the plot and the water per megawatt are terrible, and the power brief's own
+guard rail reports *zero fuel sources*, because that line was written in
+experiment 06 for a boiler and this machine burns nothing at all.
+
+### The result nobody designed
+
+The only component in the catalogue that turns billet into gears in one machine
+is the lathe, and the lathe is 2070's. So the machinery 1890 runs on is **made in
+2070, carried through 2037, and still 2070 machinery when it arrives** — because
+carrying is not making. The deep fracture therefore stops being asked to hold 147
+years and starts being asked to hold 180, and its bill goes from 98 MW to 112.
+
+Nothing was told to do that. It is one FIFO queue and one subtraction meeting a
+catalogue written for a different experiment, and it is the best evidence in the
+sprint that the setting is generating problems rather than decorating them.
+
+### The run
+
+`slice play` is the acceptance command, and `tests/slice.rs` asserts on the same
+script, so a playthrough only the binary could run would be a demonstration
+rather than a proof. Every machine in it is drawn one component at a time out of
+the book. `slice serve` is the same slice with a browser on it, and
+`tests/slice_web.mjs` drives every module of that front end against a live
+server with a DOM that records instead of painting — fifty-nine checks, none of
+which need a screenshot.
+
+```text
+1890 Mining Valley        met at 5:05   21 machines   3,200 gears of imported plant standing
+2037 Industrial District  met at 3:32   26 machines   510 MW on the grid
+2070 Manufacturing Zone   met at 6:39   13 machines
+
+near   33 years    53 MW wanted   310 MW had     106,584 carried   lit
+deep  180 years   112 MW wanted   310 MW had     295,559 carried   lit
+
+district  IronOre      53,635 out of 1890
+district  Coal        186,840 out of 1890
+district  Gear          9,576 out of 2070
+valley    Gear          5,760 out of 2070
+zone      IronBillet   28,000 out of 2037
+
+642 seconds of simulated time, 122 synchronisation checks, nothing went wrong
+```
+
+Every region met an objective it could not have met alone. Every gear in 1890 is
+2070's and the ledger can say so. Both fractures finished holding. And three
+regions, two players and one clock produced identical reconstructions
+throughout — because a region **is** an `mp::room::Room`, unchanged, and an
+arrival out of another century is Prototype 3's `Act::Deliver` with not a line
+altered.
+
+### What this experiment does not do
+
+- **No player-created fractures, and no local phasing.** The brief asked for
+  them to be left out and they are left out. The slice is a test of whether the
+  setting pays for itself *before* the expensive mechanics arrive.
+- **Provenance is tracked on the flow, not on the lump.** The solver holds one
+  number per bay per item, so two loads of ore with different origins in one bay
+  are one number and are fungible. Every question this experiment asks is about
+  a *crossing*, so that granularity is enough — but it is a boundary and not a
+  simplification that could be pushed further without changing the solver.
+- **A factory standing on an old ore body cannot be phased away.** In 2037 those
+  tiles are refused, with a sentence explaining what is there and when it was
+  open. That is the brief's instruction, and it is also the mechanic the
+  eventual phasing system would have to earn its way past.
+- **The interface upkeep lags by one settlement.** What a region is exporting is
+  read from the previous five-second window, because the alternative is an
+  interface whose draw depends on what the same call is about to push through
+  it. A five-second lag in an accounting figure is honest; a circular dependency
+  is not.
+- **`08-stamping` cannot be used in a region, and that is not this experiment's
+  doing.** Its orbit is 2,470 seconds, so one cycle wants 108,700 billet and
+  275,600 power *simultaneously* — more than the largest yard in the game holds.
+  The district makes no gears for that reason, which is what pushed the
+  machinery supply into 2070 and produced the result above. The same reload is
+  why `camp play` no longer finishes: a compact plant makes 102 MW where Power
+  Station's objective was sized against 108. Both predate this experiment.
+- **The browser front end reuses everything and adds one canvas.** `slice serve`
+  is a shell around `web/room/`, served unforked for the third time — the same
+  claim Prototype 3 made about a campaign, made here about a *century*, which is
+  harder, because walking through a fracture changes what may be built and what
+  it costs and the region renderer does not have to know. The one new module is
+  `terrain.js`, and it paints the ground on a canvas *behind* the plot using the
+  projection `world.js` exports. The moment it had reached into that renderer
+  instead, the claim would have stopped being true.
 
 ## The tiers
 
@@ -3843,7 +4184,7 @@ src/why.rs        Prototype 1: why a thing is not running, and what binds
 src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
 src/main.rs       experiment harness, `serve`, `export` and `play`
 web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            262 cross-validation tests
+tests/            284 cross-validation tests
 configs/          the fifteen configurations, plus the first scenario plant
 scenarios/        problems posed about a plant, in their own little language
 sketches/         where the workbench saves what you build
@@ -3892,6 +4233,21 @@ web/room/            P2: the lobby, the plot, the inspector, the machine window
 tests/mp.rs          P2: twenty-five properties, with the clock held still
 tests/room_web.mjs   P2: two players and a whole session, without a browser
 
+src/slice/mod.rs     Ex 15: three centuries of one valley, and what they cost
+src/slice/phase.rs   Ex 15: a date over experiment 14's table, and the price of a crate
+src/slice/land.rs    Ex 15: fifteen features, three faces each, and a metric
+src/slice/region.rs  Ex 15: three regions on one rectangle, and the ground under them
+src/slice/gate.rs    Ex 15: fractures, interfaces, fleets, and a stamped ledger
+src/slice/run.rs     Ex 15: the slice -- three rooms, one clock, one machinery ledger
+src/slice/play.rs    Ex 15: mine 1890, crush in 2037, and pay for it out of 2070
+src/slice/net.rs     Ex 15: the same client again, with a century on it
+src/bin/slice.rs     Ex 15: serve, play, map, land, phases, cross, price, refuse
+web/slice/           Ex 15: the world map, the fractures, and the ground under the plot
+tests/slice_web.mjs  Ex 15: the new half of the client, without a browser
+designs/23-watermill Ex 15: the powder brief, answered on a river
+designs/24-hydro     Ex 15: electricity in 1890, out of two crates
+tests/slice.rs       Ex 15: twenty-one properties, including the one about the same place
+
 src/camp/mod.rs      P3: five rooms, one clock, and what had to become real
 src/camp/site.rs     P3: the five rooms, hand-authored and deliberately nasty
 src/camp/tech.rs     P3: twelve components, never a percentage
@@ -3924,17 +4280,30 @@ server rather than a dependency tree larger than the crate they serve.
 > the clock.
 > **Prototype 3:** and then give them somewhere to go next, and make the thing
 > they leave behind keep working.
+> **Experiment 15:** and then put the same valley in three centuries at once, and
+> find out whether that is a setting or a puzzle.
 
-The thing this file asked for last — *a reason to keep a room open* — is what
-Prototype 3 is. A finished room becomes a supplier, keeps supplying while
-nobody is there, and hands over a component that makes an hour-old machine
-worth reopening. The `Carry` that carries it is still Prototype 1's, unchanged:
-the snapshot the networking proof needed, and then the object an arrival lands
-in, turned out to be the object an edit already produced.
+The thing this file asked for before Prototype 3 — *a reason to keep a room
+open* — is what Prototype 3 is. A finished room becomes a supplier, keeps
+supplying while nobody is there, and hands over a component that makes an
+hour-old machine worth reopening. The `Carry` that carries it is still Prototype
+1's, unchanged: the snapshot the networking proof needed, and then the object an
+arrival lands in, turned out to be the object an edit already produced.
 
-What is left is content rather than architecture — more machines, more rooms, a
-constraint the stock catalogue cannot answer so that the design library becomes
-necessary rather than merely available — and the one piece of engineering
-deliberately left whole-room: a hash mismatch resends the entire snapshot,
-where the region structure underneath it could resend one deterministic region
-and replay the rest.
+The thing it asked for next was *a constraint the stock catalogue cannot answer*,
+so that designing something becomes necessary rather than merely available.
+Experiment 15 is that constraint, and it is a date: the Mining Valley is asked
+for powder, every powder line in the book runs on a grid, and 1890 has no grid —
+so somebody has to draw `23-watermill`, and then decide whether importing two
+generators in crates is worth 3,200 gears somebody in 2070 has to make. The
+catalogue is not what limits that plant. Logistics is, which is the premise the
+setting was always claiming.
+
+What is left is still content rather than architecture — more regions, more
+machines, and the expensive mechanics experiment 15 deliberately did without:
+player-created fractures, local phasing, and eventually phasing a factory off
+the ore body it is standing on, which the slice currently answers with a
+sentence rather than a mechanic. And the one piece of engineering deliberately
+left whole-room: a hash mismatch resends the entire snapshot, where the region
+structure underneath it could resend one deterministic region and replay the
+rest.

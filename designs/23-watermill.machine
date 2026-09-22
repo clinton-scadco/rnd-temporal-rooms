@@ -1,0 +1,96 @@
+# Experiment 15: the powder brief, answered in 1890.
+#
+# `19-waterline` ends with a note that reads, in full:
+#
+#   The pulley is the one first-era component this design does not use, and the
+#   reason is worth writing down: a pulley is a *ratio*, and a river turning at
+#   speed 1 already suits a crusher, which takes 2 or less. Ask the same era for
+#   the `crush` brief -- which needs a mill, and a mill wants speed 4 -- and the
+#   pulley train stops being optional.
+#
+# This is that design, and it exists because the world outside it changed rather
+# than because the machine did. The Mining Valley sells *powder*; a mill is the
+# only component that makes any; a mill will not turn below speed 4; and there
+# is no grid in 1890 to put a motor on.
+#
+#   river -> wheel -> belt -> crusher          at the speed the river turns
+#         -> wheel -> belt -> pulley -> mill   geared up four times
+#
+# Three mechanical facts, none of them cosmetic.
+#
+# 1. A wheel turns at speed 1 and a mill wants 4, so the pulley is geared up
+#    four times. A pulley grips at 90 rotary a tick and loses 6% of whatever it
+#    does pass, so two wheels go in to get one mill turning, and the surplus is
+#    not headroom -- it is the belt slipping, and it leaves through the waste
+#    column every tick. That is the first era's ceiling, and it is why a
+#    water-driven plant is a row of small machines rather than one large one.
+#
+# 2. The pulley is on cast iron and the wheels are not. A mill shakes at 5,
+#    timber rates 4, and the pulley is the one thing rigidly bolted to the mill
+#    -- so either the frame changes or that wire becomes a second belt and pays
+#    a second 6%. The frame is the cheaper answer here precisely because the
+#    pulley is already a belt. There is no third answer: steel rates 9 and this
+#    valley cannot make any for another century and a half.
+#
+# 3. Everything else the wheels drive is on a belt, which is what keeps them on
+#    timber at all. Take the word off the four drive wires and the crushers pull
+#    their own wheels apart, exactly as they do in `19-waterline`.
+#
+# What it costs, against `18-powderline` -- the same ore, the same mill, on a
+# grid:
+#
+#                    this        18-powderline
+#   powder        90.00/tick     67.50/tick
+#   water            727/tick             0
+#   grid                   0        139 MW
+#   tiles                286           204
+#   drive    4 wheels, 1 pulley    3 motors, 2 gearboxes
+#
+# Which is the Mining Valley's whole argument in one table, and note which way
+# the first line points. The first era is not worse. It is *larger and thirstier
+# and free*, and it does not wait a century and a half for a grid.
+
+machine "Water Powder Line"
+brief line
+
+# ---- the race: one pump per wheel, because a wheel takes 200 water a tick
+pump      P1  at 0,0    draws water
+pump      P2  at 0,5    draws water
+pump      P3  at 13,5   draws water
+pump      P4  at 19,5   draws water
+
+waterwheel W1 at 3,0
+waterwheel W2 at 3,5
+waterwheel W3 at 13,0
+waterwheel W4 at 18,0
+
+# ---- the ore path: lump in, crushed twice, milled to powder
+inlet     I1  at 0,10   draws ore
+crusher   C1  at 3,10   frame iron
+crusher   C2  at 7,10   frame iron
+mill      MI1 at 11,10  frame iron
+outlet    O1  at 15,10
+
+# ---- the drive train the mill needed, and the only iron in the race
+pulley    PL1 at 16,5   ratio -4  frame iron
+
+wire P1.water -> W1.water
+wire P2.water -> W2.water
+wire P3.water -> W3.water
+wire P4.water -> W4.water
+
+# The crushers: one wheel each, slackly, at the speed the river turns.
+wire W1.rotary -> C1.drive  belt
+wire W2.rotary -> C2.drive  belt
+
+# The mill: two wheels into one pulley, geared up four times. The wires in are
+# belts because the wheels are timber; the wire out is not, because a pulley is
+# already a belt and paying for two of them buys nothing.
+wire W3.rotary -> PL1.in  belt
+wire W4.rotary -> PL1.in  belt
+wire PL1.out -> MI1.drive
+
+wire I1.out -> C1.in
+wire C1.out -> C2.in
+wire C2.out -> MI1.in
+wire MI1.out -> O1.solid

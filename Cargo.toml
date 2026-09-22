@@ -32,6 +32,13 @@ path = "src/bin/room.rs"
 name = "camp"
 path = "src/bin/camp.rs"
 
+# Experiment 15 is the world slice: three regions of one place, a hundred and
+# eighty years apart. A fifth binary, because it holds a world with more than
+# one century in it and the campaign above holds one with only the present.
+[[bin]]
+name = "slice"
+path = "src/bin/slice.rs"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

@@ -1,0 +1,79 @@
+# Experiment 15: electricity, in 1890, out of two crates of imported machinery.
+#
+# This is the design the whole experiment is an argument about. The Mining
+# Valley has a river, timber, and neither a grid nor a century in which to build
+# one. Every stock power plant in this repository raises steam and puts it
+# through a turbine into a generator, and a turbine and a generator are both
+# things 1890 cannot make -- steel frames, and a century and a half of
+# metallurgy.
+#
+# So this plant imports the generators and nothing else.
+#
+#   river -> wheel -> belt -> pulley (geared up) -> generator -> 63 MW
+#
+# Everything to the left of the generator is local: pumps, wheels and a timber
+# pulley, all of which a valley with a sawmill and a foundry can build. The
+# generators came back through the fracture in crates, and their price is on the
+# slice's machinery ledger rather than in this file -- four tiles of imported
+# plant each, which is the cheapest electricity the first era can buy.
+#
+# What makes it work at all is the speed band. A generator will not make a
+# megawatt below speed 4 and a river turns at speed 1, so the pulley here is not
+# a convenience, it is the whole mechanism: geared up four times, two wheels'
+# 120 rotary arrives as 85 at speed 4, against the 70 a generator draws.
+#
+# What makes it worth building is the comparison. Against `03-compact.machine`,
+# which is what 2037 puts up without thinking about it:
+#
+#   compact steam plant   216 MW   two turbines, two generators   coal and water
+#   this                  126 MW   two generators                 water
+#
+# Twenty-six tiles of imported machinery against eight, for the same order of
+# power, because the first era already owns a prime mover. It does not need to
+# import a way of making torque. It needs to import the one component that turns
+# torque into electricity, and then it needs twice the ground and six times the
+# water to use it.
+#
+# Two things about the scoreboard below, both of them honest rather than
+# convenient. The plot and the water per megawatt are terrible, and that is the
+# trade. And the brief's own guard rail -- "produce at least 100 MW from one fuel
+# source" -- reports *zero* fuel sources, because there is no fire in this
+# machine anywhere. That line was written in experiment 06 for a boiler. A plant
+# that burns nothing is not cheating it; it is outside it.
+#
+# The failure mode is the era's own, too. Nothing here gets hot and nothing here
+# burns. What it does is stop when the river is low, and come apart if anybody
+# bolts something that shakes to the timber.
+
+machine "Valley Hydro"
+brief power
+
+# ---- the first set
+pump      P1  at 0,0    draws water
+pump      P2  at 0,5    draws water
+waterwheel W1 at 3,0
+waterwheel W2 at 3,5
+# Timber, and it stays timber: a generator shakes at 1, and this valley's
+# difficulty is torque rather than vibration everywhere the crushers are not.
+pulley    PL1 at 8,3    ratio -4
+generator G1  at 11,3
+
+# ---- the second, because one of these is 63 MW and the brief wants 100
+pump      P3  at 0,10   draws water
+pump      P4  at 0,15   draws water
+waterwheel W3 at 3,10
+waterwheel W4 at 3,15
+pulley    PL2 at 8,13   ratio -4
+generator G2  at 11,13
+
+wire P1.water -> W1.water
+wire P2.water -> W2.water
+wire W1.rotary -> PL1.in  belt
+wire W2.rotary -> PL1.in  belt
+wire PL1.out -> G1.rotary
+
+wire P3.water -> W3.water
+wire P4.water -> W4.water
+wire W3.rotary -> PL2.in  belt
+wire W4.rotary -> PL2.in  belt
+wire PL2.out -> G2.rotary

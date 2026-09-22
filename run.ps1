@@ -61,6 +61,20 @@ param(
     # LAN can join at http://<this pc's ip>:8795/. Named -Bind rather than
     # -Host because $Host is one of PowerShell's automatic variables.
     [switch]$Camp,
+    # Experiment 15: the world slice. Three regions of one valley, a hundred and
+    # eighty years apart, with fractures between them. Everything after the
+    # switch is passed straight to it:
+    #   -Slice                         three centuries, at http://127.0.0.1:8797
+    #   -Slice play [--seed N] [--wires]   the whole slice, played headlessly
+    #   -Slice map [--phase 1890] [--png f.png]   the plot, one char per tile
+    #   -Slice land                    one rectangle, three centuries, in a table
+    #   -Slice phases                  what a century can build, and what it cannot
+    #   -Slice cross                   the fractures, and what holds them open
+    #   -Slice price [--part motor] [--into 1890]  what a crate of machinery costs
+    #   -Slice refuse                  everything the slice will not allow
+    #   -Slice check                   the front end, against a live server
+    # -Bind 0.0.0.0 serves it on every interface, as with -Camp.
+    [switch]$Slice,
     [string]$Play,
     # PowerShell binds anything starting with `-` to a parameter, so the
     # scenario's own options get first-class ones rather than being smuggled
@@ -175,6 +189,31 @@ if ($Machine) {
     if ($Configs) { $cli += $Configs } else { $cli += "serve" }
     if ($cli -contains "serve") {
         $cli += @("--port", $(if ($Port -eq 8787) { 8795 } else { $Port }))
+        $cli += @("--host", $Bind)
+    }
+    & $exe @cli
+    exit $LASTEXITCODE
+} elseif ($Slice) {
+    cargo build --release --bin slice
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $exe = Join-Path $PSScriptRoot "target/release/slice.exe"
+    # `check` is the front end's own test, and it needs something to talk to.
+    if ($Configs -and $Configs[0] -eq "check") {
+        $port = if ($Port -eq 8787) { 8798 } else { $Port }
+        $srv = Start-Process -FilePath $exe -ArgumentList "serve", "--port", $port `
+            -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 700
+            node (Join-Path $PSScriptRoot "tests/slice_web.mjs") $port
+            exit $LASTEXITCODE
+        } finally {
+            if (-not $srv.HasExited) { Stop-Process -Id $srv.Id -Force }
+        }
+    }
+    $cli = @()
+    if ($Configs) { $cli += $Configs } else { $cli += "serve" }
+    if ($cli -contains "serve") {
+        $cli += @("--port", $(if ($Port -eq 8787) { 8797 } else { $Port }))
         $cli += @("--host", $Bind)
     }
     & $exe @cli

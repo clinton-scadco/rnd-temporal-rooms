@@ -228,6 +228,7 @@ pub mod pop;
 pub mod rooms;
 pub mod scenario;
 pub mod sim;
+pub mod slice;
 pub mod snap;
 pub mod web;
 pub mod why;
