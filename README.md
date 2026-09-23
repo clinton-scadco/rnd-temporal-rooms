@@ -3869,7 +3869,7 @@ script, so a playthrough only the binary could run would be a demonstration
 rather than a proof. Every machine in it is drawn one component at a time out of
 the book. `slice serve` is the same slice with a browser on it, and
 `tests/slice_web.mjs` drives every module of that front end against a live
-server with a DOM that records instead of painting — fifty-nine checks, none of
+server with a DOM that records instead of painting — seventy-three checks, none of
 which need a screenshot.
 
 ```text
@@ -3930,6 +3930,23 @@ altered.
   `terrain.js`, and it paints the ground on a canvas *behind* the plot using the
   projection `world.js` exports. The moment it had reached into that renderer
   instead, the claim would have stopped being true.
+- **The region view is played, not read.** The first shell put everything in two
+  scrolling side panels: a palette of eight machine chassis that all placed the
+  same empty box, the inspector at the bottom of a panel a hovering hand could
+  not scroll, and "design it" at the bottom of the inspector. `hud.js` replaces
+  that with a one-column icon dock (one *Machine*, keys `1`–`6`, `W`/`B`/`T`
+  for wire, belt and rail, `X` delete, no grid button in a century without a
+  grid); a card under the pointer for whatever it is over, ground and other
+  people's foundries included; a bar on the selected building with *Design*,
+  copy, its ports and delete; and a chip at the bottom of the plot saying what
+  is in your hand, with an x. `Q` is a pipette — another one of whatever is
+  under the pointer, design and all, or let go over empty ground — and
+  right-click lets go as well. Double-click opens a machine on the bench. The
+  objective and the crossings sit on the plot as two small fixed cards. The
+  price of that is four optional hooks in `world.js` (`onTool`, `onOpen`,
+  `onPipette`, and `view.ground: false` so the terrain underneath is visible
+  at all — the opaque fill had been hiding it). None of them changes what the
+  room or the campaign see.
 
 ## The tiers
 

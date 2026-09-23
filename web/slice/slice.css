@@ -1,512 +1,636 @@
 /* Experiment 15, on top of Prototype 2's stylesheet.
  *
- * Everything the region view needs is already in `room.css` and is not
- * repeated here. This file is the slice around it: the world map, the fracture
- * panel, the century panel, the provenance board, the terrain layer behind the
- * plot, and the prices on the two palettes.
+ * The region view is a plot with a dock beside it and small fixed overlays on
+ * it: nothing a player needs while building sits in a panel that scrolls. The
+ * world view keeps two side panels, because it is a board you read.
  *
- * One colour is new and it is doing real work: `--fracture` is the only thing
- * on the screen that is not a factory, and both the interface plaque and the
- * imported-plant readout use it, so that "this came from somewhere else in
- * time" reads the same wherever it turns up.
+ * Colours that do work here:
+ *   --fracture   the only thing on screen that is not a factory: interfaces,
+ *                imported plant, anything that came from another century
+ *   --e1890 ...  one per century, on the switcher, the provenance bars and the
+ *                edge of the plot, so "where am I" is a colour before a word
  */
 
 :root {
   --fracture: #a98bff;
   --dark: #e0565f;
+  --e1890: #d9a15a;
+  --e2037: #5cb4e0;
+  --e2070: #e07bb3;
+  --era: var(--accent);
+  --glass: rgba(15, 22, 19, 0.9);
 }
+body[data-era='1890'] { --era: var(--e1890); }
+body[data-era='2037'] { --era: var(--e2037); }
+body[data-era='2070'] { --era: var(--e2070); }
 
 body[data-view='map'] .onlyworld,
+body[data-view='bench'] .onlyworld,
 body[data-view='world'] .onlymap,
 body[data-view='bench'] .onlymap {
-  display: none;
+  display: none !important;
 }
+
+i[data-icon] { display: inline-flex; font-style: normal; }
+svg { width: 18px; height: 18px; flex: none; }
+kbd {
+  font: 600 9px/1 var(--mono);
+  padding: 2px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+  background: var(--sunk);
+  color: var(--muted);
+}
+button.icon {
+  display: inline-grid;
+  place-items: center;
+  padding: 4px;
+  line-height: 0;
+}
+button.icon svg { width: 16px; height: 16px; }
 
 /* ------------------------------------------------------------------ header */
 
-.where {
-  gap: 2px;
-}
-.where button {
-  font: inherit;
-  border: 1px solid var(--line, #2c3440);
-  background: transparent;
-  color: inherit;
-  padding: 2px 9px 3px;
+#bar { gap: 10px; padding: 6px 10px; }
+.brand b {
+  font: 700 12px/1 var(--mono);
+  letter-spacing: 0.08em;
+  color: var(--era);
+  border: 1px solid currentColor;
   border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.72;
+  padding: 4px 6px;
+}
+
+.seg {
+  display: flex;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.seg button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 5px 10px;
+}
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button.on { background: var(--accent-2); color: var(--accent); }
+.seg button span { font-size: 12px; }
+
+.where { display: flex; gap: 4px; }
+.where button {
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  line-height: 1.15;
-}
-.where button b {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-}
-.where button span {
-  font-size: 9px;
+  line-height: 1.1;
+  padding: 3px 10px 5px;
+  min-width: 92px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  background: transparent;
   color: var(--muted);
+  --c: var(--muted);
+}
+.where button.e1890 { --c: var(--e1890); }
+.where button.e2037 { --c: var(--e2037); }
+.where button.e2070 { --c: var(--e2070); }
+.where button b { font: 700 14px/1.1 var(--mono); color: var(--c); letter-spacing: 0.04em; }
+.where button span { font-size: 10px; }
+.where button .prog {
+  position: absolute; left: 0; bottom: 0; height: 2px; background: var(--c); opacity: 0.8;
 }
 .where button.on {
-  background: #1d2733;
-  border-color: #3d5570;
-  opacity: 1;
+  border-color: var(--c);
+  background: color-mix(in srgb, var(--c) 14%, transparent);
+  color: var(--ink);
 }
-.where button.done b::after {
-  content: ' \2713';
-  color: #8ef0a0;
-}
+.where button.done b::after { content: ' \2713'; color: var(--good); }
 
-/* The imported-plant readout. In 2037 it says "none landed" and stays out of
- * the way; in 1890 it is the number the region is really playing against. */
-.crates {
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  font: 12px/1 var(--mono);
+  color: var(--muted);
+}
+.chip output { color: var(--ink); }
+.crates { color: var(--fracture); }
+.crates output { color: var(--fracture); }
+.crates.none { opacity: 0.55; }
+.crates.none output { color: var(--muted); }
+#clock { font: 14px/1 var(--mono); }
+.who { gap: 8px; }
+.room #code { font: 600 12px/1 var(--mono); letter-spacing: 0.18em; }
+.room button.icon { background: transparent; border: 0; color: var(--muted); }
+.sync {
+  min-width: 0;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.sync.ok { background: var(--good); }
+.sync.no { background: var(--bad); box-shadow: 0 0 0 3px rgba(224, 108, 108, 0.3); }
+
+/* ------------------------------------------------------------------- lobby */
+
+#lobby .card { width: min(640px, 100%); }
+#lobby h1 { font-size: 20px; margin-bottom: 16px; }
+.eras { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+.era {
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--c);
+  border-radius: 5px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding-left: 10px;
-  border-left: 1px solid var(--line, #2c3440);
+  gap: 3px;
 }
-.crates label {
-  font-size: 9px;
-  color: var(--muted);
-  text-transform: lowercase;
-}
-.crates output {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-  color: var(--fracture);
-}
-.crates.none output {
-  color: var(--muted);
-}
+.era.e1890 { --c: var(--e1890); }
+.era.e2037 { --c: var(--e2037); }
+.era.e2070 { --c: var(--e2070); }
+.era b { font: 700 18px/1 var(--mono); color: var(--c); }
+.era span { font-size: 12px; }
+.era em { font-size: 11px; font-style: normal; color: var(--muted); }
+.enter { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+.enter .field { grid-template-columns: 1fr; gap: 3px; margin: 0; }
+#lobby .enter button.primary { margin: 0; width: auto; padding: 0.45em 1.4em; }
 
-/* --------------------------------------------------------------- the world */
+#briefing .keys {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 16px;
+  margin: 0 0 18px;
+  font-size: 12px;
+}
+#briefing .keys div { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+#briefing .keys kbd { font-size: 10px; color: var(--ink); }
 
-#atlas {
+/* -------------------------------------------------------------------- game */
+
+#game { grid-template-columns: 56px 1fr; }
+body[data-view='map'] #game { grid-template-columns: 270px 1fr 300px; }
+body[data-view='bench'] #game { grid-template-columns: 1fr; }
+
+#left, #right { padding: 0 12px 16px; overflow-x: hidden; }
+#stage { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--era) 30%, transparent); }
+
+/* -------------------------------------------------------------------- dock */
+
+/* One column of icons. Sized so fourteen of them fit a 640px-tall window, and
+ * squeezed rather than scrolled when they do not. */
+#dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 0;
+  background: var(--panel);
+  border-right: 1px solid var(--rule);
+  z-index: 5;
+}
+#dock .sep { width: 28px; height: 1px; background: var(--rule); margin: 4px 0; flex: none; }
+#dock button {
+  position: relative;
+  width: 42px;
+  height: clamp(30px, 5.6vh, 42px);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  flex: none;
+}
+#dock button svg { width: 20px; height: 20px; }
+#dock button:hover { color: var(--ink); background: #1B2622; border-color: #38493F; }
+#dock button.on { color: var(--accent); background: var(--accent-2); border-color: var(--accent); }
+#dock button[data-tool='delete'].on { color: var(--bad); background: #33191A; border-color: var(--bad); }
+#dock button > kbd {
   position: absolute;
-  inset: 0;
-  background: #0d1117;
+  right: 1px;
+  bottom: 1px;
+  padding: 1px 2px;
+  border: 0;
+  background: transparent;
+  font-size: 8px;
+  opacity: 0.7;
 }
-#atlascanvas {
-  width: 100%;
-  height: 100%;
+/* The tooltip: a flyout beside the button, immediately, because a native
+ * `title` takes a second and a half to say what an icon is. */
+#dock .tip {
+  display: none;
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 220px;
+  padding: 7px 10px;
+  background: var(--glass);
+  border: 1px solid #38493F;
+  border-radius: 5px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  text-align: left;
+  line-height: 1.4;
+  pointer-events: none;
+  z-index: 30;
+}
+#dock button:hover .tip { display: block; }
+#dock .tip b { color: var(--ink); font-size: 12px; margin-right: 6px; }
+#dock .tip em { display: block; margin-top: 3px; font-style: normal; font-size: 11px; color: var(--muted); }
+
+/* --------------------------------------------------------------------- hud */
+
+.hud { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.hud > * { pointer-events: auto; }
+.panel {
+  background: var(--glass);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(4px);
+}
+.panelhead {
+  display: flex; align-items: center; gap: 6px;
+  font: 600 10px/1 var(--ui); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.panelhead svg { width: 14px; height: 14px; color: var(--fracture); }
+
+/* The objective, top left. Bars first; the paragraph is behind the (i). */
+#goalcard {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 260px;
+  padding: 9px 11px;
+  border-left: 3px solid var(--era);
+}
+.goalhead { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.goalhead .goaltitle { font-size: 13px; }
+.goalhead button.icon { background: transparent; border: 0; color: var(--muted); }
+#goallines .line { margin: 6px 0 0; }
+#goallines .line .kind { display: none; }
+#goallines .verdict { margin: 6px 0 0; }
+#goalwhy .brief { margin: 8px 0 0; font-size: 12px; }
+#goalwhy .note { margin-top: 6px; font-style: normal; line-height: 1.5; }
+
+/* What crosses this region's boundary, top right. */
+#iocard {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  width: 290px;
+  padding: 9px 11px;
+  max-height: 40%;
+  overflow: hidden;
+}
+#iocard:empty { display: none; }
+.io {
+  display: grid;
+  grid-template-columns: 14px 10px 1fr auto auto 44px;
+  gap: 6px;
+  align-items: center;
+  font-size: 11px;
+  padding: 3px 0;
+}
+.io .dir { font: 600 12px/1 var(--mono); color: var(--fracture); text-align: center; }
+.io .it { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.io .n { font-family: var(--mono); font-size: 10px; color: var(--ink); }
+.io .where { font-family: var(--mono); font-size: 9px; color: var(--muted); text-transform: uppercase; }
+.io.idle { opacity: 0.5; }
+.io.idle .n { color: var(--muted); }
+.io.stuck .it, .io.stuck .n { color: var(--bad); }
+
+.pip, .io .pip {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--d, var(--muted));
+  border: 1.5px solid var(--d, var(--muted));
+  flex: none;
+}
+.pip.hollow { background: transparent; }
+
+.meter {
   display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--sunk);
+  overflow: hidden;
 }
+.meter > span { display: block; height: 100%; background: var(--accent); }
+.meter.good > span { background: var(--good); }
+.meter.bad > span { background: var(--bad); }
+.meter.lit > span { background: var(--fracture); }
+
+/* The feed: the last few things that happened, bottom left, fading out. */
+#feed {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: 320px;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 2px;
+  font: 11px/1.4 var(--mono);
+}
+#feed div {
+  border: 0;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: rgba(10, 15, 13, 0.7);
+  width: fit-content;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#feed div:nth-child(n + 5) { display: none; }
+#feed div:nth-child(2) { opacity: 0.75; }
+#feed div:nth-child(3) { opacity: 0.5; }
+#feed div:nth-child(4) { opacity: 0.3; }
+
+/* In your hand: bottom centre, with an x. */
+#cursor {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px 5px 11px;
+  background: var(--glass);
+  border: 1px solid var(--accent);
+  border-radius: 20px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  white-space: nowrap;
+}
+#cursor #cursoricon { color: var(--accent); display: inline-flex; }
+#cursor #cursorname { font-weight: 600; }
+#cursor #cursorhint { color: var(--muted); font-size: 11px; }
+#cursor button.icon { border-radius: 50%; background: transparent; border: 1px solid var(--rule); }
+#cursor button.icon:hover { color: var(--bad); border-color: var(--bad); }
+#cursor.danger { border-color: var(--bad); }
+#cursor.danger #cursoricon { color: var(--bad); }
+
+/* The card under the pointer. */
+#hovercard {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 250px;
+  padding: 8px 10px;
+  pointer-events: none;
+  background: var(--glass);
+  border: 1px solid #38493F;
+  border-radius: 6px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+  font-size: 11px;
+  z-index: 10;
+}
+.hc-head { display: flex; align-items: center; gap: 7px; }
+.hc-head b { font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hc-head .sw { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.pill {
+  font: 600 9px/1.6 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0 6px;
+  border-radius: 3px;
+  background: var(--rule);
+  color: var(--muted);
+}
+.pill.run { background: var(--accent-2); color: var(--good); }
+.pill.warn { background: #33290F; color: var(--signal); }
+.pill.bad { background: #33191A; color: var(--bad); }
+.pill.empty { background: #2a2140; color: var(--fracture); }
+.hc-why {
+  margin-top: 5px;
+  color: var(--muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hc-cta {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; color: var(--fracture);
+}
+.hc-cta svg { width: 14px; height: 14px; }
+.hc-ports { display: grid; grid-template-columns: 16px 1fr; gap: 6px; margin-top: 7px; }
+.hc-ports .lbl { color: var(--muted); padding-top: 1px; }
+.hc-ports .lbl svg { width: 14px; height: 14px; }
+.pr { display: grid; grid-template-columns: 10px 1fr auto; gap: 1px 6px; align-items: center; padding: 1px 0; }
+.pr .it { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr em { font: 10px var(--mono); font-style: normal; color: var(--ink); }
+.pr .to { grid-column: 2 / -1; font: 9px var(--mono); color: var(--muted); }
+.pr.bad .to { color: var(--bad); }
+.hc-fill { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; margin-top: 7px; }
+.hc-fill span { font: 10px var(--mono); color: var(--muted); }
+.hc-held { display: flex; flex-wrap: wrap; gap: 3px 8px; margin-top: 3px; font: 10px var(--mono); }
+.hc-foot { display: flex; align-items: center; gap: 5px; margin-top: 6px; color: var(--muted); font: 10px var(--mono); }
+.hc-foot svg { width: 12px; height: 12px; }
+.hc-route { margin-top: 4px; font: 11px var(--mono); }
+.hc-route span { color: var(--muted); }
+
+/* The bar on the selected building. */
+#selbar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--glass);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  z-index: 8;
+}
+#selbar .name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; padding: 0 6px 0 4px; }
+#selbar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+#selbar .dot.run { background: var(--good); }
+#selbar .dot.warn { background: var(--signal); }
+#selbar .dot.bad { background: var(--bad); }
+#selbar .dot.empty { background: var(--fracture); }
+#selbar button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; }
+#selbar button svg { width: 15px; height: 15px; }
+#selbar button.icon { padding: 4px; }
+#selbar button.danger:hover { color: var(--bad); border-color: var(--bad); }
+#selbar .rule { width: 1px; height: 18px; background: var(--rule); margin: 0 2px; }
+#selbar .portbtn { padding: 3px 5px; gap: 3px; }
+#selbar .portbtn svg { width: 13px; height: 13px; color: var(--muted); }
+
+/* ------------------------------------------------------------- the world */
+
+#atlas { position: absolute; inset: 0; background: #0d1117; }
+#atlascanvas { width: 100%; height: 100%; display: block; }
 
 /* ------------------------------------------------------------- the terrain */
 
-/* Behind the plot, and behind `#world` in particular. It is painted by
- * `terrain.js` from the projection `world.js` exports, which is why this is a
- * position and nothing else: the renderer on top does not know it is here. */
-#terrain {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  z-index: 0;
-}
-#world {
-  position: relative;
-  z-index: 1;
-}
+#terrain { position: absolute; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
+#world { position: relative; z-index: 1; }
 
-#terrainkey .terr {
-  display: grid;
-  grid-template-columns: 10px 1fr;
-  gap: 2px 7px;
-  align-items: baseline;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--line, #2c3440);
-}
-#terrainkey .terr i {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  display: block;
-}
-#terrainkey .terr b {
-  font-size: 11px;
-}
-#terrainkey .terr span {
-  grid-column: 2;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.5;
-}
-#terrainkey .terr.taken b {
-  color: var(--dark);
-}
-
-/* ------------------------------------------------------------- the century */
-
-#roomcard .problem {
-  font-size: 12px;
-  line-height: 1.55;
-  margin: 0 0 8px;
-}
-#roomcard .note {
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--muted);
-  margin: 0 0 10px;
-}
-#roomcard .stat,
-#century .stat {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 11px;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--line, #2c3440);
-}
-#roomcard .stat b,
-#century .stat b {
-  color: var(--muted);
-  font-weight: 400;
-}
-#roomcard h3,
-#century h3,
-#gates h3 {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  margin: 12px 0 5px;
-}
-#roomcard .row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  padding: 2px 0;
-}
-#roomcard .row.spent {
-  opacity: 0.5;
-}
-#roomcard .row b {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-weight: 400;
-}
-/* Somebody else's building, on ground you were standing on in another century.
- * Bordered in the fracture colour because that is what it is evidence of. */
-#roomcard .took {
-  border-left: 2px solid var(--dark);
-  padding: 5px 0 5px 8px;
-  margin-bottom: 6px;
-}
-#roomcard .took b {
-  font-size: 11px;
-}
-#roomcard .took span {
-  color: var(--muted);
-  font-size: 10px;
-  margin-left: 6px;
-}
-#roomcard .took p {
-  margin: 3px 0 0;
-  font-size: 10px;
-  line-height: 1.55;
-  color: var(--muted);
-}
-#roomcard button.go {
-  width: 100%;
-  margin-top: 12px;
-  font: inherit;
-  font-size: 11px;
-  padding: 6px;
-  border-radius: 4px;
-  border: 1px solid #3d5570;
-  background: #1d2733;
-  color: inherit;
-  cursor: pointer;
-}
-
-#century .blurb {
-  font-size: 11px;
-  line-height: 1.6;
-  margin: 0 0 8px;
-}
-#century .lack {
-  border-left: 2px solid var(--line, #2c3440);
-  padding: 4px 0 4px 8px;
-  margin-bottom: 5px;
-}
-#century .lack b {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 11px;
-}
-#century .lack span {
-  color: var(--fracture);
-  font-size: 10px;
-  margin-left: 6px;
-}
-#century .lack p {
-  margin: 2px 0 0;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
-/* ------------------------------------------------------------ the fractures */
-
-#gates .gate {
-  border: 1px solid var(--line, #2c3440);
-  border-left-width: 3px;
-  border-radius: 4px;
-  padding: 7px 9px;
-  margin-bottom: 8px;
-}
-#gates .gate.none {
-  border-left-color: var(--line, #2c3440);
-}
-#gates .gate.lit {
-  border-left-color: var(--fracture);
-}
-#gates .gate.dark {
-  border-left-color: var(--dark);
-  background: rgba(224, 86, 95, 0.06);
-}
-#gates .gate .head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  margin-bottom: 4px;
-}
-#gates .gate .head span:last-child {
-  font-family: var(--mono, ui-monospace, monospace);
-  color: var(--muted);
-}
-#gates .gate .why {
-  font-size: 10px;
-  line-height: 1.55;
-  color: var(--muted);
-  margin: 0 0 4px;
-}
-#gates .gate.dark .why b {
-  color: var(--dark);
-}
-#gates .open {
-  display: flex;
-  gap: 5px;
-  margin-top: 6px;
-}
-#gates .open button,
-#lanes .open button {
-  font: inherit;
-  font-size: 10px;
-  padding: 3px 8px;
-  border-radius: 3px;
-  border: 1px solid var(--line, #2c3440);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-#gates .open button.primary {
-  border-color: var(--fracture);
-  color: var(--fracture);
-}
-
-/* -------------------------------------------------------------- the lanes */
-
-#lanes .lane {
-  border: 1px solid var(--line, #2c3440);
-  border-radius: 4px;
-  padding: 6px 9px;
-  margin-bottom: 7px;
-}
-#lanes .lane .head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-  margin-bottom: 3px;
-}
-#lanes .lane .head span:first-child {
-  font-family: var(--mono, ui-monospace, monospace);
-}
-#lanes .lane .why {
-  display: block;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-#lanes .lane .made {
-  display: block;
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--fracture);
-}
-#lanes .lane .spill {
-  display: block;
-  font-size: 10px;
-  color: var(--signal, #e0565f);
-}
-#lanes .open {
-  display: flex;
-  gap: 5px;
-  margin-top: 5px;
-}
-
-/* --------------------------------------------------------- the provenance */
-
-/* What everything is made of, by the century it came out of. The panel this
- * experiment exists to be able to draw. */
-#provenance .prov {
-  border-left: 2px solid var(--fracture);
-  padding: 4px 0 5px 8px;
-  margin-bottom: 7px;
-}
-#provenance .prov .head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 11px;
-}
-#provenance .prov .head span:last-child {
-  color: var(--muted);
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 10px;
-}
-#provenance .from {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 10px;
-  color: var(--muted);
-  padding: 1px 0;
-}
-#provenance .from b {
-  font-family: var(--mono, ui-monospace, monospace);
-  font-weight: 400;
-  color: var(--fracture);
-}
-
-/* -------------------------------------------------------------- the feed */
-
-#news .news {
-  display: flex;
-  gap: 8px;
-  font-size: 10px;
-  line-height: 1.6;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--line, #2c3440);
-}
-#news .news .at {
-  font-family: var(--mono, ui-monospace, monospace);
-  color: var(--muted);
-  flex: 0 0 auto;
-}
-#news .news.done span:last-child,
-#news .news.lit span:last-child {
-  color: #8ef0a0;
-}
-#news .news.dark span:last-child,
-#news .news.lost span:last-child,
-#news .news.spill span:last-child {
-  color: var(--dark);
-}
-#news .news.gate span:last-child {
-  color: var(--fracture);
-}
-
-/* ------------------------------------------------------- what crosses here */
-
-#roomio h3 {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  margin: 12px 0 5px;
-}
-#roomio h3:first-child { margin-top: 0; }
-.io {
-  border-left: 2px solid var(--line, #2c3440);
-  padding: 4px 0 5px 8px;
-  margin-bottom: 6px;
-}
-.io.stuck { border-left-color: var(--signal, #e0565f); }
-.io.idle { opacity: 0.65; border-left-style: dashed; }
-.io-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
-.io-head .n { color: var(--muted); font-family: var(--mono, monospace); font-size: 10px; }
-.io-head .pip {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-right: 5px;
-  background: var(--d, var(--muted));
-}
-/* How far out of its time this flow is. The one line in the panel that could
- * not have been written for any earlier prototype. */
-.io-years {
-  font-size: 10px;
-  color: var(--fracture);
-  margin-top: 2px;
-}
-.io-where {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 3px;
-  font-size: 10px;
-  color: var(--muted);
-  font-family: var(--mono, monospace);
-}
-.io-note { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; }
-.io-note.bad { color: var(--signal, #e0565f); }
-
-/* ----------------------------------------------------------- the palettes */
-
-/* A price, not a lock. The whole argument of this experiment is that the wall
- * is logistical rather than magical, so a component from another century keeps
- * its button, keeps its tooltip, and gains a number. */
-#palette button,
-#parts button {
-  position: relative;
-}
-#palette button .price,
-#parts button .price {
-  position: absolute;
-  top: 2px;
-  right: 3px;
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 9px;
-  font-style: normal;
-  color: var(--fracture);
-  pointer-events: none;
-}
-#palette button.costly,
-#parts button.costly {
-  border-color: rgba(169, 139, 255, 0.45);
-}
-#palette button.illegal,
-#parts button.illegal {
-  opacity: 0.45;
-}
-#palette button.illegal .price,
-#parts button.illegal .price {
-  color: var(--dark);
-}
+/* ---------------------------------------------------------- world panels */
 
 h2 .century {
   float: right;
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--mono);
   font-size: 10px;
-  color: var(--fracture);
+  color: var(--era);
   letter-spacing: 0.04em;
 }
-
-/* What the machine on the bench owes, on the bench's own bar. */
-.owed {
-  font-size: 10px;
+#left h3, #right h3 {
+  font: 600 9px/1 var(--ui);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
   color: var(--muted);
-  font-family: var(--mono, ui-monospace, monospace);
+  margin: 12px 0 6px;
 }
-.owed.costly {
-  color: var(--fracture);
+details { margin-top: 14px; }
+details summary {
+  cursor: pointer;
+  font: 600 10px/1 var(--ui);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+#roomcard .problem { font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
+#roomcard .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 5px; }
+#roomcard .tiles div {
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 6px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+#roomcard .tiles b { font: 600 15px/1 var(--mono); }
+#roomcard .tiles span { font-size: 9px; color: var(--muted); }
+#roomcard .tiles .imp b { color: var(--fracture); }
+#roomcard .gl { display: grid; grid-template-columns: 1fr 60px auto; gap: 7px; align-items: center; font-size: 11px; padding: 2px 0; }
+#roomcard .gl em { font: 10px var(--mono); font-style: normal; color: var(--muted); }
+#roomcard .gl.met span:first-child { color: var(--good); }
+#roomcard .row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; padding: 2px 0; }
+#roomcard .row.spent { opacity: 0.5; }
+#roomcard .row b { font: 400 10px var(--mono); }
+#roomcard .took { border-left: 2px solid var(--dark); padding: 3px 0 3px 8px; margin-bottom: 4px; font-size: 11px; }
+#roomcard .took span { color: var(--muted); font-size: 10px; margin-left: 6px; }
+#roomcard button.go { width: 100%; margin-top: 12px; }
+
+#century .blurb { font-size: 11px; line-height: 1.5; margin: 0 0 8px; color: var(--muted); }
+#century .stat {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--rule);
+}
+#century .stat b { color: var(--muted); font-weight: 400; }
+#century .lacks { display: flex; flex-wrap: wrap; gap: 4px; }
+#century .lack {
+  display: inline-flex; gap: 5px; align-items: baseline;
+  padding: 2px 7px; border-radius: 10px; border: 1px solid var(--rule);
+  font-size: 10px; cursor: help;
+}
+#century .lack b { font: 400 10px var(--mono); }
+#century .lack em { font-style: normal; color: var(--fracture); font-size: 9px; }
+
+/* The fractures: a meter each, for the power that holds it open. */
+#gates .gate {
+  border: 1px solid var(--rule);
+  border-left-width: 3px;
+  border-radius: 5px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+#gates .gate.lit { border-left-color: var(--fracture); }
+#gates .gate.dark { border-left-color: var(--dark); background: rgba(224, 86, 95, 0.06); }
+#gates .head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+#gates .badge {
+  font: 600 9px/1.6 var(--mono); text-transform: uppercase; letter-spacing: 0.08em;
+  padding: 0 6px; border-radius: 3px; background: var(--rule); color: var(--muted);
+}
+#gates .gate.lit .badge { background: #2a2140; color: var(--fracture); }
+#gates .gate.dark .badge { background: #33191A; color: var(--dark); }
+#gates .span { font: 10px var(--mono); color: var(--muted); margin: 2px 0 6px; }
+#gates .power { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+#gates .power em { font: 10px var(--mono); font-style: normal; }
+#gates .why { font-size: 10px; line-height: 1.5; color: var(--muted); margin: 4px 0 0; }
+#gates .open, #lanes .open { display: flex; gap: 5px; margin-top: 7px; }
+#gates .open button, #lanes .open button, #lanes select { font-size: 11px; padding: 3px 9px; }
+#gates .open button.primary { border-color: var(--fracture); color: var(--fracture); background: #2a2140; }
+
+/* The lanes: open routes first, then one row per lane that could be one. */
+#lanes .lane { border: 1px solid var(--rule); border-radius: 5px; padding: 6px 9px; margin-bottom: 6px; }
+#lanes .lane.live { border-left: 3px solid var(--fracture); }
+#lanes .lane.idle { padding: 5px 8px; }
+#lanes .lane.idle .open { margin-top: 4px; }
+#lanes .lane.idle select { flex: 1; min-width: 0; }
+#lanes .head { display: flex; gap: 8px; align-items: baseline; font-size: 11px; }
+#lanes .dir { font: 10px var(--mono); color: var(--muted); white-space: nowrap; }
+#lanes .stats { display: flex; flex-wrap: wrap; gap: 3px 10px; margin-top: 3px; font: 10px var(--mono); color: var(--muted); }
+#lanes .made { display: block; font-size: 10px; color: var(--fracture); margin-top: 2px; }
+#lanes .spill { display: block; font-size: 10px; color: var(--dark); margin-top: 2px; }
+
+/* Provenance: one stacked bar per item, a segment per century. */
+#provenance .prov { margin-bottom: 9px; }
+#provenance .head { display: flex; justify-content: space-between; font-size: 11px; }
+#provenance .head span:last-child { font: 10px var(--mono); color: var(--muted); }
+#provenance .stack { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 4px 0 3px; background: var(--sunk); }
+#provenance .stack .e1890 { background: var(--e1890); }
+#provenance .stack .e2037 { background: var(--e2037); }
+#provenance .stack .e2070 { background: var(--e2070); }
+#provenance .from { display: inline-flex; gap: 5px; margin-right: 10px; font: 10px var(--mono); color: var(--muted); }
+#provenance .from b { font-weight: 400; }
+#provenance .t1890 { color: var(--e1890); }
+#provenance .t2037 { color: var(--e2037); }
+#provenance .t2070 { color: var(--e2070); }
+
+#news .news { display: flex; gap: 8px; font-size: 10px; line-height: 1.5; padding: 2px 0; }
+#news .at { font-family: var(--mono); color: var(--muted); flex: none; }
+#news .news.done span:last-child, #news .news.lit span:last-child { color: var(--good); }
+#news .news.dark span:last-child, #news .news.lost span:last-child,
+#news .news.spill span:last-child { color: var(--dark); }
+#news .news.gate span:last-child { color: var(--fracture); }
+
+/* ----------------------------------------------------------- the bench */
+
+#benchbar button { display: inline-flex; align-items: center; gap: 5px; }
+#parts button { position: relative; }
+#parts button .n { align-self: end; }
+#parts button .price {
+  position: absolute; top: 1px; right: 4px;
+  font: 8px/1 var(--mono); font-style: normal; color: var(--fracture); pointer-events: none;
+}
+#parts button.costly { border-color: rgba(169, 139, 255, 0.45); }
+#parts button.illegal { opacity: 0.45; }
+#parts button.illegal .price { color: var(--dark); }
+.owed { font: 10px var(--mono); color: var(--muted); }
+.owed.costly { color: var(--fracture); }
+
+/* Short windows: the dock squeezes its buttons and loses its separators
+ * before anything scrolls. */
+@media (max-height: 620px) {
+  #dock .sep { margin: 1px 0; }
+  #dock button > kbd { display: none; }
 }

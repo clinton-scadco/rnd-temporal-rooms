@@ -77,6 +77,7 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("/map.js", "text/javascript; charset=utf-8", include_str!("../../web/slice/map.js")),
     ("/shell.js", "text/javascript; charset=utf-8", include_str!("../../web/slice/shell.js")),
     ("/terrain.js", "text/javascript; charset=utf-8", include_str!("../../web/slice/terrain.js")),
+    ("/hud.js", "text/javascript; charset=utf-8", include_str!("../../web/slice/hud.js")),
     // Prototype 2's client, unchanged and unforked, at the paths its own
     // imports resolve to.
     ("/room/net.js", "text/javascript; charset=utf-8", include_str!("../../web/room/net.js")),

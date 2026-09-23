@@ -199,6 +199,8 @@ async function main() {
   const shell = await import(url('web/slice/shell.js'));
   const map = await import(url('web/slice/map.js'));
   const terrain = await import(url('web/slice/terrain.js'));
+  const hud = await import(url('web/slice/hud.js'));
+  const net = await import(url('web/room/net.js'));
 
   const statics = await get('/api/regions');
   const land = await get('/api/land');
@@ -333,22 +335,34 @@ async function main() {
     in2037.some(f => f.taken) && !in1890.some(f => f.name === 'Kestrel Reach' && f.taken),
     'Kestrel Reach is open ground in 1890 and somebody else’s works in 2037'
   );
-  shell.renderTerrain(in2037);
   ok(
-    /nothing may be built here/.test(el('terrainkey').innerHTML),
-    'and the panel beside the plot says which tiles are spoken for'
+    in2037.every(f => Number.isFinite(f.x) && Number.isFinite(f.w)),
+    'and says where each thing stands, so the hover card can find it'
   );
 
   // ---- the prices: the whole argument of the experiment, on two palettes
   const cat = await get('/api/catalogue?code=valley');
   ok(cat.phase === '1890', 'the catalogue is priced for the century you are in');
-  shell.markPrices(cat);
-  const plant = paletteButton(palette, 'steamplant');
-  ok(plant._classes.has('costly'), 'a compact steam plant is not free in 1890');
-  ok(/gears of imported machinery/.test(plant.title), 'and its tooltip says what it costs');
-  const line = paletteButton(palette, 'powderline');
-  ok(line._classes.has('illegal'), 'the stock powder line cannot be legal in 1890 at any price');
-  ok(!line.disabled, 'and it is still not greyed out of existence');
+  const byTag = t => cat.protos.find(p => p.tag === t) || {};
+  ok(byTag('steamplant').stockCost > 0, 'the book steam plant is not free in 1890');
+  ok(byTag('powderline').illegal, 'the book powder line cannot be legal in 1890 at any price');
+
+  // ---- the dock: one of each thing a hand can hold, and no more
+  for (const t of hud.TOOLS.filter(t => t && t.proto)) {
+    ok(!!byTag(t.proto).tag, `the dock's ${t.label} places something the catalogue has`);
+  }
+  ok(
+    hud.TOOLS.filter(t => t && t.proto && byTag(t.proto).role === 'machine').length === 1,
+    'every machine chassis is one button'
+  );
+  hud.renderDock(false, () => {});
+  ok(!/data-tool="grid"/.test(el('dock').innerHTML), 'a century with no grid has no grid button');
+  ok(/data-tool="pipette"/.test(el('dock').innerHTML), 'and the dock has a pipette');
+  hud.renderDock(true, () => {});
+  ok(/data-tool="grid"/.test(el('dock').innerHTML), 'and a century with one does');
+  const keys = hud.TOOLS.filter(Boolean).map(t => t.key);
+  ok(new Set(keys).size === keys.length, 'no two tools share a key');
+  ok(!keys.includes('R') && !keys.includes('M'), 'and none takes rotate or the map key');
 
   const parts1890 = await get('/api/parts?code=valley');
   const motor = parts1890.parts.find(p => p.kind === 'motor');
@@ -396,6 +410,25 @@ async function main() {
     payload: { proto: 'bay', x: 10, y: 8, face: 0 },
   });
   ok(!onWorks.ok && onWorks.refused, 'and not on the foundry somebody built in 1951');
+
+  // ---- the hover card, over the foundry
+  net.state.view = await get(`/api/state?code=district&player=${me.player}`);
+  const works = in2037.find(f => f.taken);
+  const over = hud.targetAt(
+    { raw: [works.x + 0.5, works.y + 0.5] },
+    in2037
+  );
+  ok(over && over.feature && over.feature.name === works.name, 'the pointer over the works finds the works');
+  hud.renderHover(over, 100, 100);
+  ok(
+    /built on/.test(el('hovercard').innerHTML) && !el('hovercard').hidden,
+    'and the card under it says it is built on'
+  );
+  const bay = net.state.view.world.installs.find(i => i.x === 2 && i.y === 62);
+  ok(!!bay, 'the bay placed a moment ago is in the frame');
+  hud.renderHover(hud.targetAt({ raw: [bay.x + 1, bay.y + 1] }, in2037), 100, 100);
+  ok(new RegExp(bay.name).test(el('hovercard').innerHTML), 'and hovering it shows its card');
+
   ok(
     /1890 it is open ground/.test(onWorks.error || ''),
     'and the refusal says what the same tiles are in the century that has them'

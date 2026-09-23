@@ -17,12 +17,22 @@ import { menu, toast } from './panels.js';
 
 const TILE = 7;
 
-export const view = { ox: 20, oy: 20, scale: 1, w: 0, h: 0, dpr: 1 };
-export const tool = { mode: 'pick', proto: null, face: 0, from: null, item: null, design: null };
+/// `ground: false` leaves the canvas transparent where nothing is drawn, for a
+/// page that paints its own ground underneath (the slice's terrain layer).
+export const view = { ox: 20, oy: 20, scale: 1, w: 0, h: 0, dpr: 1, ground: true };
+export const tool = {
+  mode: 'pick', proto: null, face: 0, from: null, item: null, design: null, ship: null,
+};
 export let selection = null;
 
 let canvas = null, ctx = null, hover = null, need = true, onSelect = () => {};
 let onHover = () => {};
+// Optional, and only the slice passes them: the tool changed without the
+// shell asking (Esc, a right-click), a building was double-clicked, and a
+// click was made with the pipette.
+let onTool = () => {};
+let onOpen = () => {};
+let onPipette = () => {};
 let lastCursor = 0;
 
 export function init(el, hooks) {
@@ -30,6 +40,9 @@ export function init(el, hooks) {
   ctx = el.getContext('2d');
   onSelect = hooks.onSelect || (() => {});
   onHover = hooks.onHover || (() => {});
+  onTool = hooks.onTool || (() => {});
+  onOpen = hooks.onOpen || (() => {});
+  onPipette = hooks.onPipette || (() => {});
   addEventListener('resize', resize);
   resize();
   wire();
@@ -47,11 +60,43 @@ export function setTool(mode, proto, design) {
   tool.mode = mode;
   tool.proto = proto || null;
   tool.design = design || null;
+  // The item a copied depot was shipping, so a pipette over one does not ask
+  // a question the building under it already answered.
+  tool.ship = null;
   tool.from = null;
   // A port chosen for a connection that was never finished must not be
   // waiting inside the next one.
   tool.item = null;
   need = true;
+}
+
+/// Put the tool down: back to picking, with nothing in hand.
+///
+/// Esc used to be the only way to do this, and a player whose other hand is on
+/// the mouse should not need the keyboard to let go of something.
+export function clearTool() {
+  const had = tool.mode !== 'pick';
+  setTool('pick');
+  onTool(tool);
+  return had;
+}
+
+/// The thing at a point in plot tiles: a building, else a wire or transport.
+export function thingAt(x, y) {
+  const it = under(x, y);
+  if (it) return it.id;
+  const line = lineUnder(x, y);
+  return line === undefined ? null : line;
+}
+
+/// Where the pointer is on the plot, in tiles, or null when it is not on it.
+export const pointer = () => hover;
+
+/// The screen rectangle of a building, for anything that wants to hang an
+/// overlay off it.
+export function rectOf(i) {
+  const s = TILE * view.scale;
+  return { x: sx(i.x), y: sy(i.y), w: i.w * s, h: i.h * s };
 }
 
 /// What the pointer is over, which is a different thing from what is selected.
@@ -232,7 +277,8 @@ function wire() {
     // Note 3: the inspector should follow the pointer, not wait for a click.
     // Reading a factory means sweeping across it, and a panel that costs a
     // click per building is a panel nobody reads twice.
-    if (tool.mode === 'pick' || tool.mode === 'connect') {
+    if (tool.mode === 'pick' || tool.mode === 'connect' || tool.mode === 'pipette' ||
+        tool.mode === 'delete') {
       const it = under(x, y);
       const over = it ? it.id : lineUnder(x, y);
       if (over !== hovered) {
@@ -250,7 +296,18 @@ function wire() {
       view.oy += e.movementY;
     }
   });
+  canvas.addEventListener('pointerleave', () => {
+    hover = null;
+    need = true;
+    if (hovered !== null) { hovered = null; onHover(null); }
+  });
   canvas.addEventListener('pointerdown', e => {
+    // Right-click lets go of whatever is in hand, and with nothing in hand it
+    // lets go of the selection.
+    if (e.button === 2) {
+      if (!clearTool()) select(null);
+      return;
+    }
     if (e.button !== 0 || e.shiftKey) return;
     const [x, y] = at(e);
     click(Math.floor(x), Math.floor(y), e, x, y);
@@ -266,12 +323,18 @@ function wire() {
     need = true;
   }, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
+  canvas.addEventListener('dblclick', e => {
+    if (tool.mode !== 'pick') return;
+    const [x, y] = at(e);
+    const it = under(x, y);
+    if (it) onOpen(it.id);
+  });
 
   addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     const k = e.key.toLowerCase();
     if (k === 'r' && tool.proto) { tool.face = (tool.face + (e.shiftKey ? 3 : 1)) % 4; need = true; }
-    else if (k === 'escape') { setTool('pick'); select(null); }
+    else if (k === 'escape') { clearTool(); select(null); }
     else if (k === 'delete' || k === 'backspace') { if (selection) remove(selection); }
   });
 }
@@ -283,6 +346,10 @@ function wire() {
 function click(x, y, e, rx = x + .5, ry = y + .5) {
   const hit = under(x, y);
   if (tool.mode === 'place') return place(x, y);
+  if (tool.mode === 'pipette') {
+    const target = hit ? hit.id : null;
+    return onPipette(target);
+  }
   if (tool.mode === 'delete') {
     const target = hit ? hit.id : lineUnder(rx, ry);
     return target === null || target === undefined ? null : remove(target);
@@ -307,6 +374,9 @@ function place(x, y) {
   // session: prebuilt machines take the fun out of the game entirely.
   const common = { proto: h.p.tag, x, y, face: tool.face, design: tool.design };
   if (h.p.role === 'storage') return net.send('PlaceStorage', common);
+  if (h.p.choosesItem && tool.ship) {
+    return net.send('PlaceMachine', { ...common, item: tool.ship });
+  }
   if (h.p.choosesItem) {
     return menu('ships which item?', itemsOfInterest().map(i => ({
       label: i,
@@ -451,8 +521,10 @@ export function draw() {
   ctx.save();
   ctx.scale(view.dpr, view.dpr);
   ctx.clearRect(0, 0, view.w, view.h);
-  ctx.fillStyle = css('--sunk');
-  ctx.fillRect(0, 0, view.w, view.h);
+  if (view.ground) {
+    ctx.fillStyle = css('--sunk');
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
   if (!v) { ctx.restore(); return; }
 
   grid();

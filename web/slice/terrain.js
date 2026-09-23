@@ -61,11 +61,12 @@ export function resize() {
   draw();
 }
 
-/// Everything standing on this century's ground, for the panel beside the plot.
+/// Everything standing on this century's ground, with where it stands, so the
+/// hover card can say what the pointer is over.
 export function here() {
   if (!land || !phase) return [];
   return land.features
-    .map(f => ({ name: f.name, became: f.became, ...face(f) }))
+    .map(f => ({ name: f.name, became: f.became, x: f.x, y: f.y, w: f.w, h: f.h, ...face(f) }))
     .filter(f => f.what);
 }
 

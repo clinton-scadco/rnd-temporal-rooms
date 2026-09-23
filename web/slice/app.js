@@ -16,11 +16,12 @@
 import * as net from '../room/net.js';
 import * as world from '../room/world.js';
 import * as bench from '../room/bench.js';
-import { renderGoal, renderWho, renderSync, renderFeed, renderGhosts, renderInspector,
-         renderPalette, renderLink, markTool, toast } from '../room/panels.js';
+import { renderGoal, renderWho, renderFeed, renderGhosts, renderLink, toast }
+  from '../room/panels.js';
 import * as map from './map.js';
 import * as shell from './shell.js';
 import * as terrain from './terrain.js';
+import * as hud from './hud.js';
 
 const $ = id => document.getElementById(id);
 
@@ -30,10 +31,12 @@ let slice = null;       // the last slice frame
 let statics = null;     // regions, fractures, lanes, fleets: none of them change
 let land = null;        // fifteen features, three faces each
 let done = new Set();   // regions we have already announced
+let hasGrid = false;    // whether the century you are standing in has one
 
 // ------------------------------------------------------------------- lobby
 
 async function lobby() {
+  hud.icons();
   const again = await post('/api/enter', { key: net.seat(), back: true });
   if (again.ok && again.rejoined) {
     net.state.code = again.at;
@@ -71,6 +74,9 @@ async function post(path, body) {
 async function enter(res) {
   $('lobby').hidden = true;
   $('game').hidden = false;
+  // The layout depends on the view, and every canvas below is sized from the
+  // layout it is first drawn into.
+  document.body.dataset.view = 'map';
   for (const id of ['roombox', 'clockbox', 'views']) $(id).hidden = false;
   $('code').textContent = res.code;
   $('copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText(res.code);
@@ -79,22 +85,25 @@ async function enter(res) {
   land = await fetch('/api/land').then(r => r.json());
 
   await repalette();
-  document.querySelectorAll('.tools button').forEach(b => {
-    b.onclick = () => {
-      const m = world.tool.mode === b.dataset.mode ? 'pick' : b.dataset.mode;
-      world.setTool(m);
-      markTool(m);
-    };
-  });
-  markTool('pick');
 
   world.init($('world'), {
-    onHover: id => renderInspector(id === null ? world.selection : id, actions),
     onSelect: id => {
-      renderInspector(id, actions);
+      hud.renderSelbar(id, actions);
       net.presence(null, id, bench.bench.id, view);
     },
+    onTool: t => hud.markDock(t),
+    onOpen: id => {
+      const i = net.byId(id);
+      if (i && i.designed) actions.open(i);
+    },
+    onPipette: id => pipette(id),
   });
+  // The ground is `terrain.js`'s, painted underneath.
+  world.view.ground = false;
+  hovering();
+  keys();
+  $('cursorclear').onclick = () => world.clearTool();
+  $('goalmore').onclick = () => { $('goalwhy').hidden = !$('goalwhy').hidden; };
   // The ground, behind the plot. It reads `world.view` and is read by nobody.
   terrain.init($('terrain'));
   terrain.setLand(land);
@@ -108,7 +117,10 @@ async function enter(res) {
   map.setLand(land);
 
   $('viewmap').onclick = () => show('map');
-  $('viewworld').onclick = () => show('world');
+  $('viewworld').onclick = () => {
+    show('world');
+    if (!fitted.has(net.state.code)) fitPlot();
+  };
   $('viewbench').onclick = () => {
     if (!bench.bench.id) {
       const first = (net.state.view.world.installs || []).find(i => i.designed);
@@ -127,13 +139,8 @@ async function enter(res) {
 
   $('briefing').hidden = false;
   $('briefbrief').textContent =
-    'Three regions of one valley, a hundred and eighty years apart, all running at once. '
-    + '1890 has the ore and no electricity. 2037 has the grid and no ore. 2070 has the best '
-    + 'process on the map and nothing to put in it.';
-  $('briefnote').textContent =
-    'Nothing is researched and nothing is locked. A motor in 1890 is a price in gears that '
-    + 'somebody later has to make and ship backwards — through a fracture that only stays open '
-    + 'while somebody’s grid is holding it.';
+    '1890 has the ore and no electricity. 2037 has the grid and no ore. 2070 has the best '
+    + 'process on the map and nothing to put in it. The clock does not pause.';
   $('briefstart').onclick = async () => {
     await post('/api/start', {});
     $('briefing').hidden = true;
@@ -167,6 +174,11 @@ function pump(period = 600) {
 function paint() {
   if (!slice) return;
   $('clock').textContent = shell.clock(slice.tick);
+  const at = (slice.regions || []).find(r => r.tag === slice.at);
+  const ph = at && (slice.phases || []).find(p => p.tag === at.phase);
+  hasGrid = !!(ph && ph.grid);
+  hud.renderDock(hasGrid, pickTool);
+  document.body.dataset.era = at ? at.phase : '';
   shell.renderWhere(slice, go);
   shell.renderCrates(slice, slice.at);
   shell.renderRegion(slice, picked || slice.at, go);
@@ -176,7 +188,6 @@ function paint() {
   shell.renderProvenance(slice);
   shell.renderNews(slice);
   shell.renderRegionIO(slice, slice.at);
-  shell.renderTerrain(terrain.here());
   // The century the plot is standing in. Changing this is what a fracture
   // crossing looks like from the ground.
   const here = (slice.regions || []).find(r => r.tag === slice.at);
@@ -206,11 +217,6 @@ async function repalette() {
   const code = net.state.code || 'valley';
   const cat = await fetch(`/api/catalogue?code=${encodeURIComponent(code)}`).then(r => r.json());
   net.state.catalogue = cat;
-  renderPalette(cat, (tag, example) => {
-    world.setTool('place', tag, null, example);
-    markTool('place', tag, example);
-  });
-  shell.markPrices(cat);
   // The bench's component list is priced the same way, by the same century.
   const parts = await fetch(`/api/parts?code=${encodeURIComponent(code)}`).then(r => r.json());
   net.state.parts = parts;
@@ -262,12 +268,29 @@ async function go(tag) {
   net.state.code = tag;
   picked = tag;
   world.select(null);
+  world.clearTool();
   bench.bench.id = null;
   const r = statics && (statics.regions || []).find(r => r.tag === tag);
   if (r) terrain.setPhase(r.phase);
   await repalette();
   show('world');
-  if (r) toast(`${r.title} — ${r.problem}`);
+  fitPlot();
+}
+
+/// The whole plot, centred in the stage. Done on arrival in a region, so a
+/// century opens as a place rather than a corner of one.
+const fitted = new Set();
+function fitPlot() {
+  const cat = net.state.catalogue;
+  const plot = (cat && cat.plot) || 128;
+  const r = $('world').getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const s = Math.max(0.35, Math.min(4, Math.min(r.width - 80, r.height - 80) / (plot * 7)));
+  world.view.scale = s;
+  world.view.ox = (r.width - plot * 7 * s) / 2;
+  world.view.oy = (r.height - plot * 7 * s) / 2;
+  world.invalidate();
+  fitted.add(net.state.code);
 }
 
 function show(which) {
@@ -275,6 +298,7 @@ function show(which) {
   document.body.dataset.view = which;
   $('bench').hidden = which !== 'bench';
   $('atlas').hidden = which !== 'map';
+  if (which !== 'world') $('hovercard').hidden = true;
   for (const id of ['world', 'ghosts', 'terrain']) {
     const el = $(id);
     if (el) el.style.visibility = which === 'world' ? 'visible' : 'hidden';
@@ -282,6 +306,9 @@ function show(which) {
   $('viewmap').classList.toggle('on', which === 'map');
   $('viewworld').classList.toggle('on', which === 'world');
   $('viewbench').classList.toggle('on', which === 'bench');
+  // Every canvas sizes itself from its box on a resize, and the boxes have
+  // just changed shape.
+  dispatchEvent(new Event('resize'));
   if (which === 'bench') bench.resize();
   else if (which === 'map') map.resize();
   else { world.invalidate(); terrain.resize(); }
@@ -297,7 +324,8 @@ function frame(v) {
   renderFeed(v);
   renderGhosts(v, project);
   world.invalidate();
-  if (world.selection) renderInspector(world.selection, actions);
+  hud.renderSelbar(world.selection, actions);
+  refreshHover();
 
   const machines = v.world.installs.filter(i => i.designed);
   $('viewbench').disabled = !machines.length;
@@ -356,20 +384,104 @@ const actions = {
   open: i => { bench.open(i.id); show('bench'); owed(); },
   connect: (i, item) => {
     world.connectFrom(i.id, item);
-    markTool('connect');
-    toast(`${i.name} · ${item} — click where it goes`);
+    hud.markDock(world.tool);
   },
-  delete: i => net.send(i.role === 'storage' ? 'DeleteStorage' : 'DeleteMachine', { id: i.id }),
+  copy: i => pipette(i.id),
+  delete: i => {
+    net.send(i.role === 'storage' ? 'DeleteStorage' : 'DeleteMachine', { id: i.id });
+    world.select(null);
+  },
   unwire: w => { net.send('DeleteConnection', w); world.select(null); },
   unlink: h => { net.send('DeleteWorldLink', { id: h.id }); world.select(null); },
-  duplicate: async i => {
+};
+
+// ------------------------------------------------------------------- tools
+
+/// A dock button, or its key. Pressing the tool you are already holding puts
+/// it down, which is the third way to let go after right-click and the x.
+function pickTool(id) {
+  const t = hud.toolById(id);
+  if (!t || (t.needsGrid && !hasGrid)) return;
+  if (hud.toolIdOf(world.tool) === id && id !== 'pick') return world.clearTool();
+  if (t.proto) world.setTool('place', t.proto);
+  else world.setTool(id);
+  hud.markDock(world.tool);
+}
+
+/// Pick up another one of whatever is under the pointer.
+///
+/// A machine comes with its design -- the design *is* what kind of machine it
+/// is -- and a depot comes with the item it ships. Nothing under the pointer
+/// means let go, as Q does in the factory games this borrows it from.
+async function pipette(id) {
+  const i = id === null || id === undefined ? null : net.byId(id);
+  if (!i) return world.clearTool();
+  let design = null;
+  if (i.designed && i.macro) {
     const res = await net.form(i.id, false);
     if (!res.ok) return toast(res.error);
-    world.setTool('place', i.proto, res.design);
-    markTool('place', i.proto);
-    toast(`a copy of ${i.name} — click where it goes`);
-  },
-};
+    design = res.design;
+  }
+  world.setTool('place', i.proto, design);
+  world.tool.face = i.face || 0;
+  if (i.role === 'sink' && i.item && (net.proto(i.proto) || {}).choosesItem) world.tool.ship = i.item;
+  hud.markDock(world.tool);
+  hud.renderCursor(world.tool, `${i.name}${design ? ' · copy' : ''}`);
+}
+
+function keys() {
+  addEventListener('keydown', e => {
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = String(e.key || '').toLowerCase();
+    if (k === 'm' && view !== 'bench') return show(view === 'map' ? 'world' : 'map');
+    if (view !== 'world') return;
+    if (k === 'q') {
+      const p = world.pointer();
+      return pipette(p ? world.thingAt(p.raw[0], p.raw[1]) : null);
+    }
+    const t = hud.toolByKey(k);
+    if (t) { e.preventDefault(); pickTool(t.id); }
+  });
+}
+
+// ------------------------------------------------------------------- hover
+
+/// The card under the pointer, and the bar over the selection, kept where
+/// they belong while the plot moves under them.
+let pointerPx = null;
+function hovering() {
+  const cv = $('world');
+  cv.addEventListener('pointermove', e => {
+    const r = cv.getBoundingClientRect();
+    pointerPx = [e.clientX - r.left, e.clientY - r.top];
+    refreshHover();
+  });
+  cv.addEventListener('pointerleave', () => { pointerPx = null; refreshHover(); });
+  const tick = () => {
+    const sel = world.selection;
+    hud.placeSelbar(null, sel === null ? null : net.byId(sel));
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+function refreshHover() {
+  const quiet = view !== 'world' || !pointerPx || world.tool.mode === 'place';
+  const target = quiet ? null : hud.targetAt(world.pointer(), terrain.here());
+  hud.renderHover(target, pointerPx ? pointerPx[0] : 0, pointerPx ? pointerPx[1] : 0);
+}
+
+/// The replica check, as one dot. The hashes are its tooltip.
+function renderSync(v) {
+  const box = $('sync');
+  if (!box) return;
+  const s = v.sync || {};
+  box.className = 'sync ' + (s.agrees === null || s.agrees === undefined ? '' : s.agrees ? 'ok' : 'no');
+  box.title = `replicas ${s.agrees === null || s.agrees === undefined ? 'not yet compared'
+    : s.agrees ? 'agree' : 'DIVERGED'}\nyou  ${s.hash || '--'}\nhost ${s.hostHash || '--'}`;
+}
 
 const laneActions = {
   open: async (from, to, item, fleet) => {

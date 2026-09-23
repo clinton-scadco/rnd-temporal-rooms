@@ -5,15 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>experiment 15 &middot; one valley, three centuries</title>
 <!--
-  Prototype 2's stylesheet and Prototype 2's client, unchanged, for the third
-  time. The ids below are the ids `world.js`, `bench.js` and `panels.js`
-  already look for, so the region view here is not a copy of that one -- it
-  *is* that one, with three centuries built around it.
+  Prototype 2's stylesheet and Prototype 2's world renderer, bench and panels,
+  with a shell built for playing rather than reading.
 
-  The one addition is `#terrain`, a canvas *behind* the plot. `world.js` never
-  hears about it: the terrain layer reads the projection that module exports
-  and paints the ground under whatever it is drawing. Walking through a
-  fracture repaints the valley without the renderer knowing a fracture exists.
+  The region view is a canvas with a tool dock beside it and nothing that
+  scrolls: what a building is doing is a card under the pointer, what you can
+  do to it is a bar on the building, and what you are holding is a chip at the
+  bottom of the plot with an x on it. The world view keeps its two panels,
+  because it is a board you read rather than a plot you build on.
+
+  `#terrain` is still a canvas *behind* the plot. `world.js` never hears
+  about it: the terrain layer reads the projection that module exports and
+  paints the ground under whatever it is drawing.
 -->
 <link rel="stylesheet" href="/room/room.css">
 <link rel="stylesheet" href="/slice.css">
@@ -22,70 +25,51 @@
 <body>
 
 <header id="bar">
-  <div class="brand">
-    <b>experiment&nbsp;15</b><span>one valley, three centuries</span>
+  <div class="brand" title="experiment 15 · one valley, three centuries"><b>E15</b></div>
+
+  <div class="seg" id="views" hidden>
+    <button id="viewmap" class="on" title="the world: fractures and shipping (M)"><i data-icon="map"></i><span>World</span></button>
+    <button id="viewworld" title="the region you are standing in (M)"><i data-icon="plot"></i><span>Region</span></button>
+    <button id="viewbench" disabled title="the machine bench"><i data-icon="gear"></i><span>Machine</span></button>
   </div>
 
-  <div class="group room" id="roombox" hidden>
-    <label>slice</label><output id="code">------</output>
-    <button id="copy" title="copy the code">copy</button>
+  <!-- Which century you are standing in, and the two you are not. -->
+  <div class="where" id="wherebox" hidden></div>
+
+  <!-- The machinery ledger: in 1890 it decides what you are allowed to be. -->
+  <div class="chip crates" id="cratebox" hidden>
+    <i data-icon="crate"></i><output id="crates">0</output>
   </div>
 
-  <div class="clock" id="clockbox" hidden>
-    <label>running</label><output id="clock">0:00</output>
-    <output id="link" class="link" title="how current the picture on this screen is"></output>
-  </div>
-
-  <div class="group" id="views" hidden>
-    <button id="viewmap" class="on">world</button>
-    <button id="viewworld">region</button>
-    <button id="viewbench" disabled>machine</button>
-  </div>
-
-  <!-- Which century you are standing in, and the two you are not. This is the
-       walk between regions, and it is the whole interface to the experiment. -->
-  <div class="group where" id="wherebox" hidden></div>
-
-  <!-- The machinery ledger, permanently on screen, because in 1890 it is the
-       number that decides what you are allowed to be. -->
-  <div class="crates" id="cratebox" hidden>
-    <label>imported plant</label><output id="crates">0</output>
+  <div class="chip clock" id="clockbox" hidden title="the slice's clock. There is no pause.">
+    <i data-icon="clock"></i><output id="clock">0:00</output>
+    <output id="link" class="link"></output>
   </div>
 
   <div class="who" id="who"></div>
 
-  <div class="sync" id="sync" title="canonical hashes, compared every simulated second"></div>
+  <div class="chip room" id="roombox" hidden>
+    <output id="code" title="the slice's code">------</output>
+    <button id="copy" class="icon" title="copy the code"><i data-icon="copy"></i></button>
+    <span class="sync" id="sync" title="replica hashes"></span>
+  </div>
 </header>
 
 <!-- ------------------------------------------------------------- entering -->
 <div id="lobby">
   <div class="card">
     <h1>One valley. Three centuries. All of them running.</h1>
-    <p class="lede">
-      1890 has iron ore a shovel deep, a river, a forest and no electricity of
-      any kind. 2037 has a national grid, steel and a caster &mdash; standing on
-      an ore body four generations already went through. 2070 has the two best
-      processes on the map and nothing whatever to put in one.
-      <b>None of them can finish alone.</b>
-    </p>
-    <div class="two">
-      <section>
-        <h2>Enter the slice</h2>
-        <label class="field"><span>your name</span><input id="whoami" maxlength="16" value="engineer"></label>
-        <label class="field"><span>seed</span><input id="seed" maxlength="18" placeholder="only used if nobody has joined yet"></label>
-        <button id="enter" class="primary">Enter</button>
-      </section>
-      <section>
-        <h2>What is different</h2>
-        <p class="muted">
-          Nothing is researched and nothing is locked. A motor in 1890 is a
-          <b>price</b> &mdash; 1,600 gears somebody in 2037 has to make and ship
-          backwards &mdash; through a fracture that only stays open while
-          somebody's grid is holding it. Material remembers which century it
-          came out of, so ore carried through 2037 untouched is still 1890 ore,
-          and ore <i>crushed</i> there is not.
-        </p>
-      </section>
+    <div class="eras">
+      <div class="era e1890"><b>1890</b><span>ore, river, timber</span><em>no electricity</em></div>
+      <div class="era e2037"><b>2037</b><span>grid, steel, caster</span><em>ore exhausted</em></div>
+      <div class="era e2070"><b>2070</b><span>the best processes</span><em>nothing to feed them</em></div>
+    </div>
+    <p class="lede">None of them can finish alone. Nothing is locked &mdash; a motor in 1890 is a
+      <b>price</b> in gears somebody in 2037 has to ship backwards.</p>
+    <div class="enter">
+      <label class="field"><span>name</span><input id="whoami" maxlength="16" value="engineer"></label>
+      <label class="field"><span>seed</span><input id="seed" maxlength="18" placeholder="optional"></label>
+      <button id="enter" class="primary">Enter</button>
     </div>
     <p class="err" id="lobbyerr"></p>
   </div>
@@ -93,69 +77,77 @@
 
 <!-- ------------------------------------------------------------- the slice -->
 <main id="game" hidden>
-  <aside id="left">
-    <!-- region view -->
-    <div class="onlyworld">
-      <div id="goalcard">
-        <h2>objective</h2>
-        <div class="goaltitle" id="goaltitle"></div>
-        <p class="brief" id="goalbrief"></p>
-        <div id="goallines"></div>
-        <p class="note" id="goalnote"></p>
-      </div>
+  <!-- region view: the tool dock. Never scrolls; see `dock.js`. -->
+  <nav id="dock" class="onlyworld"></nav>
 
-      <div id="palettebox">
-        <h2>build <span class="century" id="palcentury"></span></h2>
-        <p class="hint" id="tool">pick something, then click the plot &middot; <b>R</b> turns it &middot; <b>Esc</b> puts it down</p>
-        <div class="palette" id="palette"></div>
-        <h2>wire</h2>
-        <div class="tools">
-          <button data-mode="connect" title="a wire between a bay and a machine">connect</button>
-          <button data-mode="belt" title="500 a trip, six vehicles, over short distances">belt</button>
-          <button data-mode="rail" title="5,000 a trip, two vehicles">rail</button>
-          <button data-mode="delete" title="a building, a wire, or a transport">delete</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- world view -->
-    <div class="onlymap">
-      <h2>the fractures</h2>
-      <p class="hint">an interface is held open by somebody's grid, every five simulated seconds.</p>
-      <div id="gates"></div>
-      <h2>this century</h2>
-      <div id="century"></div>
-    </div>
+  <!-- world view: the fractures and the century -->
+  <aside id="left" class="onlymap">
+    <h2>fractures</h2>
+    <div id="gates"></div>
+    <h2>this century <span class="century" id="palcentury"></span></h2>
+    <div id="century"></div>
   </aside>
 
   <section id="stage">
-    <!-- The ground, under the factory. Same fold as `slice map`. -->
     <canvas id="terrain"></canvas>
     <canvas id="world"></canvas>
     <div id="ghosts"></div>
+
+    <!-- The region view's overlays. Each is small, fixed, and never needs
+         scrolling to reach. -->
+    <div class="hud onlyworld">
+      <div id="goalcard" class="panel">
+        <div class="goalhead">
+          <span class="goaltitle" id="goaltitle"></span>
+          <button id="goalmore" class="icon" title="what this region is for"><i data-icon="info"></i></button>
+        </div>
+        <div id="goallines"></div>
+        <div id="goalwhy" hidden>
+          <p class="brief" id="goalbrief"></p>
+          <p class="note" id="goalnote"></p>
+        </div>
+      </div>
+
+      <div id="iocard" class="panel">
+        <div class="panelhead"><i data-icon="portal"></i><span>crossings</span></div>
+        <div id="roomio"></div>
+      </div>
+
+      <div id="feed"></div>
+
+      <!-- What is in your hand, and the x that puts it down. -->
+      <div id="cursor" hidden>
+        <i id="cursoricon"></i>
+        <span id="cursorname"></span>
+        <span id="cursorhint"></span>
+        <button id="cursorclear" class="icon" title="put it down (right-click, Esc)"><i data-icon="x"></i></button>
+      </div>
+
+      <!-- The building you selected: its actions, on the building. -->
+      <div id="selbar" hidden></div>
+      <!-- Whatever is under the pointer. -->
+      <div id="hovercard" hidden></div>
+    </div>
+
     <div id="bench" hidden>
       <canvas id="plant3d"></canvas>
       <div id="benchbar">
+        <button id="benchclose" title="back to the region"><i data-icon="back"></i> region</button>
         <span id="benchname"></span>
         <span class="rule"></span>
         <button id="benchedit">open a draft</button>
-        <button id="benchcommit" disabled>commit design</button>
+        <button id="benchcommit" disabled>commit</button>
         <button id="benchdiscard" disabled>discard</button>
         <span class="rule"></span>
         <button id="benchwire" title="join one component to another: click what makes, then what takes">wire</button>
-        <span class="rule"></span>
-        <!-- What this design owes in imported plant, in the century it is being
-             drawn in. The bench is where a player finds out that the motor they
-             just placed is somebody else's factory's afternoon. -->
-        <span class="owed" id="benchowed"></span>
         <span class="rule"></span>
         <label>level <output id="benchlevel">0</output></label>
         <button id="benchup">+</button>
         <button id="benchdown">&minus;</button>
         <span class="rule"></span>
+        <span class="owed" id="benchowed"></span>
         <span class="hint" id="benchhint"></span>
         <span class="lock" id="benchlock"></span>
-        <button id="benchclose">back to the region</button>
       </div>
       <aside id="benchside">
         <h2>components <span class="century" id="benchcentury"></span></h2>
@@ -170,29 +162,20 @@
     </div>
   </section>
 
-  <aside id="right">
-    <!-- region view -->
-    <div class="onlyworld">
-      <h2>what crosses the fracture</h2>
-      <div id="roomio"><p class="muted">nothing crosses the boundary yet.</p></div>
-      <h2>the ground here</h2>
-      <div id="terrainkey"><p class="muted">&mdash;</p></div>
-      <h2>inspector</h2>
-      <div id="inspect"><p class="muted">click anything.</p></div>
-      <h2>recently</h2>
-      <div id="feed"></div>
-    </div>
-    <!-- world view -->
-    <div class="onlymap">
-      <h2 id="roomtitle">the valley</h2>
-      <div id="roomcard"><p class="muted">click a century.</p></div>
-      <h2>shipping</h2>
-      <div id="lanes"></div>
-      <h2>what it is made of</h2>
+  <!-- world view: one century, the shipping, and what it is all made of -->
+  <aside id="right" class="onlymap">
+    <h2 id="roomtitle">the valley</h2>
+    <div id="roomcard"><p class="muted">click a century.</p></div>
+    <h2>shipping</h2>
+    <div id="lanes"></div>
+    <details open>
+      <summary>made of</summary>
       <div id="provenance"></div>
-      <h2>the slice</h2>
+    </details>
+    <details>
+      <summary>news</summary>
       <div id="news"></div>
-    </div>
+    </details>
   </aside>
 </main>
 
@@ -200,12 +183,14 @@
   <div class="card">
     <h1 id="brieftitle">One valley, three centuries</h1>
     <p class="lede" id="briefbrief"></p>
-    <p class="note" id="briefnote"></p>
-    <p class="muted">
-      The clock starts when you do, and there is no pause &mdash; in any of the
-      three. The deep fracture has no interface on it yet, and 2037 is the only
-      region with a grid that could hold one open.
-    </p>
+    <div class="keys">
+      <div><kbd>1</kbd>&ndash;<kbd>6</kbd><span>build</span></div>
+      <div><kbd>W</kbd><span>wire</span></div>
+      <div><kbd>Q</kbd><span>copy what is under the pointer</span></div>
+      <div><kbd>R</kbd><span>rotate</span></div>
+      <div><kbd>right-click</kbd><span>let go</span></div>
+      <div><kbd>double-click</kbd><span>design a machine</span></div>
+    </div>
     <button id="briefstart" class="primary">Start the slice</button>
     <p class="muted" id="briefwait" hidden>waiting for somebody to start the slice&hellip;</p>
   </div>
