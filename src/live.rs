@@ -535,7 +535,12 @@ pub struct Carry {
 impl Carry {
     /// Everything the successor plant needs, taken at a barrier.
     pub fn take(room: &Room, prog: &Program, bp: &Blueprint, now: Tick) -> Carry {
-        let seed = room.harvest(bp);
+        Carry::from_seed(&room.harvest(bp), prog, bp, now)
+    }
+
+    /// The same, from a state that is already in hand -- a single population
+    /// rather than a room of them.
+    pub fn from_seed(seed: &pop::Seed, prog: &Program, bp: &Blueprint, now: Tick) -> Carry {
         let mut c = Carry { now, ..Carry::default() };
         for (s, sd) in bp.storages.iter().enumerate() {
             for (k, &item) in sd.slots.iter().enumerate() {

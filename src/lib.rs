@@ -215,6 +215,7 @@
 
 pub mod analytic;
 pub mod camp;
+pub mod combat;
 pub mod domains;
 pub mod dsl;
 pub mod graph;

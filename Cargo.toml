@@ -39,6 +39,13 @@ path = "src/bin/camp.rs"
 name = "slice"
 path = "src/bin/slice.rs"
 
+# Experiment 16 is one defensive encounter: a route, walls, batteries, and a
+# factory that only wakes where the fight is. A sixth binary, because it holds a
+# fight, and nothing above it has anything to shoot.
+[[bin]]
+name = "combat"
+path = "src/bin/combat.rs"
+
 [profile.release]
 opt-level = 3
 lto = "fat"

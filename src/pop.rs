@@ -741,6 +741,22 @@ impl<'a> Pop<'a> {
         v
     }
 
+    /// This engine's state, indexed the way `resume` wants it back.
+    ///
+    /// `Room::harvest` is the same thing for a decomposed plant. Experiment 16
+    /// needed it for one that is not: a factory sector woken by a fight is a
+    /// single population, edited mid-run, and it crosses the edit exactly as a
+    /// room does -- as a `Seed`, addressed by index, turned into names by
+    /// `live::Carry`.
+    pub fn harvest(&self) -> Seed {
+        Seed {
+            qty: self.qty.clone(),
+            classes: self.classes.clone(),
+            rr: self.rr.clone(),
+            c: self.c.clone(),
+        }
+    }
+
     pub fn clone_state(&self) -> PopState {
         PopState {
             qty: self.qty.clone(),

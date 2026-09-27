@@ -162,6 +162,14 @@ project has spent the promise it has been making since Prototype 1.
 .\run.ps1 -Slice cross                         # the fractures, and what holds them open
 .\run.ps1 -Slice price --part motor            # what a crate of machinery costs
 
+# Experiment 16: one wave, walls, six batteries, and a factory that only wakes
+# where the fight is
+.\run.ps1 -Combat                              # the encounter, at :8800
+.\run.ps1 -Combat play                         # one wave, and the four questions
+.\run.ps1 -Combat play --nominal 100000        # the same, a hundred thousand strong
+.\run.ps1 -Combat scale                        # 100 to 1,000,000 attackers, timed
+.\run.ps1 -Combat check                        # its front end, without a browser
+
 # Prototype 2: two players, one factory, one clock that does not stop
 .\run.ps1 -Room                                # the game, at :8790
 .\run.ps1 -Room test                           # the primary multiplayer test
@@ -3948,6 +3956,202 @@ altered.
   at all — the opaque fill had been hiding it). None of them changes what the
   room or the campaign see.
 
+## Experiment 16: combat as an active disturbance
+
+Everything above compresses a factory into a handful of numbers that stand for
+a great many machines. A combat system is the obvious thing that could break
+that. The naive version gives every attacker a position and a health bar, gives
+every shell an event, writes every event down, and wakes the whole world to find
+out what got hit. So:
+
+> **Can combat coexist with the compressed deterministic simulation without
+> producing an obscene serialized event stream or requiring the whole world to
+> run explicitly?**
+
+It is kept narrow on purpose: one encounter, one route, walls and batteries, and
+nothing freeform.
+
+```text
+Quarry (outside)      Smelting ─ conveyor ─┐      North guns     spawn
+                          │                │            ◄═══════════
+   ◄═ Works gate ═ Smelter hall ═══╪═ Inner wall ═ Redoubt ═ Outer wall
+                          │                │      South guns
+Works (outside)          Yard      Hall battery
+```
+
+### The answer
+
+Yes. The measurement the brief asked for is the scaling table, and runtime
+follows the compressed state, not the attackers:
+
+```text
+   attackers  pkts  peak records  events   visits    killed   through lost   sim  runtime  ns/visit
+         100    12     4      50     110    2,266       100         0    0  0:23    0.3ms     143.4
+       1,000    12    10      59     236    5,692     1,000         0    0  0:32    0.8ms     135.1
+      10,000    12    14     279   1,032   29,681     2,315     7,685    6  1:09    1.9ms      64.8
+     100,000    12    19     328   1,199   38,090     1,760    98,240    6  1:08    2.1ms      54.4
+   1,000,000    12    22     339   1,250   40,622     1,560   998,440    6  1:08    2.3ms      57.4
+```
+
+From 10,000 to 1,000,000 attackers the peak cohort count, the events, the work
+and the runtime are all flat. Between 100 and 10,000 the events do grow, but
+that is the *outcome* changing: a small wave dies at the outer wall in twenty
+seconds, a big one takes the walls down and runs for a minute. `visits`, the
+records looked at to find each next event, is the actual work, and runtime
+tracks it at roughly 55–140 ns per visit whatever the wave size.
+
+### A cohort is the unit, not an attacker
+
+v2's argument was that ten thousand smelters queued at one bay are in one state,
+so they are one number. Ten thousand attackers walking the same leg of the same
+route, who set off at the same tick with the same health, are also in one state:
+
+```text
+cohort #7   brute x2,400   hp 12   marching leg 3 since t=1,380
+```
+
+Where it is at any tick is a closed form of those numbers. A volley does not
+touch 2,400 things. It moves *k* of them into another state, which is a split,
+and cohorts that end up in the same state (the damaged halves of two packets
+piled against one wall) merge back into one. Cohort count is bounded by *how
+many different things can be true of an attacker*: two kinds, a few hp levels,
+where on the route. It is not bounded by how many attackers there are.
+
+A battery is the same thing for turrets: three autocannons in one pit lay
+together and fire one volley, which is one projectile record with a count.
+
+### No tick loop, and no stored queue
+
+The next event is found by asking every piece of compressed state when it next
+changes: a volley lands at its impact tick; a wall under assault crosses its
+next damage band at `hp / drain`; a marching cohort reaches the end of its leg;
+a battery finishes laying, finishes reloading, or sees a cohort's leg cross its
+range circle, which is solved rather than polled. Every one of those times is a
+function of state, so **the queue is not state**. A checkpoint has no events in
+it, and a fight restored from one finds exactly the event the original was about
+to process.
+
+```text
+t=229    cohort #1 x188 enters range of North guns
+t=252    North guns volley fires (3 shells), lands t=267
+t=267    North guns volley impacts: #1 splits: hp 4 x173, hp 2 x15 (#3)
+```
+
+Damage uses bands the way experiment 14's temperatures do (intact, damaged,
+critical, destroyed). Behaviour changes only at the thresholds, and the
+factory only hears about thresholds.
+
+### What is written down
+
+```text
+{"seed":16,"commands":[{"at":120,"op":"wave","n":3000},
+                       {"at":4200,"op":"repair","s":"Ore conveyor"}, ...]}
+146 bytes of log for 703 derived events -- 0 serialized
+```
+
+A seed and three commands. Checkpoints every thirty simulated seconds are about
+9 KB, and roughly 1 KB of that is the fight; the rest is the four factory sectors
+by name. `play`, `tests/combat.rs` and the page's *verify* button all check the
+same thing: the live encounter, a replay from the seed, and a resume from a
+checkpoint taken mid-fight all hash identically.
+
+### The disturbance boundary
+
+The factory is four sectors, each an ordinary plant in the solver's language,
+each held as a T5 population orbit. While nobody is fighting in them they do not
+*run*: any tick is one period of evaluation away. A wave opens the **combat
+domain**, the padded bounding box of the route, the structures and the
+batteries. Only the sectors inside it wake: they leave their orbit and are
+stepped on the fight's clock, because a structure that falls is an edit, and an
+edit happens at a tick.
+
+```text
+sector     domain    woke    stepped   evals recompile  against a world with no fight
+Quarry     outside      0          0       4         0  identical, bit for bit
+Smelting   inside       1        145       4         2  differs: lost output while down
+Yard       inside       1        206       3         0  identical, bit for bit
+Works      outside      0          0       4         0  identical, bit for bit
+```
+
+There are two levels of locality, and the table shows both. The *spatial*
+boundary decides what wakes: Quarry and Works never hear of the fight. The
+*topological* one decides what is recompiled: the Yard woke, was stepped
+through the whole fight, was never changed, and is still exactly itself. When the
+conveyor falls, that one sector is recompiled at that one tick, as Prototype 1's
+rendezvous (harvest by name, edit, compile, pour back). The other three are not
+asked to stop. That is the scoped barrier limitation 11 has been asking for,
+for the case of a plant that is several sectors.
+
+When the fight goes quiet (nothing alive, nothing in the air, nothing still to
+be released) and stays quiet for three seconds, the domain **closes**. Every
+woken sector searches for its orbit again from wherever the fight left it and
+collapses back into closed form. `pop::orbit` only answers for a plant that
+started empty at tick 0, so `combat::factory::Settled` runs the same search
+from a *given* state. It answers later ticks by shifting in time rather than
+replaying: the state at `t0 + n·period + r` is the state at `t0 + r`, with every
+deadline `n·period` later and every counter `n·delta` larger.
+
+### Things the first version got wrong
+
+- **A torn-up conveyor was an invalid plant.** Removing the `Conveyor` node
+  left the smelters consuming ore that nothing delivers, and the language
+  refused it. That refusal is correct, so the edit was wrong. A removed node now
+  first gives every bay it filled a `holds` slot for what it delivered, the
+  clause the language already had for a bay filled from outside the document.
+  The hopper keeps the ore that arrived before the belt went, the smelters drain
+  it, and then they starve. The belt's 240 carriers in transit are reported as
+  scrap rather than silently lost.
+- **A wall at zero hp stayed standing for twenty minutes.** An impact at the
+  same tick as a wall's breach brought the hp up to date first, and the band
+  event then skipped anything with no hp left. A million attackers queued
+  politely in front of a wall that was not there until the guns killed them.
+  A structure already past a band it has not been told about now changes band
+  at once.
+- **A repaired plant was a different plant.** Putting the conveyor back
+  appended it to the document. That is the same plant on paper, but
+  declaration order is class order, and class order is arbitration order at
+  every contended bay. A sector now keeps as-built order across edits.
+
+### The view
+
+`combat serve` (port 8800) draws the encounter on a canvas: cohorts walking the
+route as representative sunflowers of up to 64 dots with a count and a health
+pip, turrets rotating through their lay, muzzle flashes and recoil, autocannon
+tracers and lobbed howitzer shells with ground shadows, impact flashes, rings and
+smoke, walls cracking and burning by band and collapsing to rubble, the conveyor
+breaking with its ore stopping, sectors pulsing at their orbit's period when
+closed and marching-ants amber when awake, and the dashed domain boundary. The
+overlay is the one the brief drew: nominal entities, then cohorts, turret
+populations, projectiles, unique structures and events per second.
+
+None of it is streamed. A frame carries a cohort's leg and departure tick, a
+volley's origin, target and two ticks, and a battery's two headings and the two
+ticks between them. The page polls five times a second and `draw.js`
+interpolates everything else at sixty. `tests/combat_web.mjs` drives the
+renderer against a recording canvas through a live wave and checks, among other
+things, that a volley is drawn at its origin at its fire tick and at its target
+at its impact tick, and that a cohort is drawn where the server says it is.
+
+### What this experiment does not do
+
+- **No pathfinding.** One route with nodes, as the brief said. Cohorts do not
+  choose, flank or retarget, and a structure off the route cannot be attacked.
+- **Sectors are sealed plants.** Each is its own plant with no transport to the
+  others, so an edit in one cannot move work into another. A factory whose
+  sectors trade by rail would need this boundary to cut a `rooms::Room` at
+  region granularity rather than at plant granularity. That is the obvious next
+  step, and it is not taken here.
+- **Splash is capped, not spatial.** A shell hurts at most `hits` attackers in
+  any cohort its blast circle touches, nearest first. That is what bounds the
+  state, and it is also why a million attackers walk through: the defence's
+  kill rate is set by its fire rate, not by the wave's density.
+- **The browser was not checked by eye in this session.** The front end is
+  covered by the Node harness (31 checks against a live server); the automated
+  browser available could not reach the loopback server.
+- **`tests/camp.rs` still has its one failure** (`the_campaign_can_be_finished…`),
+  which fails identically on the commit before this experiment. It is the
+  experiment-15 power reload noted above, not something this one caused.
+
 ## The tiers
 
 | tier | module | cost in *t* | cost in objects | exact |
@@ -4265,6 +4469,17 @@ designs/23-watermill Ex 15: the powder brief, answered on a river
 designs/24-hydro     Ex 15: electricity in 1890, out of two crates
 tests/slice.rs       Ex 15: twenty-one properties, including the one about the same place
 
+src/combat/mod.rs     Ex 16: cohorts, not attackers; integer geometry; binary angles
+src/combat/field.rs   Ex 16: a route, twelve structures, six batteries, four sectors
+src/combat/fight.rs   Ex 16: cohorts, volleys, walls under assault, no stored queue
+src/combat/factory.rs Ex 16: a sector: an orbit while dormant, a population when woken
+src/combat/run.rs     Ex 16: the log, the domain, checkpoints, replay and resume
+src/combat/net.rs     Ex 16: `combat serve`
+src/bin/combat.rs     Ex 16: serve, play, scale
+web/combat/           Ex 16: the encounter, interpolated from compact state
+tests/combat.rs       Ex 16: eight properties, including the one about the Yard
+tests/combat_web.mjs  Ex 16: the renderer and the wire, against a live wave
+
 src/camp/mod.rs      P3: five rooms, one clock, and what had to become real
 src/camp/site.rs     P3: the five rooms, hand-authored and deliberately nasty
 src/camp/tech.rs     P3: twelve components, never a percentage
@@ -4299,6 +4514,8 @@ server rather than a dependency tree larger than the crate they serve.
 > they leave behind keep working.
 > **Experiment 15:** and then put the same valley in three centuries at once, and
 > find out whether that is a setting or a puzzle.
+> **Experiment 16:** and then shoot at it, and find out how little of it has to
+> notice.
 
 The thing this file asked for before Prototype 3 — *a reason to keep a room
 open* — is what Prototype 3 is. A finished room becomes a supplier, keeps

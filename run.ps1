@@ -75,6 +75,14 @@ param(
     #   -Slice check                   the front end, against a live server
     # -Bind 0.0.0.0 serves it on every interface, as with -Camp.
     [switch]$Slice,
+    # Experiment 16: one defensive encounter. A route, walls, six batteries and
+    # four factory sectors that only wake where the fight is. Everything after
+    # the switch is passed straight to it:
+    #   -Combat                        the encounter, at http://127.0.0.1:8800
+    #   -Combat play [--nominal N] [--seed S] [--trace K]   one wave, headlessly
+    #   -Combat scale [--seed S]       100 to 1,000,000 attackers, timed
+    #   -Combat check                  its front end, against a live server
+    [switch]$Combat,
     [string]$Play,
     # PowerShell binds anything starting with `-` to a parameter, so the
     # scenario's own options get first-class ones rather than being smuggled
@@ -214,6 +222,31 @@ if ($Machine) {
     if ($Configs) { $cli += $Configs } else { $cli += "serve" }
     if ($cli -contains "serve") {
         $cli += @("--port", $(if ($Port -eq 8787) { 8797 } else { $Port }))
+        $cli += @("--host", $Bind)
+    }
+    & $exe @cli
+    exit $LASTEXITCODE
+} elseif ($Combat) {
+    cargo build --release --bin combat
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $exe = Join-Path $PSScriptRoot "target/release/combat.exe"
+    # `check` is the front end's own test, and it needs something to talk to.
+    if ($Configs -and $Configs[0] -eq "check") {
+        $port = if ($Port -eq 8787) { 8801 } else { $Port }
+        $srv = Start-Process -FilePath $exe -ArgumentList "serve", "--port", $port `
+            -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden
+        try {
+            Start-Sleep -Milliseconds 700
+            node (Join-Path $PSScriptRoot "tests/combat_web.mjs") $port
+            exit $LASTEXITCODE
+        } finally {
+            if (-not $srv.HasExited) { Stop-Process -Id $srv.Id -Force }
+        }
+    }
+    $cli = @()
+    if ($Configs) { $cli += $Configs } else { $cli += "serve" }
+    if ($cli -contains "serve") {
+        $cli += @("--port", $(if ($Port -eq 8787) { 8800 } else { $Port }))
         $cli += @("--host", $Bind)
     }
     & $exe @cli
