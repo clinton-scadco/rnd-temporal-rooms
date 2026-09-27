@@ -2,10 +2,13 @@
 //!
 //! ```text
 //!   GET  /                the encounter
-//!   GET  /api/layout      the field: route, structures, batteries, sectors. Fixed
+//!   GET  /api/layout      the district: land, roads, sites, lanes, anchors,
+//!                         batteries, sectors. Fixed
 //!   GET  /api/frame       everything a view draws at the current tick
 //!   GET  /api/log         what is written down: the seed, the commands, checkpoints
-//!   POST /api/wave        { n }            send a wave of n attackers
+//!   POST /api/stream      { lane, rate }   tonnes a second through a fracture
+//!   POST /api/anchor      { a, on }        power a phase anchor, or not
+//!   POST /api/launder     { on }           crush 1890 ore before it is stacked
 //!   POST /api/repair      { s }            put a structure back
 //!   POST /api/hold        { b, on }        hold a battery's fire, or release it
 //!   POST /api/speed       { x, paused }    how fast the clock runs. Not logged:
@@ -15,9 +18,9 @@
 //!                         oldest checkpoint held, and compare both with now
 //! ```
 //!
-//! A frame carries state, not pictures: a cohort's leg and the tick it set
-//! off, a volley's four numbers, a battery's two headings and the ticks
-//! between them. The page polls a few times a second and interpolates every
+//! A frame carries state, not pictures: a site's strain and the rate it is
+//! changing at, a cohort's road and the tick it set off, a volley's four
+//! numbers, a battery's two headings and the ticks between them. The page polls a few times a second and interpolates every
 //! one of those at sixty frames a second on its own -- which is the
 //! experiment's rendering claim, made by the renderer rather than about it.
 
@@ -104,7 +107,7 @@ pub fn serve(host: &str, port: u16) -> std::io::Result<()> {
         with(|l| l.beat());
     });
     println!("experiment 16 is at   http://{addr}/");
-    println!("one encounter: a route, walls, six batteries and four factory sectors.");
+    println!("one district in 2037, two fractures into it, and whatever comes through.");
     println!("ctrl-c to stop.");
     for stream in listener.incoming() {
         match stream {
@@ -157,17 +160,21 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
     if req.method == "POST" {
         let j = req.json();
         let r = match req.path.as_str() {
-            "/api/wave" => command(|| {
-                let n = j
-                    .at("n")
+            "/api/stream" => command(|| {
+                let rate = j
+                    .at("rate")
                     .as_u64()
-                    .or_else(|| j.at("n").as_str().and_then(|s| s.replace(',', "").parse().ok()))
-                    .ok_or("how many?")?;
-                if n > 100_000_000 {
-                    return Err("a wave larger than a hundred million is a different experiment".into());
-                }
-                Ok(Cmd::Wave { nominal: n })
+                    .or_else(|| j.at("rate").as_str().and_then(|s| s.replace(',', "").parse().ok()))
+                    .ok_or("how many tonnes a second?")?;
+                Ok(Cmd::Stream { lane: run::lane(j.at("lane").as_str().unwrap_or(""))?, rate })
             }),
+            "/api/anchor" => command(|| {
+                Ok(Cmd::Anchor {
+                    anchor: run::anchor(j.at("a").as_str().unwrap_or(""))?,
+                    on: j.at("on").as_bool().unwrap_or(true),
+                })
+            }),
+            "/api/launder" => command(|| Ok(Cmd::Launder { on: j.at("on").as_bool().unwrap_or(true) })),
             "/api/repair" => command(|| {
                 Ok(Cmd::Repair { structure: run::structure(j.at("s").as_str().unwrap_or(""))? })
             }),

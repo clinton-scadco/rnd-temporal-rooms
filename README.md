@@ -162,12 +162,11 @@ project has spent the promise it has been making since Prototype 1.
 .\run.ps1 -Slice cross                         # the fractures, and what holds them open
 .\run.ps1 -Slice price --part motor            # what a crate of machinery costs
 
-# Experiment 16: one wave, walls, six batteries, and a factory that only wakes
-# where the fight is
-.\run.ps1 -Combat                              # the encounter, at :8800
-.\run.ps1 -Combat play                         # one wave, and the four questions
-.\run.ps1 -Combat play --nominal 100000        # the same, a hundred thousand strong
-.\run.ps1 -Combat scale                        # 100 to 1,000,000 attackers, timed
+# Experiment 16: nothing is sent -- what crosses a fracture is what tears
+.\run.ps1 -Combat                              # the district, at :8800
+.\run.ps1 -Combat play                         # an afternoon at the gantry, and what it cost
+.\run.ps1 -Combat play --rate 400              # the same, ten times the tonnage
+.\run.ps1 -Combat scale                        # 40 to 400,000 t/s, anchored and not
 .\run.ps1 -Combat check                        # its front end, without a browser
 
 # Prototype 2: two players, one factory, one clock that does not stop
@@ -3958,586 +3957,156 @@ altered.
 
 ## Experiment 16: combat as an active disturbance
 
-Everything above compresses a factory into a handful of numbers that stand for
-a great many machines. A combat system is the obvious thing that could break
-that. The naive version gives every attacker a position and a health bar, gives
-every shell an event, writes every event down, and wakes the whole world to find
-out what got hit. So:
-
 > **Can combat coexist with the compressed deterministic simulation without
 > producing an obscene serialized event stream or requiring the whole world to
 > run explicitly?**
 
-It is kept narrow on purpose: one encounter, one route, walls and batteries, and
-nothing freeform.
+The first version answered that with one route, walls, batteries and a button
+that sent a wave (commit `f4c5d3c` has it, and its write-up). It worked, and it
+was tower defence: the disturbance was *sent*, it came from the edge of the map,
+and nothing the factory did had anything to do with it. This version keeps
+every piece of the compression machinery and changes what a disturbance **is**.
+
+### Nothing is sent: what crosses is what tears
+
+The encounter is experiment 15's plot, in 2037. Both fractures land on the Rift,
+where the district has built a gantry. The deep lane brings 1890 ore forward 147
+years into the ore yard; the near corridor brings 2070 lathes back 33 years into
+the lathe shop. Every tonne that crosses leaves `years` of **strain** behind it:
+three tenths on the gantry it came through, the rest wherever it is put down.
 
 ```text
-Quarry (outside)      Smelting ─ conveyor ─┐      North guns     spawn
-                          │                │            ◄═══════════
-   ◄═ Works gate ═ Smelter hall ═══╪═ Inner wall ═ Redoubt ═ Outer wall
-                          │                │      South guns
-Works (outside)          Yard      Hall battery
+   lanes open, grid holding      strain rises at  t/s x years x share
+   anchor powered                strain falls at  a fixed drain
+   manifestations at the stock   strain falls at  members x absorb
+
+   crosses `open`                the site tears: a rupture
+   rupture, every second         vents 30% of its strain as manifestations
+   crosses 2x, 4x `open`         the bleed widens: 7, 10, 14 tiles
+   falls to a quarter of `open`  the rupture seals
 ```
+
+Strain is a level and a rate, and the rate only changes at an event, so the tick
+a site tears is **solved**, exactly as the tick a wall crosses a damage band is.
+The disturbance is a consequence of the economy the player built, derived from
+compressed state, and there is still nothing but commands in the log.
+
+### The bleed is the disturbance; the crowd is what comes out of it
+
+Inside a rupture's bleed radius the ground *is* the century the strain came
+from. The view paints experiment 15's land fold for that century inside the
+tear (Oakshaw's oaks standing where Tarrant Street was), and the simulation
+applies the rule the century implies: **an 1890 bleed has no grid in it.**
+
+- A gantry standing in one cannot hold a fracture open. The interface goes
+  dark, the Interface sector loses its haul road (a Prototype 1 rendezvous,
+  local), nothing more crosses, and the tear starves itself.
+- A battery standing in one cannot lay.
+
+What a rupture vents is a **manifestation**, made of one century's strain: an
+*echo* (1890: slow, many, soft) or a *glint* (2070: quick, few, hard). Each
+walks the road graph to wherever its century's material is stacked (echoes to
+the ore yard, glints to the lathe shop) and takes it back, draining the
+building and the strain together. When there is none left anywhere, whether
+taken back, laundered, or burned with the building it was in, it has nothing
+to be and **fades**. Shooting it is one answer out of several.
+
+### What a player does about it
+
+| Lever | What it does | What it costs |
+|---|---|---|
+| Throttle a lane | less strain per second | the thing you were importing |
+| Launder the ore | crush 1890 ore before it is stacked; it leaves as 2037 concentrate, so the ore yard never strains | 20 MW, and it needs the crusher house |
+| Power an anchor | pins the ground to 2037 (a pinned tear vents but does not bleed) and drains strain | 25 MW |
+| Batteries | kill manifestations in range, if they have a grid | nothing, until a bleed reaches them |
+
+Anchors and laundering are paid first out of the same 180 MW that holds the
+fractures open (98 + 53, experiment 15's formula), so powering both anchors and
+laundering browns the lanes out to 79%. Holding time still is paid for in
+fracture. Laundering is also experiment 15's own intended play (process near
+the boundary, because processing restamps the origin), which now pays twice.
 
 ### The answer
 
-Yes. The measurement the brief asked for is the scaling table, and runtime
-follows the compressed state, not the attackers:
+`combat play` is an afternoon: open both lanes, anchor and launder at 0:45,
+close the lanes at 1:20.
 
 ```text
-   attackers  pkts  peak records  events   visits    killed   through lost   sim  runtime  ns/visit
-         100    12     4      50     110    2,266       100         0    0  0:23    0.3ms     143.4
-       1,000    12    10      59     236    5,692     1,000         0    0  0:32    0.8ms     135.1
-      10,000    12    14     279   1,032   29,681     2,315     7,685    6  1:09    1.9ms      64.8
-     100,000    12    19     328   1,199   38,090     1,760    98,240    6  1:08    2.1ms      54.4
-   1,000,000    12    22     339   1,250   40,622     1,560   998,440    6  1:08    2.3ms      57.4
+  crossed: 2,682 t of 1890 ore, 1,341 t of 2070 lathes
+  manifested 1,679   destroyed 848   faded 831   structures lost: none
+  3 tears, 411 events, 117 volleys, 85 splits, 82 merges, 124 cohort records
+  0:22  Gantry tears into 1890; Interface and Machine shop wake
+  0:22  the interface goes dark: the gantry is standing in 1890, and 1890 has no grid
+  0:26  Gantry seals; the interface lights again
+  0:35  Ore yard tears into 1890; Crushing wakes
+  0:41  Gantry tears into 1890; the interface goes dark
+  0:45  North anchor powered; the interface lights again; laundering
+  0:55  the district is quiet
+  Foundry   reached by nothing   woke 0   identical, bit for bit
+  live == replayed == resumed from 0:30 (mid-disturbance)
 ```
 
-From 10,000 to 1,000,000 attackers the peak cohort count, the events, the work
-and the runtime are all flat. Between 100 and 10,000 the events do grow, but
-that is the *outcome* changing: a small wave dies at the outer wall in twenty
-seconds, a big one takes the walls down and runs for a minute. `visits`, the
-records looked at to find each next event, is the actual work, and runtime
-tracks it at roughly 55–140 ns per visit whatever the wave size.
+Nobody scripted the oscillation between 0:22 and 0:45. The gantry tears, goes
+dark, starves, seals and relights, then does it again. After 0:45 the lanes
+stay open at full demand and nothing tears again: the anchor keeps the door lit
+and drains it, and laundering means the ore yard has nothing out of its time.
 
-### A cohort is the unit, not an attacker
-
-v2's argument was that ten thousand smelters queued at one bay are in one state,
-so they are one number. Ten thousand attackers walking the same leg of the same
-route, who set off at the same tick with the same health, are also in one state:
+`combat scale` asks the brief's question twice:
 
 ```text
-cohort #7   brute x2,400   hp 12   marching leg 3 since t=1,380
+unanchored: the district limits itself
+      t/s      asked t    crossed t   manifest tears
+       100      11,700        7,498      4,507    10
+    1,000      117,000       16,024     12,753    23
+   10,000    1,170,000       18,249     15,533    24
+
+anchored: every tonne crosses, and the disturbance scales with it
+      t/s   crossed t    manifest  peak records events  visits  runtime
+       40       4,024         937     2      67    273   5,076    0.9ms
+      400      40,246      36,025    24     475  1,039  30,868    3.3ms
+    4,000     402,478     423,010    20     386    509  11,591    1.9ms
+   40,000   4,024,798   4,300,374    11     387    402   7,259    1.7ms
+  400,000  40,247,998  43,338,694     5     405    374   6,232    1.7ms
 ```
 
-Where it is at any tick is a closed form of those numbers. A volley does not
-touch 2,400 things. It moves *k* of them into another state, which is a split,
-and cohorts that end up in the same state (the damaged halves of two packets
-piled against one wall) merge back into one. Cohort count is bounded by *how
-many different things can be true of an attacker*: two kinds, a few hp levels,
-where on the route. It is not bounded by how many attackers there are.
+Forty-three million manifestations cost 374 events and never more than 24
+cohorts. The unanchored table is a finding of its own: **an unanchored fracture
+cannot be forced.** Past a few hundred tonnes a second, pushing harder buys
+tears rather than tonnes. At the top of the anchored table the crowd razes the
+store it came for at once and fades with it, which is why the event count falls
+as volume rises.
 
-A battery is the same thing for turrets: three autocannons in one pit lay
-together and fire one volley, which is one projectile record with a count.
+### What stayed exactly as it was
 
-### No tick loop, and no stored queue
-
-The next event is found by asking every piece of compressed state when it next
-changes: a volley lands at its impact tick; a wall under assault crosses its
-next damage band at `hp / drain`; a marching cohort reaches the end of its leg;
-a battery finishes laying, finishes reloading, or sees a cohort's leg cross its
-range circle, which is solved rather than polled. Every one of those times is a
-function of state, so **the queue is not state**. A checkpoint has no events in
-it, and a fight restored from one finds exactly the event the original was about
-to process.
-
-```text
-t=229    cohort #1 x188 enters range of North guns
-t=252    North guns volley fires (3 shells), lands t=267
-t=267    North guns volley impacts: #1 splits: hp 4 x173, hp 2 x15 (#3)
-```
-
-Damage uses bands the way experiment 14's temperatures do (intact, damaged,
-critical, destroyed). Behaviour changes only at the thresholds, and the
-factory only hears about thresholds.
-
-### What is written down
-
-```text
-{"seed":16,"commands":[{"at":120,"op":"wave","n":3000},
-                       {"at":4200,"op":"repair","s":"Ore conveyor"}, ...]}
-146 bytes of log for 703 derived events -- 0 serialized
-```
-
-A seed and three commands. Checkpoints every thirty simulated seconds are about
-9 KB, and roughly 1 KB of that is the fight; the rest is the four factory sectors
-by name. `play`, `tests/combat.rs` and the page's *verify* button all check the
-same thing: the live encounter, a replay from the seed, and a resume from a
-checkpoint taken mid-fight all hash identically.
-
-### The disturbance boundary
-
-The factory is four sectors, each an ordinary plant in the solver's language,
-each held as a T5 population orbit. While nobody is fighting in them they do not
-*run*: any tick is one period of evaluation away. A wave opens the **combat
-domain**, the padded bounding box of the route, the structures and the
-batteries. Only the sectors inside it wake: they leave their orbit and are
-stepped on the fight's clock, because a structure that falls is an edit, and an
-edit happens at a tick.
-
-```text
-sector     domain    woke    stepped   evals recompile  against a world with no fight
-Quarry     outside      0          0       4         0  identical, bit for bit
-Smelting   inside       1        145       4         2  differs: lost output while down
-Yard       inside       1        206       3         0  identical, bit for bit
-Works      outside      0          0       4         0  identical, bit for bit
-```
-
-There are two levels of locality, and the table shows both. The *spatial*
-boundary decides what wakes: Quarry and Works never hear of the fight. The
-*topological* one decides what is recompiled: the Yard woke, was stepped
-through the whole fight, was never changed, and is still exactly itself. When the
-conveyor falls, that one sector is recompiled at that one tick, as Prototype 1's
-rendezvous (harvest by name, edit, compile, pour back). The other three are not
-asked to stop. That is the scoped barrier limitation 11 has been asking for,
-for the case of a plant that is several sectors.
-
-When the fight goes quiet (nothing alive, nothing in the air, nothing still to
-be released) and stays quiet for three seconds, the domain **closes**. Every
-woken sector searches for its orbit again from wherever the fight left it and
-collapses back into closed form. `pop::orbit` only answers for a plant that
-started empty at tick 0, so `combat::factory::Settled` runs the same search
-from a *given* state. It answers later ticks by shifting in time rather than
-replaying: the state at `t0 + n·period + r` is the state at `t0 + r`, with every
-deadline `n·period` later and every counter `n·delta` larger.
-
-### Things the first version got wrong
-
-- **A torn-up conveyor was an invalid plant.** Removing the `Conveyor` node
-  left the smelters consuming ore that nothing delivers, and the language
-  refused it. That refusal is correct, so the edit was wrong. A removed node now
-  first gives every bay it filled a `holds` slot for what it delivered, the
-  clause the language already had for a bay filled from outside the document.
-  The hopper keeps the ore that arrived before the belt went, the smelters drain
-  it, and then they starve. The belt's 240 carriers in transit are reported as
-  scrap rather than silently lost.
-- **A wall at zero hp stayed standing for twenty minutes.** An impact at the
-  same tick as a wall's breach brought the hp up to date first, and the band
-  event then skipped anything with no hp left. A million attackers queued
-  politely in front of a wall that was not there until the guns killed them.
-  A structure already past a band it has not been told about now changes band
-  at once.
-- **A repaired plant was a different plant.** Putting the conveyor back
-  appended it to the document. That is the same plant on paper, but
-  declaration order is class order, and class order is arbitration order at
-  every contended bay. A sector now keeps as-built order across edits.
+Cohorts, split and merge, the event scan with no stored queue, analytic volleys,
+damage bands, sector wake/edit/close, checkpoints that hold no events, replay and
+resume. What changed: `ROUTE` became a road graph with shortest-path next hops;
+`Wave` became `Stream`, `Anchor` and `Launder`; the domain is the circles a
+tear can reach rather than a hand-drawn rectangle; and a site's strain is two
+numbers (one per foreign century), which is the entire cost of the catalyst.
 
 ### The view
 
-`combat serve` (port 8800) draws the encounter on a canvas: cohorts walking the
-route as representative sunflowers of up to 64 dots with a count and a health
-pip, turrets rotating through their lay, muzzle flashes and recoil, autocannon
-tracers and lobbed howitzer shells with ground shadows, impact flashes, rings and
-smoke, walls cracking and burning by band and collapsing to rubble, the conveyor
-breaking with its ore stopping, sectors pulsing at their orbit's period when
-closed and marching-ants amber when awake, and the dashed domain boundary. The
-overlay is the one the brief drew: nominal entities, then cohorts, turret
-populations, projectiles, unique structures and events per second.
-
-None of it is streamed. A frame carries a cohort's leg and departure tick, a
-volley's origin, target and two ticks, and a battery's two headings and the two
-ticks between them. The page polls five times a second and `draw.js`
-interpolates everything else at sixty. `tests/combat_web.mjs` drives the
-renderer against a recording canvas through a live wave and checks, among other
-things, that a volley is drawn at its origin at its fire tick and at its target
-at its impact tick, and that a cohort is drawn where the server says it is.
+`combat serve` paints the district on experiment 15's land, in 2037, with each
+century's ground cached once. Each torn, unpinned site clips the source
+century's ground into a wobbling circle, tinted sepia or ice. Crossings flow
+along the haul roads in their century's colour, and go dim when the interface
+is dark. Each site has a strain gauge that fills toward its tear in two
+colours, with a haze that gets worse before anything breaks. Anchors turn a
+hexagonal ward. Echoes are figures trailing smoke; glints are turning shards.
+It is still pure functions of `(layout, frame, tick)`, and `combat check`
+drives it against a recording canvas: 42 checks.
 
 ### What this experiment does not do
 
-- **No pathfinding.** One route with nodes, as the brief said. Cohorts do not
-  choose, flank or retarget, and a structure off the route cannot be attacked.
-- **Sectors are sealed plants.** Each is its own plant with no transport to the
-  others, so an edit in one cannot move work into another. A factory whose
-  sectors trade by rail would need this boundary to cut a `rooms::Room` at
-  region granularity rather than at plant granularity. That is the obvious next
-  step, and it is not taken here.
-- **Splash is capped, not spatial.** A shell hurts at most `hits` attackers in
-  any cohort its blast circle touches, nearest first. That is what bounds the
-  state, and it is also why a million attackers walk through: the defence's
-  kill rate is set by its fire rate, not by the wave's density.
-- **The browser was not checked by eye in this session.** The front end is
-  covered by the Node harness (31 checks against a live server); the automated
-  browser available could not reach the loopback server.
-- **`tests/camp.rs` still has its one failure** (`the_campaign_can_be_finished…`),
-  which fails identically on the commit before this experiment. It is the
-  experiment-15 power reload noted above, not something this one caused.
-
-## The tiers
-
-| tier | module | cost in *t* | cost in objects | exact |
-|---|---|---|---|---|
-| T0 | (none) | O(*t*·N) | O(N) | yes |
-| T1 | `sim` | O(events) | O(N) | yes |
-| T2 | `analytic::orbit` | O(1) | O(N) | yes |
-| T3 | `analytic::rates` | none | O(1) | asymptotic |
-| T4 | `analytic::archetypes` | O(1)/archetype | O(1) | yes, if uncoupled |
-| T5 | `pop` | **O(1)** | **O(1)** | **yes, even coupled** |
-
-T0 is never implemented; it is the thing this crate exists to avoid.
-
-`domains` and `rooms` are not tiers. `domains` decides which parts of a plant
-have to be solved together; `rooms` runs the parts that do not.
-
-## Language
-
-```
-item IronOre
-
-blueprint Line {
-    source  Miner x50 { produces 1000 IronOre every 60 ticks }
-
-    storage OreBay {
-        capacity 200000
-        initial 500 Catalyst        # seeds a cycle that would otherwise be dead
-        policy round_robin          # index | round_robin | priority
-        priority Smelter, GearPress # service order, for policy priority
-    }
-
-    process Smelter x10000 { consumes 10 IronOre takes 20 ticks produces 10 IronPlate }
-
-    link    Rail x8 {
-        moves 6000 IronOre
-        distance 2400 speed 2 base 200   # latency = 200 + 1200, both ways
-    }
-    link    Belt x40 { moves 10 IronOre takes 20 ticks returns 20 ticks }
-
-    shared storage OreNet   { capacity 2000000 }   # one bay for every deployed line
-    shared source  Field x50 { produces 4000 IronOre every 20 ticks }
-
-    wire Miner -> OreBay -> Smelter
-    wire Reactor -> CatBay { Catalyst }   # item-qualified
-}
-
-deploy 125_000 x Line stagger 7
-```
-
-New in v3:
-
-| construct | meaning |
-|---|---|
-| `returns D ticks` | how long a vehicle takes to get home after unloading |
-| `distance D speed S base B` | latency `B + D/S`, symmetric, so both legs |
-| `shared storage` / `shared source` | one of these for the whole deployment |
-
-Removed in v3: drawing one item from several bays, or posting one item to
-several bays. Route them through a link instead.
-
-Removed in Prototype 0: `x N` on a storage. It has been unusable since v1 and
-nobody noticed until it had to be drawn — see above. Declare the bays
-separately, which is the same plant, spelled honestly.
-
-## Results
-
-Measured on Windows 11 / x86-64, single-threaded, `opt-level=3 lto=fat`.
-
-| config | objects | classes | pop cells | regions | clock drift | T5 solve | compression |
-|---|---|---|---|---|---|---|---|
-| 01-spec | 3 | 2 | 2 | 1 | 0 | 65 µs | 1× |
-| 02-balanced | 1,000,000 | 3 | 4 | 1 | 0 | 18 µs | 2× |
-| 03-megafactory | 1,000,000,005 | 5 | 9 | 1 | 0 | 4.0 ms | 1× |
-| 04-science | 220 | 7 | 11 | 1 | 0 | 663 µs | 1× |
-| 05-coupled | 9 | 4 | 4 | 1 | 0 | 1.3 ms | 2× |
-| 06-cycle | 7 | 3 | 3 | 1 | 0 | 171 µs | 1× |
-| 07-transport | 30 | 4 | 5 | 2 | 3,000 | 402 µs | 5× |
-| 08-policy | 7 | 5 | 5 | 1 | 0 | 38 µs | 1× |
-| 09-population | 10,087 | 6 | 60 | 1 | 0 | 451 µs | 168× |
-| 10-billion | 1,008,500,002 | 6 | 60 | 1 | 0 | 871 µs | 16,808,333× |
-| 11-railchain | 133 | 6 | 25 | **3** | **2,300** | 83 ms | 5× |
-| 12-tradeloop | 54 | 7 | 24 | **2** | **600** | 24 ms | 2× |
-| 13-orefield | 1,000,000,092 | 3 | 5 | 1 | 0 | 27 µs | **200,000,018×** |
-| 14-privatebay | 98 | 33 | 69 | 1 | 0 | 104 ms | 1× |
-| 15-continent | 1,500,001,638 | 12 | 51 | **6** | **4,200** | 2.2 s | **29,411,797×** |
-
-Every configuration is cross-validated three ways: the lumped solver against the
-machine-by-machine simulator, the decomposed Room against the monolithic solver
-byte for byte, and the Room against the machine-by-machine simulator directly.
-Configs 1–10 are v2's, unchanged, and produce v2's numbers exactly — the return
-trip defaults to zero, so nothing that did not ask for the new physics got it.
-
-On the two decomposed configurations the Room is also simply faster than the
-monolithic solver — 446 µs against 774 µs on config 15 — because a region that
-settles alone runs fewer arbitration rounds than one settling inside a plant-wide
-fixpoint. That was not the goal and it is not the point; it is a hint about what
-the parallel version is worth.
-
-## Limitations
-
-These are real, and worth stating plainly.
-
-1. **Still single-threaded.** Every region is a separate `Blueprint` with a
-   separate clock exchanging timestamped messages, which is the shape a thread
-   pool or a network wants — and it is still stepped in one loop, on purpose.
-   v3's question was whether the decomposition is exact. Optimising before
-   knowing the abstraction is how you get an exceptionally fast implementation
-   of the wrong thing.
-2. **A conservative scheduler, not an optimistic one.** Regions never speculate
-   and never roll back, so the parallelism available is exactly the declared
-   slack. A plant built entirely from short belts decomposes into regions that
-   barely drift.
-3. **Lines with private state still do not compress.** Config 14 measures how
-   little they actually diverge, which is encouraging, but measuring is not
-   proving and nothing yet exploits it.
-4. **Orbit transients can be long.** Config 15's orbit is entered at
-   t = 29,125,400 and costs 2.2 s to find, all of it transient. The orbit itself
-   is 3,200 ticks. Nothing here bounds how long a plant takes to settle.
-5. **A region is found, not chosen.** Domain boundaries fall where transport
-   latency puts them. A player who builds one compact plant gets one region and
-   no decomposition, correctly, and there is no way to ask for a different one.
-6. **The event tier is not yet a per-region engine.** `sim.rs` can simulate any
-   whole plant machine by machine, and does, on every cross-validation. It
-   cannot yet be handed a single region with half a transport hanging off it,
-   so the bottom rung of the ladder is a whole-plant fallback rather than a
-   per-region one.
-7. **Deployment staggering and shared storage are mutually exclusive.** Lines
-   that share a bay and start at different phases would need per-phase line
-   populations, which is the same v4 dragon as item 3.
-8. **The workbench seeks forward cheaply and backward expensively.** A forward
-   seek resumes from the carry it already has; a backward one starts again from
-   the last boundary at or before the target. Scrubbing left across a long
-   horizon is therefore the slow direction, and the closed form is not yet
-   wired into a seek. One carry is cached, not a ladder of them, so there is an
-   obvious next move here and it has not been made.
-9. **Canvas 2D, not GPU instancing.** Close up, a population draws as a few
-   thousand sampled machines rather than the millions the experiment brief
-   imagines. The snapshot already carries what an instanced renderer would
-   need — class, population, state distribution, seed — so this is a renderer
-   limitation, not a model one.
-10. **One plant, one page.** No multiplayer, no shared editing, no power, no
-    splitters, no fluids. The document is a command log and generic nodes,
-    ports, links and storages precisely so those can arrive later.
-11. **The edit barrier is global.** An edit synchronises *every* region, not
-    just the ones it touches. Placing a smelter on one continent stops a mine
-    on another. The cost is small — the barrier is the only thing paid for, and
-    a region that is already ahead simply waits — but the *scope* is wrong, and
-    a plant with many independent regions and a busy player will feel it before
-    the cost does.
-12. **An edit is only ever at the present or the beginning.** The log is
-    required to be in order, so there is no editing the past and no branching
-    timeline. Scrubbing back and building would need the log to fork, which is
-    a different feature wearing this one's clothes.
-13. **A refused command is refused by the server, one round trip later.** The
-    browser proposes and un-proposes; for one person on loopback that is
-    invisible, and for a player on a real connection it would not be.
-14. **The costs in `scenarios/` are guesses.** They are a rules file, they are
-    meant to be edited between playtests, and nothing checks that they make a
-    good game — only that they mean the same thing twice.
-15. **Experiment 07's stores buy nothing.** Every port has its own capacity, so
-    every component is already a buffer and a dedicated one has no work to do.
-    Eight of thirty-seven components are used by no shipped design for this
-    reason. The fix is smaller port capacities, not more components.
-16. **A property is a band, not a quantity.** Temperature is one of ten, size is
-    one of four, speed is one of ten. That is what keeps an orbit findable and
-    it is also why nothing here can express "hot enough, but only just". A
-    finer scale would need a different way of closing the orbit.
-17. **Blending averages, and averaging is lossy.** Two lots of the same
-    substance meeting in a port come out weighted and rounded. It is
-    deterministic and it is not reversible, so a design that mixes 82% and 12%
-    ore has genuinely thrown the separation away — correct, but it means purity
-    can be destroyed by a careless wire and the tool does not warn first.
-18. **The machine designer is still not the game.** Experiments 06, 07 and 08
-    share a binary, a server and a directory with the workbench and touch none
-    of its code. Nothing decides yet whether a compiled macro-machine is placed
-    into a `Blueprint` as one node or as its own sub-plant, and that is the
-    actual integration question.
-19. **Routes do not know about each other.** Experiment 08's router refuses to
-    cross a run already laid, which is enough to keep pipework legible and not
-    nearly enough to make it look designed. Two lines going the same way should
-    share a rack and gain a bracket; instead they take neighbouring lanes and
-    each grows its own posts. It is the most obvious next thing and it is not a
-    change to the architecture, only to the cost function.
-20. **Elevation is derived, so there is no upper storey.** A machine's height
-    comes from what it *is*, which means a player cannot put a pump under a
-    platform on purpose. Free 3D placement would fix that and would immediately
-    raise the question the core rule exists to prevent: whether the picture is
-    allowed to change the machine.
-21. **One plant at a time, and no world.** Every scene is built from scratch,
-    at full detail, for one installation. Instance buffers are the reason to
-    believe a hundred at once is answerable; nothing has tried.
-22. **The enclosure is four rules and a wall.** Openings come from the machine,
-    which is the good part; everything else is a rectangle. No bays, no
-    mezzanines, no relationship between the building and what it contains
-    beyond "is it taller than nine metres".
-23. **Twelve flat materials, and not one texture.** Experiment 09 gave the plant
-    a material *language* and no material *surfaces*: no dirt, no edge wear, no
-    heat staining, no insulation texture, no warning markings, no lettering.
-    Every material is a colour, a roughness and a metalness. That is the single
-    biggest remaining gap between this and something shippable, and it is the
-    one place in the whole pipeline where a generative tool would obviously
-    earn its keep.
-24. **The readability metric cannot see hierarchy.** `tones` and `chroma` are
-    measured off the rendered pixels and they barely move between the grades,
-    while the plant improves enormously — because what improved was which grey
-    went where, and neither number can see that. `legible` counts how many
-    equipment kinds have a mesh-and-material signature nobody else shares,
-    which is closer and still crude. There is no measurement here of the thing
-    the experiment was actually about.
-25. **A grade is a global switch, not a distance.** The four looks are a
-    build-time argument, so a plant is articulated everywhere or nowhere. The
-    obvious use of the axis — full articulation on the installation you are
-    standing in, grade A on the twelve behind it — needs the grade to be per
-    piece and per distance, which is the same machinery as the LOD prefix and
-    has not been wired to it.
-26. **The campaign is one process and one save.** `camp serve` holds a single
-    campaign in memory. There is no persistence, so closing the window closes
-    the world — which is fine for a prototype whose question is about an hour
-    and wrong for anything else.
-27. **The design library is available, not necessary.** The five rooms can all
-    be answered out of the stock catalogue. Save, copy, lineage and
-    place-from-shelf work and are tested, but no room yet poses a constraint
-    that *requires* a derived design, so the mechanic the brief called major is
-    on probation until a room forces it.
-28. **A route is filled in the order it was opened.** Three rooms wanting coal
-    from one yard are served first-come, each up to the cap the player set. It
-    is deterministic and legible, and it is not the priority system a real
-    shortage wants — a room that opened its lane late starves quietly rather
-    than negotiating.
-29. **Rooms are authored, and there are five.** Deliberately: the brief was
-    explicit that procedural generation should wait until somebody knows what a
-    good problem looks like. What that means today is that the campaign's whole
-    content is one table, and it ends.
-
-## Layout
-
-```
-src/model.rs      compiled IR: classes with populations, storages with policies
-src/dsl.rs        lexer, parser, lowering, validation
-src/sim.rs        T1 round-arbitrated event simulator over SoA columns
-src/pop.rs        T5 lumped population engine and its closed form
-src/analytic.rs   T2 orbit, T3 per-storage rate algebra, T4 archetypes
-src/domains.rs    causal decomposition: transit domains, regions, channels
-src/rooms.rs      the Room: region blueprints, channels, conservative scheduler
-src/graph.rs      Prototype 0: the placed document, and the source it emits
-src/snap.rs       Prototype 0: the state at tick T, in the shape a view needs
-src/json.rs       Prototype 0: a JSON value, a parser and a writer
-src/web.rs        Prototype 0: an HTTP server, in std
-src/live.rs       Prototype 1: the command log, the barrier, and the carry
-src/why.rs        Prototype 1: why a thing is not running, and what binds
-src/scenario.rs   Prototype 1: budgets, orders, deadlines -- and no physics
-src/main.rs       experiment harness, `serve`, `export` and `play`
-web/              the workbench: canvas, inspector, timeline, timetable, brief
-tests/            284 cross-validation tests
-configs/          the fifteen configurations, plus the first scenario plant
-scenarios/        problems posed about a plant, in their own little language
-sketches/         where the workbench saves what you build
-
-src/machine/stuff.rs   Ex 07: seven domains, thirteen substances, five properties
-src/machine/parts.rs   Ex 07/14: thirty-seven components in seven families, and the numbers
-src/machine/era.rs     Ex 14: materials, temperature bands, vibration, three centuries
-src/machine/design.rs  Ex 06: components on a tile grid, wires between their ports
-src/machine/sim.rs     Ex 06: transfer along wires, then every component steps
-src/machine/orbit.rs   Ex 06: run it until it repeats; keep transient + period
-src/machine/eval.rs    Ex 07/14: five briefs, competing costs, and no score
-src/machine/snap.rs    Ex 06: state(t) for a renderer, and why things are stopped
-src/machine/web.rs     Ex 06: its own small server, so it can be thrown away
-src/bin/machine.rs     Ex 08/09: run, why, compile, verify, parts, reuse, form, kit, read
-web/machine/           Ex 06: the designer, Ex 08: the plant in WebGL, Ex 09: its four looks
-designs/               Ex 08: sixteen answers to four briefs
-tests/machine_web.mjs  Ex 06: the front end, checked without a browser
-
-src/machine/form/mod.rs     Ex 08: millimetres, pieces, batches, and the pipeline
-src/machine/form/kit.rs     Ex 08/09: twenty-nine canonical meshes, twelve materials
-src/machine/form/seed.rs    Ex 08: where every cosmetic choice comes from
-src/machine/form/layout.rs  Ex 08: volumes, mounts, orientation, sockets, clearance
-src/machine/form/route.rs   Ex 08: A* with a heading; Ex 09: the connection vocabulary
-src/machine/form/frame.rs   Ex 08: plinths, columns, supports, platforms, stairs
-src/machine/form/paint.rs   Ex 09: the material language, as one pass over one field
-src/machine/form/body.rs    Ex 08: thirteen archetypes; Ex 09: articulated
-src/machine/form/shell.rs   Ex 08: slab, walls, roof, and the holes the plant cuts
-src/machine/form/obj.rs     Ex 08: the scene, baked, for anything that opens .obj
-src/machine/form/shot.rs    Ex 08: a rasteriser and a PNG writer, so it can be seen
-                            Ex 09: contact sheets, captions, and the palette metric
-tests/form.rs               Ex 08: the five claims, checked rather than asserted
-tests/read.rs               Ex 09: the five claims about what did *not* change
-tests/space.rs              Ex 10: placement, interfaces, routing and clashes
-tests/era.rs                Ex 14: one brief, three machines, and the guard rail
-
-src/mp/mod.rs        P2: sixty ticks a second, and the two seeds a room is
-src/mp/kit.rs        P2: what may be placed, in seconds rather than in ticks
-src/mp/lower.rs      P2: a machine design becomes a world recipe -- its own orbit
-src/mp/world.rs      P2: the game document, and the compiler down to the IR
-src/mp/cmd.rs        P2: sixteen intentions, and every refusal they can meet
-src/mp/goal.rs       P2: twenty-one hand-written problems, and the books
-src/mp/room.rs       P2: the clock, the log, and one reconstruction per player
-src/mp/net.rs        P2: the only stateful server in the repository
-src/bin/room.rs      P2: serve, test, fail, goals, parts
-web/room/            P2: the lobby, the plot, the inspector, the machine window
-tests/mp.rs          P2: twenty-five properties, with the clock held still
-tests/room_web.mjs   P2: two players and a whole session, without a browser
-
-src/slice/mod.rs     Ex 15: three centuries of one valley, and what they cost
-src/slice/phase.rs   Ex 15: a date over experiment 14's table, and the price of a crate
-src/slice/land.rs    Ex 15: fifteen features, three faces each, and a metric
-src/slice/region.rs  Ex 15: three regions on one rectangle, and the ground under them
-src/slice/gate.rs    Ex 15: fractures, interfaces, fleets, and a stamped ledger
-src/slice/run.rs     Ex 15: the slice -- three rooms, one clock, one machinery ledger
-src/slice/play.rs    Ex 15: mine 1890, crush in 2037, and pay for it out of 2070
-src/slice/net.rs     Ex 15: the same client again, with a century on it
-src/bin/slice.rs     Ex 15: serve, play, map, land, phases, cross, price, refuse
-web/slice/           Ex 15: the world map, the fractures, and the ground under the plot
-tests/slice_web.mjs  Ex 15: the new half of the client, without a browser
-designs/23-watermill Ex 15: the powder brief, answered on a river
-designs/24-hydro     Ex 15: electricity in 1890, out of two crates
-tests/slice.rs       Ex 15: twenty-one properties, including the one about the same place
-
-src/combat/mod.rs     Ex 16: cohorts, not attackers; integer geometry; binary angles
-src/combat/field.rs   Ex 16: a route, twelve structures, six batteries, four sectors
-src/combat/fight.rs   Ex 16: cohorts, volleys, walls under assault, no stored queue
-src/combat/factory.rs Ex 16: a sector: an orbit while dormant, a population when woken
-src/combat/run.rs     Ex 16: the log, the domain, checkpoints, replay and resume
-src/combat/net.rs     Ex 16: `combat serve`
-src/bin/combat.rs     Ex 16: serve, play, scale
-web/combat/           Ex 16: the encounter, interpolated from compact state
-tests/combat.rs       Ex 16: eight properties, including the one about the Yard
-tests/combat_web.mjs  Ex 16: the renderer and the wire, against a live wave
-
-src/camp/mod.rs      P3: five rooms, one clock, and what had to become real
-src/camp/site.rs     P3: the five rooms, hand-authored and deliberately nasty
-src/camp/tech.rs     P3: twelve components, never a percentage
-src/camp/shelf.rs    P3: My Machines, and the lineage a copy remembers
-src/camp/ship.rs     P3: lanes, fleets, and a ledger that settles on a lattice
-src/camp/run.rs      P3: the campaign -- five Rooms, a pump, and the refusals
-src/camp/net.rs      P3: the same client, one campaign, five room codes
-src/bin/camp.rs      P3: serve, play, map, tech, refuse
-web/camp/            P3: the map, the shelf, the components, the shipping board
-tests/camp.rs        P3: eighteen properties, including the one about leaving
-tests/camp_web.mjs   P3: the campaign half of the client, without a browser
-```
-
-Zero dependencies outside `std`. The workbench added a JSON codec and an HTTP
-server rather than a dependency tree larger than the crate they serve.
-
-> **v1:** compress repetition.
-> **v2:** compress interaction.
-> **v3:** compress causality.
-> **Prototype 0:** stop compressing things and go and look at one.
-> **Prototype 1:** let someone change it while it is running, and give them a
-> reason to want to.
-> **Experiment 06:** stop scaling buildings and start designing one.
-> **Experiment 07:** and then design something that is not a power plant.
-> **Experiment 08:** and then go and look at it.
-> **Experiment 09:** and then find out how much of *looking* is paint.
-> **Experiment 10:** and then let somebody move it.
-> **Experiment 14:** and then give it a temperature, a frame and a century.
-> **Prototype 2:** and then let two people build one together, without stopping
-> the clock.
-> **Prototype 3:** and then give them somewhere to go next, and make the thing
-> they leave behind keep working.
-> **Experiment 15:** and then put the same valley in three centuries at once, and
-> find out whether that is a setting or a puzzle.
-> **Experiment 16:** and then shoot at it, and find out how little of it has to
-> notice.
-
-The thing this file asked for before Prototype 3 — *a reason to keep a room
-open* — is what Prototype 3 is. A finished room becomes a supplier, keeps
-supplying while nobody is there, and hands over a component that makes an
-hour-old machine worth reopening. The `Carry` that carries it is still Prototype
-1's, unchanged: the snapshot the networking proof needed, and then the object an
-arrival lands in, turned out to be the object an edit already produced.
-
-The thing it asked for next was *a constraint the stock catalogue cannot answer*,
-so that designing something becomes necessary rather than merely available.
-Experiment 15 is that constraint, and it is a date: the Mining Valley is asked
-for powder, every powder line in the book runs on a grid, and 1890 has no grid —
-so somebody has to draw `23-watermill`, and then decide whether importing two
-generators in crates is worth 3,200 gears somebody in 2070 has to make. The
-catalogue is not what limits that plant. Logistics is, which is the premise the
-setting was always claiming.
-
-What is left is still content rather than architecture — more regions, more
-machines, and the expensive mechanics experiment 15 deliberately did without:
-player-created fractures, local phasing, and eventually phasing a factory off
-the ore body it is standing on, which the slice currently answers with a
-sentence rather than a mechanic. And the one piece of engineering deliberately
-left whole-room: a hash mismatch resends the entire snapshot, where the region
-structure underneath it could resend one deterministic region and replay the
-rest.
+- Strain is charged on what the interface *admits*, not on what each bay
+  actually holds. The solver keeps one number per bay per item, and
+  experiment 15 already tracks provenance on the flow rather than the lump.
+  This is the same granularity.
+- A rupture's source century is fixed when it tears. A site holding both
+  centuries bleeds whichever tore it.
+- In the scripted afternoon, the Interface sector is recompiled four times and
+  still ends bit-identical to a world where nothing crossed: its buffers
+  absorbed a four-second outage. The boundary claim holds, but this scenario
+  does not exercise a lasting topological loss. A razed store does (see the
+  anchored scale rows).

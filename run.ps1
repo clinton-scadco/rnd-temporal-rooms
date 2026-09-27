@@ -78,9 +78,9 @@ param(
     # Experiment 16: one defensive encounter. A route, walls, six batteries and
     # four factory sectors that only wake where the fight is. Everything after
     # the switch is passed straight to it:
-    #   -Combat                        the encounter, at http://127.0.0.1:8800
-    #   -Combat play [--nominal N] [--seed S] [--trace K]   one wave, headlessly
-    #   -Combat scale [--seed S]       100 to 1,000,000 attackers, timed
+    #   -Combat                        the district, at http://127.0.0.1:8800
+    #   -Combat play [--rate T] [--trace K]   an afternoon of shipping, headlessly
+    #   -Combat scale                  40 to 400,000 t/s, anchored and not, timed
     #   -Combat check                  its front end, against a live server
     [switch]$Combat,
     [string]$Play,

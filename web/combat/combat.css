@@ -1,6 +1,8 @@
 /* Experiment 16. The same dark ground and palette as Prototype 2's room view,
    so a player moving between them does not relearn what a colour means:
-   teal is the solver being clever, amber is something awake, red is the fight. */
+   teal is the solver being clever (and 2037 holding still), amber is something
+   awake, red is the disturbance -- and two new ones, for the centuries that
+   come through the gantry: sepia for 1890, ice for 2070. */
 
 :root {
   --ground: #0c1210;
@@ -13,6 +15,9 @@
   --signal: #e0a05c;
   --bad: #e06c6c;
   --good: #7ed9a0;
+  --e1890: #f2b36b;
+  --e2070: #7fe3ff;
+  --e2037: #8fd3c0;
   --mono: "Cascadia Mono", "SF Mono", Consolas, "DejaVu Sans Mono", monospace;
   --ui: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
@@ -99,13 +104,13 @@ main { flex: 1; display: flex; min-height: 0; }
   padding: 5px 9px;
 }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
-.dot.sq { border-radius: 1px; }
-.dot.runner { background: #f0b35e; }
-.dot.brute { background: #e0565f; }
-.dot.hurt { background: #ff7b54; }
+.dot.e1890 { background: var(--e1890); }
+.dot.e2070 { background: var(--e2070); }
+.dot.e2037 { background: var(--e2037); }
+#stage { background: #07090a; }
 
 #side {
-  width: 360px;
+  width: 380px;
   flex: none;
   overflow-y: auto;
   border-left: 1px solid var(--rule);
@@ -168,6 +173,23 @@ main { flex: 1; display: flex; min-height: 0; }
 .bar i.damaged { background: var(--signal); }
 .bar i.critical, .bar i.destroyed { background: var(--bad); }
 .item button { padding: 2px 8px; font-size: 11px; }
+.bar.strain { height: 5px; display: flex; }
+.bar.strain i.e1890 { background: var(--e1890); }
+.bar.strain i.e2070 { background: var(--e2070); }
+.good { color: var(--good); }
+.bad { color: var(--bad); }
+.warn { color: var(--signal); }
+.chip.bad { color: var(--bad); border-color: var(--bad); }
+
+.lane { padding: 6px 0; border-top: 1px solid var(--rule); display: flex; flex-direction: column; gap: 5px; }
+.lane:first-child { border-top: none; padding-top: 0; }
+.lanehead { line-height: 1.35; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
+.lane .group button { padding: 2px 8px; font-size: 11px; }
+.gridbar { height: 5px; background: var(--rule); border-radius: 3px; overflow: hidden; margin: 8px 0 4px; }
+.gridbar i { display: block; height: 100%; background: var(--accent); }
+.gridbar i.over { background: var(--signal); }
+.card h2 .small { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: 6px; }
 
 #notes { margin: 0; padding-left: 0; list-style: none; font-family: var(--mono); }
 #notes li { padding: 2px 0; color: var(--muted); }

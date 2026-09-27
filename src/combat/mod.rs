@@ -10,13 +10,23 @@
 //! > producing an obscene serialized event stream or requiring the whole world
 //! > to run explicitly?**
 //!
-//! One small defensive encounter, and nothing freeform:
+//! The first answer was a route, walls, turrets and a button that sent a wave.
+//! It compressed, and it was tower defence. This one keeps the compression and
+//! changes the cause: **nothing is sent.** Every tonne carried through a
+//! temporal interface leaves `years` of strain wherever it goes, and a site
+//! carrying too much tears.
 //!
 //! ```text
-//!   Factory  <-  approach route  <-  enemy wave
-//!                     |
-//!               walls + turrets
+//!   1890 ore  --deep fracture-->  gantry  -->  ore yard     echoes want it back
+//!   2070 lathes --near corridor-->  gantry  -->  lathe shop  glints want it back
+//!
+//!   a tear bleeds its century into the district: an 1890 bleed has no grid,
+//!   so a gantry in one goes dark and a battery in one cannot lay
 //! ```
+//!
+//! What a player does about it is mostly not shooting: throttle a lane,
+//! launder the ore before it is stacked, pin the ground with an anchor -- all
+//! paid for out of the grid that holds the fractures open.
 //!
 //! # Compression, again, one level up
 //!
@@ -26,7 +36,7 @@
 //! also in one state. So an attacker is never a record here -- a **cohort** is:
 //!
 //! ```text
-//!   cohort #7   brute x2,400   hp 12   marching leg 3 since t=1,380
+//!   cohort #7   echo x2,400   hp 6   walking Drove east -> Ore yard since t=1,380
 //! ```
 //!
 //! and its position at any tick is a closed form of those four numbers. A shell
@@ -38,23 +48,27 @@
 //! ```
 //!
 //! and two cohorts that end up in the same state -- the damaged half of one
-//! packet and the damaged half of the next, both piled against the same wall --
+//! vent and the damaged half of the next, both standing in the same ore yard --
 //! are merged back into one. The number of cohorts is bounded by *how many
 //! different things can be true of an attacker*, not by how many there are, and
 //! that is the claim the scaling run measures.
 //!
 //! # Nothing derived is written down
 //!
+//! Strain is not ticked either. It is two levels and two rates per site, and
+//! the rates only change at an event, so the tick a site tears, widens its
+//! bleed or seals is solved rather than found.
+//!
 //! A turret is not ticked. It is an event at the moment it could next do
 //! something: when a cohort's path first crosses its range, when it has finished
 //! laying, when it has reloaded. A shell is four numbers -- origin, target, the
 //! tick it fired, the tick it lands -- and a renderer interpolates it. A wall
-//! under assault is an hp, a drain rate and the tick it will cross its next
+//! being taken apart is an hp, a drain rate and the tick it will cross its next
 //! damage band. None of those events is serialized. What is:
 //!
 //! ```text
-//!   the scenario   one seed
-//!   the commands   send a wave, repair a structure, hold a battery
+//!   the scenario   one seed (and nothing in it is random any more)
+//!   the commands   stream a lane, power an anchor, launder, repair, hold
 //!   checkpoints    occasionally, the compact state -- never the events
 //! ```
 //!
@@ -63,23 +77,24 @@
 //! The factory is four sectors, each an ordinary plant in the language the
 //! solver has always spoken, each run as a T5 population with a closed-form
 //! orbit -- so the factory does not *run* at all while nobody is fighting in
-//! it: any tick is one period of evaluation away. A wave opens the combat
-//! domain, a rectangle around the route, the walls and the batteries, and the
-//! sectors that stand inside it **wake**: they leave their orbit and are stepped
+//! it: any tick is one period of evaluation away. A tear opens the domain, and
+//! the sectors its widest bleed could ever touch **wake**: they leave their
+//! orbit and are stepped
 //! as populations on the fight's clock, because a structure that falls is an
 //! edit and an edit happens at a tick. The sectors outside it never hear about
 //! the fight.
 //!
-//! When the last cohort is dead or gone and nothing has changed for a few
+//! When nothing is torn, the last manifestation is dead or faded, and nothing
+//! has changed for a few
 //! seconds, the domain **closes**: every woken sector finds its orbit again
 //! from wherever the fight left it and collapses back into a closed form. A
-//! sector whose topology the fight changed -- a conveyor torn up, a smelter hall
-//! down to half its furnaces -- was recompiled at the moment it changed, as a
+//! sector whose topology the disturbance changed -- a haul road stopped by a
+//! dark gantry, a lathe shop down to half its lathes -- was recompiled at the moment it changed, as a
 //! Prototype 1 rendezvous, and only that sector was.
 //!
 //! ```text
-//!   field    the encounter: a route, twelve structures, six batteries, four sectors
-//!   fight    cohorts, volleys, walls under assault, and the events between them
+//!   field    the district: experiment 15's land, roads, sites, lanes, anchors
+//!   fight    strain, ruptures, bleed, cohorts, volleys, and the events between them
 //!   factory  a sector: an orbit while nobody is fighting in it, a population when woken
 //!   run      the encounter: the log, the domain, checkpoints, and the frame a view reads
 //!   net      `combat serve`

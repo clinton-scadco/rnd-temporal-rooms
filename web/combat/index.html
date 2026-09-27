@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Combat Domain</title>
+  <title>Disturbance Domain</title>
   <link rel="stylesheet" href="/combat.css">
 </head>
 <body>
   <header id="bar">
-    <span class="brand"><b>EX 16</b> Combat domain</span>
+    <span class="brand"><b>EX 16</b> Active disturbance</span>
     <span id="clock" class="mono">0:00</span>
     <span id="tick" class="mono muted">t=0</span>
     <span id="domainchip" class="chip">dormant</span>
+    <span id="darkchip" class="chip bad" hidden>interface dark</span>
     <span class="grow"></span>
     <span class="muted small">clock</span>
     <div class="group" id="speed">
@@ -21,45 +22,46 @@
       <button data-speed="8">8×</button>
       <button data-pause="1" title="pause the clock">❚❚</button>
     </div>
-    <button id="reset" title="a fresh encounter">reset</button>
+    <button id="reset" title="a fresh district">reset</button>
   </header>
 
   <main>
     <section id="stage">
       <canvas id="view"></canvas>
       <div id="legend" class="small">
-        <span><i class="dot runner"></i>runners</span>
-        <span><i class="dot brute sq"></i>brutes</span>
-        <span><i class="dot hurt"></i>damaged</span>
-        <span class="muted">dots are representative: one cohort is one record, however many it stands for</span>
+        <span><i class="dot e1890"></i>1890: ore, echoes, bleed</span>
+        <span><i class="dot e2070"></i>2070: lathes, glints, bleed</span>
+        <span><i class="dot e2037"></i>2037: here, anchors</span>
+        <span class="muted">nothing is sent: every tonne through the gantry leaves strain behind it, and strain tears</span>
       </div>
     </section>
 
     <aside id="side">
-      <section class="card" id="overlaycard">
-        <pre id="overlay" class="mono">COMBAT DOMAIN</pre>
+      <section class="card">
+        <h2>Crossings <span class="muted small">what you import is what tears</span></h2>
+        <div id="lanes"></div>
+        <div id="grid" class="small"></div>
       </section>
 
       <section class="card">
-        <h2>Send a wave</h2>
-        <div class="row wrap" id="waves">
-          <button data-wave="100">100</button>
-          <button data-wave="1000">1,000</button>
-          <button data-wave="3000" class="primary">3,000</button>
-          <button data-wave="10000">10,000</button>
-          <button data-wave="100000">100,000</button>
-        </div>
-        <div class="row">
-          <input id="custom" class="mono" placeholder="any size" inputmode="numeric">
-          <button id="send">send</button>
-        </div>
-        <p class="small muted">3,000 breaches the walls and tears up the ore conveyor, and the inner batteries finish it. The factory sectors outside the dashed boundary never hear about it.</p>
+        <h2>Hold time still</h2>
+        <div id="responses"></div>
+        <p class="small muted">Anchors pin the ground to 2037 and drain strain. Laundering crushes 1890 ore before it is stacked, so it is 2037 concentrate by the time anything could want it back. Both are paid for out of the grid that holds the fractures open.</p>
+      </section>
+
+      <section class="card">
+        <h2>Strain</h2>
+        <div id="sites"></div>
+      </section>
+
+      <section class="card" id="overlaycard">
+        <pre id="overlay" class="mono">DISTURBANCE DOMAIN</pre>
       </section>
 
       <section class="card">
         <h2>What is written down</h2>
         <div id="log" class="mono small"></div>
-        <button id="verify">verify: replay from seed + resume from checkpoint</button>
+        <button id="verify">verify: replay the log + resume from a checkpoint</button>
         <div id="verdict" class="mono small"></div>
       </section>
 
