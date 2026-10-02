@@ -96,6 +96,11 @@ impl Play {
         if let Err(e) = self.s.advance() {
             self.bad.push(format!("t+{}s: the slice would not run: {e}", self.t));
         }
+        if self.s.disturbance.incident.as_ref().is_some_and(|i|i.damaged) {
+            if let Some(player)=self.s.cast.first().map(|c|c.id) {
+                if let Err(e)=self.s.repair_disturbance(player) { self.bad.push(format!("repair: {e}")); }
+            }
+        }
     }
 
     fn tick(&mut self, ds: u64) {
@@ -122,7 +127,12 @@ impl Play {
     }
 
     /// One intention, and the id of whatever it put down.
-    fn act(&mut self, who: PlayerId, region: &str, what: &str, act: Act) -> Id {
+    fn act(&mut self, who: PlayerId, region: &str, what: &str, mut act: Act) -> Id {
+        let ox = super::region::region(region).map(|(_, r)| super::geography::offset(r.phase)).unwrap_or(0);
+        match &mut act {
+            Act::PlaceMachine { x, .. } | Act::PlaceStorage { x, .. } | Act::Restore { x, .. } => *x += ox,
+            _ => {}
+        }
         match self.s.submit(who, region, act) {
             Ok(_) => {
                 let id = self
@@ -145,7 +155,9 @@ impl Play {
 
     /// Something that is *supposed* to be refused, and the sentence it is
     /// refused with. A refusal that did not happen is the failure here.
-    fn expect_refusal(&mut self, who: PlayerId, region: &str, what: &str, act: Act) {
+    fn expect_refusal(&mut self, who: PlayerId, region: &str, what: &str, mut act: Act) {
+        let ox=super::region::region(region).map(|(_,r)|super::geography::offset(r.phase)).unwrap_or(0);
+        match &mut act { Act::PlaceMachine {x,..}|Act::PlaceStorage{x,..}=>*x+=ox,_=>{} }
         match self.s.submit(who, region, act) {
             Ok(_) => {
                 self.warn(&format!("{what}  was ALLOWED, and should not have been"));
@@ -257,11 +269,12 @@ impl Play {
     /// An extraction head on the n-th patch of ground of one kind, `dx` tiles
     /// along from its corner.
     fn head(&mut self, who: PlayerId, region: &str, item: &'static str, n: usize, dx: i32) -> Id {
+        let ox = super::region::region(region).map(|(_, r)| super::geography::offset(r.phase)).unwrap_or(0);
         let at = self
             .s
             .yard(region)
             .and_then(|y| y.room.host.world.nth_ground(item, n))
-            .map(|d| (d.x + dx, d.y));
+            .map(|d| (d.x + dx - ox, d.y));
         let Some((x, y)) = at else {
             self.bad.push(format!("{region} has no {item} ground at index {n}"));
             return 0;

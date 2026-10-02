@@ -237,9 +237,11 @@ pub enum Mat {
     /// will take an arm off. Used sparingly on purpose -- an accent that is
     /// everywhere is a colour.
     Warn,
+    Wood,
+    CastIron,
 }
 
-pub const MATS: [Mat; 12] = [
+pub const MATS: [Mat; 14] = [
     Mat::Paint,
     Mat::Steel,
     Mat::Dark,
@@ -252,11 +254,15 @@ pub const MATS: [Mat; 12] = [
     Mat::Water,
     Mat::Oil,
     Mat::Warn,
+    Mat::Wood,
+    Mat::CastIron,
 ];
 
 impl Mat {
     pub fn tag(self) -> &'static str {
         match self {
+            Mat::Wood => "wood",
+            Mat::CastIron => "castiron",
             Mat::Paint => "paint",
             Mat::Steel => "steel",
             Mat::Dark => "dark",
@@ -277,6 +283,8 @@ impl Mat {
     /// a scene nobody seeded.
     pub fn look(self) -> ([u8; 3], u8, bool) {
         match self {
+            Mat::Wood => ([116, 82, 48], 94, false),
+            Mat::CastIron => ([62, 65, 61], 82, true),
             Mat::Paint => ([88, 122, 148], 60, false),
             Mat::Steel => ([166, 172, 178], 35, true),
             Mat::Dark => ([74, 80, 88], 70, true),

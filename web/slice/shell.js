@@ -100,7 +100,7 @@ export function renderRegion(v, tag, go) {
     )
     .join('');
 
-  // What somebody else already built on: the same ground, another century.
+  // Existing buildings occupy this patch of the shared world.
   const taken = (r.builtOver || [])
     .map(
       b =>
@@ -123,7 +123,7 @@ export function renderRegion(v, tag, go) {
     `<div class="tiles">` +
     `<div><b>${num(r.gridMW)}</b><span>MW grid</span></div>` +
     `<div><b>${r.machines}</b><span>machines</span></div>` +
-    `<div><b>${num(r.footprint)}</b><span>tiles</span></div>` +
+    `<div><b>${num(r.footprint)}</b><span>occupied tiles</span></div>` +
     (r.machinery && r.machinery.landed
       ? `<div class="imp"><b>${num(r.machinery.free)}</b><span>plant free</span></div>`
       : '') +

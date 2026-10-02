@@ -38,10 +38,10 @@ use temporal_rooms::slice::run::Slice;
 /// regions are three maps that happen to look alike, and nothing else here
 /// means anything.
 #[test]
-fn one_rectangle_three_histories() {
+fn one_world_with_distinct_region_coordinates() {
     for r in REGIONS {
         let (w, _) = r.furnish();
-        assert_eq!(w.plot(), land::PLOT, "{}: a plot of its own", r.tag);
+        assert_eq!(w.plot(), temporal_rooms::slice::geography::WIDTH, "{}: a plot of its own", r.tag);
     }
     // A feature is one row with three faces, so there is no way for a deposit to
     // be in one place in 1890 and another in 2037 -- but the *test* has to be
@@ -57,7 +57,7 @@ fn one_rectangle_three_histories() {
             let found = w
                 .deposits
                 .iter()
-                .find(|d| d.x == f.x && d.y == f.y && d.item == item)
+                .find(|d| d.x == f.x + temporal_rooms::slice::geography::offset(p) && d.y == f.y && d.item == item)
                 .unwrap_or_else(|| panic!("{}: {} is not at {},{} in {p}", f.tag, item, f.x, f.y));
             assert_eq!(found.w, f.w, "{}: a different width in {p}", f.tag);
             assert_eq!(found.h, f.h, "{}: a different height in {p}", f.tag);
@@ -93,11 +93,10 @@ fn the_ore_body_is_taken_and_then_built_over() {
     // naming the century where the same tiles are open.
     let (_, district) = region("district").expect("the district");
     let why = district
-        .built_over(reach.x, reach.y, 4, 4)
+        .built_over(reach.x + temporal_rooms::slice::geography::offset(Phase::P2037), reach.y, 4, 4)
         .expect("building on a standing works should be refused");
     assert!(why.contains(reach.name), "the refusal does not say what is there: {why}");
-    assert!(why.contains("1890"), "the refusal does not say when it was open: {why}");
-    assert!(why.contains("iron ore"), "the refusal does not say what is under it: {why}");
+    assert!(why.contains("2037"), "the refusal does not name the occupied patch: {why}");
 
     // The same rectangle in 1890 is free.
     let (_, valley) = region("valley").expect("the valley");
@@ -557,7 +556,7 @@ fn every_region_fits_on_the_shared_plot() {
         assert_eq!(w.installs.len(), r.kit.len(), "{}: something would not fit", r.tag);
         for i in &w.installs {
             let (x0, y0, x1, y1) = i.bounds();
-            assert!(x1 <= land::PLOT && y1 <= land::PLOT, "{}: {} hangs off", r.tag, i.name);
+            assert!(x1 <= temporal_rooms::slice::geography::WIDTH && y1 <= land::PLOT, "{}: {} hangs off", r.tag, i.name);
             assert!(
                 r.built_over(x0, y0, x1 - x0, y1 - y0).is_none(),
                 "{}: {} stands on something that was already there",

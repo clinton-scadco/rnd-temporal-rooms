@@ -51,6 +51,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const ASSETS: &[(&str, &str, &str)] = &[
+    ("/machine/bench-plan.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/bench-plan.js")),
+    ("/machine/doc.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/doc.js")),
+    ("/machine/render.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/render.js")),
     ("/", "text/html; charset=utf-8", include_str!("../../web/room/index.html")),
     ("/room.css", "text/css; charset=utf-8", include_str!("../../web/room/room.css")),
     ("/app.js", "text/javascript; charset=utf-8", include_str!("../../web/room/app.js")),

@@ -287,6 +287,7 @@ fn scenario(seed: u64) -> i32 {
             face: None,
         },
         Act::ConnectComponent {
+            belt: false,
             id: press,
             from: "CB1".into(),
             from_port: "out".into(),
@@ -294,6 +295,7 @@ fn scenario(seed: u64) -> i32 {
             to_port: "power".into(),
         },
         Act::ConnectComponent {
+            belt: false,
             id: press,
             from: "MO3".into(),
             from_port: "rotary".into(),

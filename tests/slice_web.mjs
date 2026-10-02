@@ -310,7 +310,7 @@ async function main() {
     'and puts the centuries on it'
   );
   ok(
-    drew.some(c => c[0] === 'fillText' && /years/.test(String(c[1]))),
+    drew.some(c => c[0] === 'fillText' && /crossing/.test(String(c[1]))),
     'and says how far apart they are'
   );
 
@@ -329,7 +329,7 @@ async function main() {
   ok(in1890.length > 0 && in2037.length > 0, 'the terrain key lists what is on the ground');
   ok(
     JSON.stringify(in1890) !== JSON.stringify(in2037),
-    'and it is a different valley on the other side of a fracture'
+    'and the neighbouring patch has its own era terrain'
   );
   ok(
     in2037.some(f => f.taken) && !in1890.some(f => f.name === 'Kestrel Reach' && f.taken),
@@ -400,14 +400,14 @@ async function main() {
     code: 'district',
     player: me.player,
     type: 'PlaceStorage',
-    payload: { proto: 'bay', x: 2, y: 62, face: 0 },
+    payload: { proto: 'bay', x: 74, y: 62, face: 0 },
   });
   ok(built.ok, 'a bay can be placed on open ground');
   const onWorks = await post('/api/cmd', {
     code: 'district',
     player: me.player,
     type: 'PlaceStorage',
-    payload: { proto: 'bay', x: 10, y: 8, face: 0 },
+    payload: { proto: 'bay', x: 82, y: 8, face: 0 },
   });
   ok(!onWorks.ok && onWorks.refused, 'and not on the foundry somebody built in 1951');
 
@@ -424,14 +424,14 @@ async function main() {
     /built on/.test(el('hovercard').innerHTML) && !el('hovercard').hidden,
     'and the card under it says it is built on'
   );
-  const bay = net.state.view.world.installs.find(i => i.x === 2 && i.y === 62);
+  const bay = net.state.view.world.installs.find(i => i.x === 74 && i.y === 62);
   ok(!!bay, 'the bay placed a moment ago is in the frame');
   hud.renderHover(hud.targetAt({ raw: [bay.x + 1, bay.y + 1] }, in2037), 100, 100);
   ok(new RegExp(bay.name).test(el('hovercard').innerHTML), 'and hovering it shows its card');
 
   ok(
-    /1890 it is open ground/.test(onWorks.error || ''),
-    'and the refusal says what the same tiles are in the century that has them'
+    /2037 patch/.test(onWorks.error || ''),
+    'and the refusal names the occupied patch'
   );
 
   console.log(`\n${checks - failures} of ${checks} checks passed`);

@@ -74,6 +74,7 @@ pub fn apply(
         return;
     }
     for p in pieces.iter_mut() {
+        if matches!(p.mat, Mat::Wood | Mat::CastIron) { continue; }
         let o = &owners[p.of as usize];
         let mat = match o.class {
             Owns::Unit => match plan.find(&o.name) {

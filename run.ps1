@@ -238,7 +238,7 @@ if ($Machine) {
     # `check` is the front end's own test, and it needs something to talk to.
     if ($Configs -and $Configs[0] -eq "check") {
         $port = if ($Port -eq 8787) { 8801 } else { $Port }
-        $srv = Start-Process -FilePath $exe -ArgumentList "serve", "--port", $port `
+        $srv = Start-Process -FilePath $exe -ArgumentList "lab", "--port", $port `
             -WorkingDirectory $PSScriptRoot -PassThru -WindowStyle Hidden
         try {
             Start-Sleep -Milliseconds 700

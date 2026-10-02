@@ -634,3 +634,11 @@ details summary {
   #dock .sep { margin: 1px 0; }
   #dock button > kbd { display: none; }
 }
+
+#disturbance { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+#disturbancecard { position:absolute; bottom:20px; right:20px; width:290px; pointer-events:auto; border-left:3px solid #d5b474; }
+#disturbancecard p { color:var(--muted); font-size:12px; line-height:1.45; margin:7px 0; }
+#disturbancecard .actions { display:flex; gap:6px; }
+#disturbancecard details { margin-top:9px; font-size:10px; color:var(--muted); }
+
+.incidentalert { color:#e1c384; border-color:#887652; white-space:nowrap; }

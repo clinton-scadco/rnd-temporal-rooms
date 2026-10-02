@@ -126,6 +126,11 @@ impl Surface {
                 let broad = noise(u, v, 5, 31) - 0.5;
                 let grain = noise(u, v, 24, 59) - 0.5;
                 let (tone, rough) = match mat {
+                    Mat::Wood => {
+                        let rings = (x as f32 * 0.55 + broad * 3.0).sin();
+                        (0.96 + rings * 0.09 + fine * 0.025, 0.08 + grain * 0.08)
+                    },
+                    Mat::CastIron => (0.94 + grain * 0.10 + fine * 0.05, 0.08 + fine * 0.1),
                     Mat::Concrete => (0.95 + broad * 0.10 + grain * 0.045 + fine * 0.025, 0.07 + grain * 0.1),
                     Mat::Galv => {
                         let crystal = zinc(u, v) - 0.5;

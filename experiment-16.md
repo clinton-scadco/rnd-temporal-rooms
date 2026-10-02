@@ -1,5 +1,7 @@
 ## Experiment 16: Combat / Active Disturbance Visual Prototype
 
+> The player-facing entry now extends the factory slice with one warning, one threatened feed and repair. The turret/cohort scene described below remains an explicit technical lab. See [the realignment notes](realignment.md) for the integration pilot’s scope.
+
 **Goal:** prove combat can coexist with the compressed deterministic simulation without producing an obscene serialized event stream or requiring the whole world to run explicitly.
 
 Keep this extremely narrow.

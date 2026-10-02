@@ -46,6 +46,7 @@
 //! volute, a bedplate and a shaft sticking out of the right end.
 
 use super::kit::{Mat, Mesh};
+use crate::machine::parts::Kind;
 use super::layout::{Arch, Placed, Plan};
 use super::seed::Seed;
 use super::{p3, Grade, Mm, Piece, CLOSE, FAR, MEDIUM, P3};
@@ -90,6 +91,13 @@ pub fn dress(u: &Placed, _plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: 
         Arch::Inline => inline(u, &mut r, out),
         Arch::Bank => bank(u, &mut r, g, out),
         Arch::Turbine => turbine(u, &mut r, g, out),
+    }
+    if u.material == crate::machine::era::Mat::CastIron {
+        for p in &mut out[n0..] {
+            if p.mat == Mat::Paint && matches!(p.mesh, Mesh::Box | Mesh::Cyl | Mesh::Volute | Mesh::Dome) {
+                p.mat = Mat::CastIron;
+            }
+        }
     }
 
     // Every port gets a stub, whatever the archetype: it is what makes a pipe
@@ -443,6 +451,10 @@ fn shell(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
 // -------------------------------------------------------------------- skids
 
 fn skid(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
+    if u.kind == Kind::SteamEngine && g.articulated() {
+        steam_engine(u, out);
+        return;
+    }
     let s = u.vol.size();
     let f = u.vol.foot();
     let m = skin(u);
@@ -494,6 +506,35 @@ fn skid(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
                 .lod(MEDIUM),
         );
     }
+}
+
+fn steam_engine(u: &Placed, out: &mut Vec<Piece>) {
+    let a=u.sockets.iter().find(|s|s.dom==Domain::Rotary).map(|s|s.out).unwrap_or_else(||along(u));
+    let b=across(a);
+    let (len,wide)=extent(u,a);
+    let c=u.vol.centre();
+    let y=u.sockets.iter().find(|s|s.dom==Domain::Rotary).map(|s|s.at.y).unwrap_or(c.y);
+    let axis=p3(c.x,y,c.z);
+    let d=(u.vol.size().y.min(len)/2).min((y-u.vol.lo.y-100).max(200)*2);
+    let cylinder=axis.sub(b.mul(wide/3));
+    out.push(Piece::new(Mesh::Cyl,Mat::CastIron,cylinder.sub(b.mul(wide/6)),b,p3(d/2,wide/3,d/2)).lod(FAR));
+    for sign in [-1,1] {
+        out.push(Piece::new(Mesh::Flange,Mat::CastIron,cylinder.add(b.mul(sign*wide/6)),b,p3(d*3/5,120,d*3/5)).lod(MEDIUM));
+    }
+    out.push(Piece::span(Mesh::Cyl,Mat::Steel,cylinder,axis,140).lod(FAR));
+    out.push(Piece::new(Mesh::Band,Mat::CastIron,axis.sub(a.mul(100)),a,p3(d,200,d)).lod(FAR));
+    let radial=across(a);
+    for n in 0..8 {
+        let t=n as f64*std::f64::consts::TAU/8.0;
+        let end=axis.add(radial.mul((t.cos()*d as f64*0.45) as Mm)).add(super::UP.mul((t.sin()*d as f64*0.45) as Mm));
+        out.push(Piece::span(Mesh::Box,Mat::CastIron,axis,end,100).lod(MEDIUM));
+    }
+    out.push(Piece::new(Mesh::Cyl,Mat::Steel,axis.sub(a.mul(len/2)),a,p3(180,len,180)).lod(FAR));
+    for sign in [-1,1] {
+        let at=axis.add(a.mul(sign*(len/2-250)));
+        out.push(Piece::up(Mesh::Bearing,Mat::CastIron,p3(at.x,u.vol.lo.y,at.z),p3(450,y-u.vol.lo.y,450)).lod(MEDIUM));
+    }
+    anchors(u,out);
 }
 
 fn portal(u: &Placed, _r: &mut super::seed::Rng, out: &mut Vec<Piece>) {
@@ -824,7 +865,23 @@ fn wheel(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) 
     let axis = drive.map(|s| if a.x != 0 { p3(c.x, y, s.at.z) } else { p3(s.at.x, y, c.z) }).unwrap_or(p3(c.x, y, c.z));
     let d = (wide.min(u.vol.size().y) - 200).min((y - u.vol.lo.y - 150).max(300) * 2);
 
-    out.push(Piece::new(Mesh::Rotor, Mat::Steel, axis.sub(a.mul(200)), a, p3(d, 400, d)).lod(FAR));
+    if u.kind==Kind::WaterWheel && g.articulated() {
+        let width=(len/3).max(300);
+        let side=across(a);
+        for sign in [-1,1] {
+            out.push(Piece::new(Mesh::Band,Mat::Wood,axis.add(a.mul(sign*width/2)),a,p3(d,180,d)).lod(FAR));
+        }
+        for n in 0..16 {
+            let t=n as f64*std::f64::consts::TAU/16.0;
+            let radial=side.mul((t.cos()*d as f64*0.45) as Mm).add(super::UP.mul((t.sin()*d as f64*0.45) as Mm));
+            let at=axis.add(radial);
+            out.push(Piece::span(Mesh::Box,Mat::Wood,at.sub(a.mul(width/2)),at.add(a.mul(width/2)),220).lod(MEDIUM));
+            if n%2==0 {out.push(Piece::span(Mesh::Box,Mat::Wood,axis,at,110).lod(MEDIUM));}
+        }
+        out.push(Piece::new(Mesh::Cyl,Mat::Steel,axis.sub(a.mul(len/2)),a,p3(180,len,180)).lod(FAR));
+    } else {
+        out.push(Piece::new(Mesh::Rotor, Mat::Steel, axis.sub(a.mul(200)), a, p3(d, 400, d)).lod(FAR));
+    }
     for sgn in [1, -1] {
         let at = axis.add(a.mul(sgn * (len / 2 - 250)));
         out.push(
@@ -836,7 +893,7 @@ fn wheel(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) 
     anchors(u, out);
     // A guard round anything with that much stored energy in it. Two rings,
     // yellow, and a flywheel stops looking like a coin on its edge.
-    if g.articulated() {
+    if g.articulated() && u.kind != Kind::WaterWheel {
         for k in [-1, 1] {
             out.push(
                 Piece::new(Mesh::Band, Mat::Warn, axis.sub(a.mul(200 - k * 300)), a, p3(d + 300, 160, d + 300))

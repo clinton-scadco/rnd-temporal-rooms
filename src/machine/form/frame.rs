@@ -91,7 +91,9 @@ pub fn infer(
     for u in &plan.units {
         let id = own(owners, &u.name, u.mount.tag(), Owns::Frame);
         let n0 = out.len();
-        match u.mount {
+        if u.material != crate::machine::era::Mat::Steel {
+            era_bed(u, grade, out);
+        } else { match u.mount {
             Mount::Plinth => plinth(u, grade, out),
             Mount::Legs | Mount::Frame => frame(u, grade, out),
             Mount::Grade => {
@@ -107,6 +109,7 @@ pub fn infer(
                     }
                 }
             }
+        }
         }
         for p in out[n0..].iter_mut() {
             p.of = id;
@@ -568,6 +571,47 @@ fn frame(u: &Placed, grade: Grade, out: &mut Vec<Piece>) {
             out.push(Piece::span(Mesh::Beam, Mat::Dark, a, b, 180).lod(MEDIUM));
         }
     }
+}
+
+/// Material changes the structure while preserving footprints and ports.
+fn era_bed(u: &Placed, grade: Grade, out: &mut Vec<Piece>) {
+    use crate::machine::era::Mat as Structural;
+    let v = u.vol;
+    let f = v.foot();
+    let s = v.size();
+    let top = v.lo.y;
+    let timber = u.material == Structural::Wood;
+    let mat = if timber { Mat::Wood } else { Mat::CastIron };
+    let thick = if timber { 360 } else { 260 };
+    let bed = top - 160;
+    for dz in [-1, 1] {
+        let z = f.z + dz * (s.z/2 - thick/2);
+        out.push(Piece::span(Mesh::Box, mat, p3(v.lo.x, bed, z), p3(v.hi.x, bed, z), thick).lod(FAR));
+        if timber {
+            for dx in [-1, 1] {
+                let x = f.x + dx * (s.x/2 - thick/2);
+                out.push(Piece::up(Mesh::Box, mat, p3(x, u.base, z), p3(thick, (bed-u.base).max(160), thick)).lod(FAR));
+            }
+            if bed-u.base > 700 {
+                out.push(Piece::span(Mesh::Box, mat, p3(v.lo.x+thick, u.base+100, z), p3(v.hi.x-thick, bed, z), 220));
+                out.push(Piece::span(Mesh::Box, mat, p3(v.hi.x-thick, u.base+100, z), p3(v.lo.x+thick, bed, z), 220));
+            }
+        } else {
+            out.push(Piece::up(Mesh::Box, mat, p3(f.x, u.base, z), p3(s.x-180, (bed-u.base).max(200), thick)).lod(FAR));
+            for dx in [-1, 1] {
+                out.push(Piece::up(Mesh::Cyl, mat, p3(f.x+dx*(s.x/2-180), u.base, z), p3(360, (bed-u.base).max(200), thick)).lod(MEDIUM));
+            }
+            if grade.detailed() {
+                for k in 1..4 {
+                    out.push(Piece::up(Mesh::Box, mat, p3(v.lo.x+s.x*k/4, u.base, z), p3(120, (bed-u.base).max(200), thick+150)).lod(CLOSE));
+                }
+            }
+        }
+    }
+    for dx in [-1, 1] {
+        out.push(Piece::span(Mesh::Box, mat, p3(f.x+dx*(s.x/2-thick/2), bed, v.lo.z), p3(f.x+dx*(s.x/2-thick/2), bed, v.hi.z), thick).lod(MEDIUM));
+    }
+    if grade.detailed() { holding_down(v, top, out); }
 }
 
 /// A walkway round a machine, at a height, with a handrail on the outside.

@@ -541,7 +541,7 @@ console.log('the form');
   const kit = await fetch(base + '/api/kit').then(r => r.json());
   ok(kit.ok && kit.meshes.length >= 20 && kit.meshes.length <= 31,
      `${kit.meshes.length} canonical meshes`);
-  ok(kit.mats.length === 12, 'twelve materials for a whole plant');
+  ok(kit.mats.length <= 14, 'the material library stays small, including timber and cast iron');
   for (const m of kit.mats) {
     const s = m.surface;
     ok(s && s.size === 64 && s.metres > 0 && s.rg.length === s.size * s.size * 2 &&

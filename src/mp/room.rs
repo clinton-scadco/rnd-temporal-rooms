@@ -1232,6 +1232,9 @@ fn describe(a: &Act, w: &World) -> String {
         Act::DisconnectComponent { id, from, to, .. } => {
             format!("unwired {from} -> {to} in {}", name(*id))
         }
+        Act::SetDriveBelt { id, from, to, belt, .. } => {
+            format!("{from} -> {to}: {} in {}", if *belt { "belt drive" } else { "shaft drive" }, name(*id))
+        }
         Act::CommitMachineDesign { id, .. } => format!("committed {}", name(*id)),
         Act::Deliver { to, item, qty, from } => format!(
             "{} {} from {from} into {}",

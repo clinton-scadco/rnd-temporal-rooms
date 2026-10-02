@@ -91,6 +91,7 @@
 
 pub mod design;
 pub mod era;
+pub mod era_study;
 pub mod eval;
 pub mod form;
 pub mod orbit;

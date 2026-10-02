@@ -22,6 +22,7 @@ import * as map from './map.js';
 import * as shell from './shell.js';
 import * as terrain from './terrain.js';
 import * as hud from './hud.js';
+import * as disturbance from './disturbance.js';
 
 const $ = id => document.getElementById(id);
 
@@ -106,6 +107,7 @@ async function enter(res) {
   $('goalmore').onclick = () => { $('goalwhy').hidden = !$('goalwhy').hidden; };
   // The ground, behind the plot. It reads `world.view` and is read by nobody.
   terrain.init($('terrain'));
+  disturbance.init($('disturbance'));
   terrain.setLand(land);
   await bench.init({ onLeave: () => show('world') });
 
@@ -139,7 +141,7 @@ async function enter(res) {
 
   $('briefing').hidden = false;
   $('briefbrief').textContent =
-    '1890 has the ore and no electricity. 2037 has the grid and no ore. 2070 has the best '
+    'Three neighbouring pieces of one valley have different histories. The mining patch has ore and a river; the district has the grid; the manufacturing patch has the best '
     + 'process on the map and nothing to put in it. The clock does not pause.';
   $('briefstart').onclick = async () => {
     await post('/api/start', {});
@@ -192,6 +194,15 @@ function paint() {
   // crossing looks like from the ground.
   const here = (slice.regions || []).find(r => r.tag === slice.at);
   if (here) terrain.setPhase(here.phase);
+  terrain.setWorld(slice.regions, slice.at);
+  disturbance.show(slice, slice.at, {
+    focus: async (tag,id) => { await go(tag); world.select(id); },
+    repair: async () => { const r=await post('/api/disturbance',{player:net.state.player}); if(!r.ok)toast(r.error); },
+    closeOre: async () => {
+      const routes=(slice.shipping?.routes||[]).filter(r=>r.to==='district'&&r.item==='IronOre');
+      for(const r of routes) await post('/api/route',{do:'close',route:r.id,player:net.state.player});
+    },
+  });
   if (view === 'map') map.show(slice);
   repriceIfMoved();
 }
@@ -282,12 +293,13 @@ async function go(tag) {
 const fitted = new Set();
 function fitPlot() {
   const cat = net.state.catalogue;
-  const plot = (cat && cat.plot) || 128;
+  const plot = cat?.regionWidth || 72;
+  const offset = cat?.offsetX || 0;
   const r = $('world').getBoundingClientRect();
   if (!r.width || !r.height) return;
   const s = Math.max(0.35, Math.min(4, Math.min(r.width - 80, r.height - 80) / (plot * 7)));
   world.view.scale = s;
-  world.view.ox = (r.width - plot * 7 * s) / 2;
+  world.view.ox = (r.width - plot * 7 * s) / 2 - offset * 7 * s;
   world.view.oy = (r.height - plot * 7 * s) / 2;
   world.invalidate();
   fitted.add(net.state.code);
@@ -299,7 +311,7 @@ function show(which) {
   $('bench').hidden = which !== 'bench';
   $('atlas').hidden = which !== 'map';
   if (which !== 'world') $('hovercard').hidden = true;
-  for (const id of ['world', 'ghosts', 'terrain']) {
+  for (const id of ['world', 'ghosts', 'terrain', 'disturbance']) {
     const el = $(id);
     if (el) el.style.visibility = which === 'world' ? 'visible' : 'hidden';
   }

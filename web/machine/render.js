@@ -401,7 +401,8 @@ function ghost(ctx, ui) {
   ctx.strokeStyle = ui.placeOk ? colour('--accent') : colour('--bad');
   ctx.setLineDash([4, 3]);
   ctx.lineWidth = 1.5;
-  round(ctx, ui.placeAt.x * TILE + 1, ui.placeAt.y * TILE + 1, p.w * TILE - 2, p.h * TILE - 2, 3);
+  const turned=(ui.placeFace||0)&1;
+  round(ctx, ui.placeAt.x * TILE + 1, ui.placeAt.y * TILE + 1, (turned?p.h:p.w) * TILE - 2, (turned?p.w:p.h) * TILE - 2, 3);
   ctx.stroke();
   ctx.restore();
 }

@@ -191,6 +191,7 @@ pub enum Mount {
 pub struct Placed {
     pub name: String,
     pub kind: Kind,
+    pub material: crate::machine::era::Mat,
     pub arch: Arch,
     pub mount: Mount,
     /// Quarter turns clockwise from east: which way the machine faces. Authored
@@ -840,6 +841,7 @@ pub fn plan(d: &Design) -> Plan {
         units.push(Placed {
             name: u.name.clone(),
             kind: u.kind,
+            material: u.tune.mat,
             arch,
             mount,
             yaw: yaw_of(d, i),

@@ -165,6 +165,7 @@ pub struct News {
 }
 
 pub struct Slice {
+    pub disturbance: super::disturbance::Disturbance,
     pub code: String,
     pub seed: u64,
     pub clock: Clock,
@@ -187,6 +188,7 @@ impl Slice {
     /// a clock.
     pub fn open(seed: u64) -> Slice {
         Slice {
+            disturbance: Default::default(),
             code: room_code(seed),
             seed,
             clock: Clock::Manual(0),
@@ -271,6 +273,7 @@ impl Slice {
                 y.room.host.advance(t).map_err(|f| f.msg)?;
             }
             self.unload(t);
+            self.disturb(t)?;
             self.light(t);
             self.load(t);
             self.ledger.at = t;
@@ -337,6 +340,7 @@ impl Slice {
                         .max()
                         .unwrap_or(0);
                     self.ledger.landed(load.route, &landed, spilled, t);
+                    self.disturbance.delivered(load.to, load.item, took, t);
                     self.moves.push(Move {
                         at: t,
                         route: load.route,
@@ -374,6 +378,65 @@ impl Slice {
             }
         }
         self.trim();
+    }
+
+    fn disturb(&mut self, t: Tick) -> Result<(), String> {
+        use super::disturbance::{Incident, LIMIT, WARNING};
+        if let Some(i) = self.disturbance.incident.clone() {
+            let k = self.yards.iter().position(|y| y.region.tag == i.region).unwrap();
+            if i.damaged {
+                let world=&self.yards[k].room.host.world;
+                if world.conns.contains(&i.connection) || world.get(i.connection.from).is_none() || world.get(i.connection.to).is_none() {
+                    self.disturbance.settle(t);
+                    self.tell(t, "repair", "The affected feed was repaired or removed; the crossing has settled.".into());
+                }
+                return Ok(());
+            }
+            let pressure = self.ledger.routes.iter().any(|r| {
+                let l = r.lane();
+                l.to == i.region && l.item == "IronOre" &&
+                    l.fracture().is_some_and(|(n, _)| self.ledger.gate(n).is_some_and(|g| g.lit))
+            });
+            let connected = self.yards[k].room.host.world.conns.contains(&i.connection);
+            if !pressure || !connected {
+                self.disturbance.settle(t);
+                self.tell(t, "disturbance", "The crossing settled before the connection was damaged.".into());
+            } else if t >= i.impact {
+                self.yards[k].room.submit_for(0, Act::DeleteConnection {
+                    from: i.connection.from, to: i.connection.to, item: i.connection.item.clone(),
+                })?;
+                self.disturbance.incident.as_mut().unwrap().damaged = true;
+                self.tell(t, "damage", "The ore crossing ruptured one feed connection. Select the warning to inspect and repair it.".into());
+            }
+        } else if self.disturbance.charge >= LIMIT && t >= self.disturbance.cooldown {
+            let k = self.yards.iter().position(|y| y.region.tag == "district").unwrap();
+            let yard = &self.yards[k];
+            let inlet = yard.ports.incoming.get("IronOre").copied().unwrap_or(0);
+            if let Some(c) = yard.room.host.world.conns.iter().find(|c| c.from == inlet).cloned() {
+                let target = yard.room.host.world.get(c.to).unwrap();
+                self.disturbance.incident = Some(Incident {
+                    region: "district", connection: c, start: t, impact: t + WARNING,
+                    damaged: false, from: (72,17), to: (target.x,target.y),
+                });
+                self.tell(t, "warning", "Ore imports are straining the deep crossing. One feed is threatened; close its ore route or disconnect the feed before impact.".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub fn repair_disturbance(&mut self, player: PlayerId) -> Result<(), String> {
+        self.advance()?;
+        if self.who(player).is_none() { return Err("join the valley before repairing".into()); }
+        let i = self.disturbance.incident.clone().ok_or("there is no damaged feed")?;
+        if !i.damaged { return Err("the feed is still intact; close the ore route to settle the crossing".into()); }
+        let k = self.yards.iter().position(|y| y.region.tag == i.region).unwrap();
+        self.yards[k].room.submit_for(player, Act::CreateConnection {
+            from: i.connection.from, to: i.connection.to, item: i.connection.item,
+        })?;
+        let t = self.now();
+        self.disturbance.settle(t);
+        self.tell(t, "repair", "Ore feed repaired. The affected region has recompiled; production can resume.".into());
+        Ok(())
     }
 
     /// Ask every interface whether its region's grid is holding it open, and
@@ -577,12 +640,17 @@ impl Slice {
         // Where a placement would stand, and how big it would be. A machine's
         // footprint is its design's, so an empty chassis is asked about its
         // prototype and a designed one about what it will become.
-        let footprint = |proto: &str, face: u8| -> (i32, i32) {
-            crate::mp::kit::proto(proto).map(|p| p.footprint(face)).unwrap_or((1, 1))
+        let footprint = |proto: &str, face: u8, design: Option<&crate::machine::design::Design>| -> Result<(i32, i32), String> {
+            if let Some(d) = design {
+                let machine = crate::mp::lower::lower(d)?;
+                Ok(if face & 1 == 1 { (machine.h, machine.w) } else { (machine.w, machine.h) })
+            } else {
+                Ok(crate::mp::kit::proto(proto).map(|p| p.footprint(face)).unwrap_or((1, 1)))
+            }
         };
         match act {
             Act::PlaceMachine { proto, x, y, face, design, .. } => {
-                let (w, h) = footprint(proto, *face);
+                let (w, h) = footprint(proto, *face, design.as_ref())?;
                 if let Some(why) = r.built_over(*x, *y, w, h) {
                     return Err(format!("there is no room at {x},{y}: {why}"));
                 }
@@ -592,13 +660,13 @@ impl Slice {
                 }
             }
             Act::PlaceStorage { proto, x, y, face } => {
-                let (w, h) = footprint(proto, *face);
+                let (w, h) = footprint(proto, *face, None)?;
                 if let Some(why) = r.built_over(*x, *y, w, h) {
                     return Err(format!("there is no room at {x},{y}: {why}"));
                 }
             }
             Act::Restore { proto, x, y, face, design, .. } => {
-                let (w, h) = footprint(proto, *face);
+                let (w, h) = footprint(proto, *face, design.as_ref())?;
                 if let Some(why) = r.built_over(*x, *y, w, h) {
                     return Err(format!("there is no room at {x},{y}: {why}"));
                 }
@@ -626,6 +694,11 @@ impl Slice {
             }
             Act::CommitMachineDesign { id, design } => {
                 phase::legal(design, r.phase)?;
+                if let Some(i)=self.yards[k].room.host.world.get(*id) {
+                    let m=crate::mp::lower::lower(design)?;
+                    let (w,h)=if i.face&1==1 {(m.h,m.w)}else{(m.w,m.h)};
+                    if let Some(why)=r.built_over(i.x,i.y,w,h) {return Err(why);}
+                }
                 let was = self.yards[k]
                     .room
                     .host
@@ -936,6 +1009,7 @@ impl Slice {
                     .set("doneAt", y.done_at().map(|t| Json::Int(t as i128)))
                     .set("goal", y.room.goal.to_json(&p))
                     .set("installs", y.room.host.world.installs.len() as i64)
+                    .set("world", y.room.host.world.to_json(&y.room.host.build, false))
                     .set(
                         "machines",
                         y.room
@@ -986,8 +1060,9 @@ impl Slice {
             .set("phases", phase::phases())
             .set("regions", Json::Arr(regions))
             .set("crossings", Json::Arr(crossings))
-            .set("land", land::to_json())
+            .set("land", land::to_json().set("geography", super::geography::to_json()))
             .set("shipping", self.ledger.to_json(now))
+            .set("disturbance", self.disturbance.to_json(now))
             .set("finished", self.done.len() as i64)
             .set(
                 "cast",

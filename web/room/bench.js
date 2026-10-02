@@ -15,6 +15,7 @@
 
 import * as net from './net.js';
 import * as plant from '../machine/form.js';
+import * as plan from '../machine/bench-plan.js';
 import { menu, toast } from './panels.js';
 
 const $ = id => document.getElementById(id);
@@ -38,6 +39,7 @@ let design = null;      // the document in the window, live or draft
 let state = null;       // what every component in it is doing, and why
 let cursor = null;      // where the pointer is: { hit, tile, at }
 let onLeave = () => {};
+let mode = 'form';
 
 export async function init(hooks) {
   onLeave = hooks.onLeave || (() => {});
@@ -55,6 +57,23 @@ export async function init(hooks) {
     onLift: d => { bench.level = Math.max(0, bench.level + d); level(); },
   });
   ready = await plant.initForm($('plant3d'));
+  if ($('benchplan')) {
+    plan.init($('benchplan'), {
+      onPick: picked, onGround: put,
+      onHover: h => { cursor = h; paint(); }, onCancel: cancel,
+    });
+    const switchMode = value => {
+      mode = value;
+      $('plant3d').hidden = mode === 'plan';
+      $('benchplan').hidden = mode !== 'plan';
+      $('benchviewplan').classList.toggle('on', mode === 'plan');
+      $('benchviewform').classList.toggle('on', mode === 'form');
+      if (mode === 'plan') plan.fit(); else plant.fit();
+      paint();
+    };
+    $('benchviewplan').onclick = () => switchMode('plan');
+    $('benchviewform').onclick = () => switchMode('form');
+  }
   palette();
   $('benchedit').onclick = () => draft();
   $('benchcommit').onclick = commit;
@@ -128,6 +147,7 @@ export async function refresh(refit) {
   const res = await net.form(bench.id, i.hasDraft);
   if (!res.ok) return toast(res.error);
   design = res.design;
+  if ($('benchplan')) plan.show(design, net.state.parts, { selected: bench.sel, refit });
   plant.show(res, refit);
   // A rebuild renumbers the owners the renderer highlights by, so the
   // selection is re-stated against the plant that just arrived rather than
@@ -374,13 +394,14 @@ function info(i) {
       const out = w.from === sel.name;
       html += `<div class="row"><span>${out ? '&rarr;' : '&larr;'} ` +
         `${out ? w.to + '.' + w.toPort : w.from + '.' + w.fromPort}</span>` +
+        (net.state.parts.parts.find(p=>p.kind===design.units.find(u=>u.name===w.from)?.kind)?.ports.find(p=>p.name===w.fromPort)?.type==='rotary' ? `<button data-belt="${k}">${w.belt?'Belt':'Shaft'}</button>` : '') +
         `<button class="x" data-cut="${k}" title="disconnect">&times;</button></div>`;
     }
     // These used to appear only once a draft was open, which is the wrong way
     // round: they are how a player *asks* for one.
     html += '<div class="acts" style="display:flex;gap:4px;margin-top:8px">' +
       '<button id="bconnect">wire</button><button id="bdelete">delete</button></div>';
-    if (p && p.tunable) html += tuner(sel, p);
+    if (p && (p.tunable || p.phys?.materials?.length > 1)) html += tuner(sel, p);
   }
   box.innerHTML = html;
   if ($('bdelete')) {
@@ -401,6 +422,14 @@ function info(i) {
       if (res.ok) await refresh(false);
     };
   });
+  box.querySelectorAll('[data-belt]').forEach(el => {
+    el.onclick=async()=>{
+      const w=design.wires.filter(w=>w.from===sel.name||w.to===sel.name)[+el.dataset.belt];
+      if(!(await draft()))return;
+      const r=await net.send('SetDriveBelt',{id:bench.id,from:w.from,fromPort:w.fromPort,to:w.to,toPort:w.toPort,belt:!w.belt});
+      if(r.ok)await refresh(false);
+    };
+  });
   box.querySelectorAll('[data-tune]').forEach(el => {
     el.onchange = async () => {
       if (!(await draft())) return;
@@ -413,6 +442,13 @@ function info(i) {
 }
 
 function tuner(u, p) {
+  const mats=p.phys?.materials||[];
+  const current=u.frame||u.tune?.frame||mats[mats.length-1];
+  const labels={wood:'Timber beam frame',iron:'Cast-iron bed',steel:'Fabricated steel frame'};
+  const frame=mats.length>1?'<h2>construction</h2><select data-tune="frame">'+mats.map(m=>`<option value="${m}"${m===current?' selected':''}>${labels[m]||m}</option>`).join('')+'</select><p class="muted">Form shows the supports this material requires.</p>':'';
+  return frame+processTuner(u,p);
+}
+function processTuner(u, p) {
   const t = u.tune || {};
   const field = (name, label, value, type = 'number') =>
     `<div class="row"><span>${label}</span>` +
@@ -473,7 +509,8 @@ function pairs(from, to) {
   const out = [];
   for (const o of a.ports.filter(q => q.dir === 'out')) {
     for (const q of b.ports.filter(q => q.dir === 'in' && q.type === o.type)) {
-      if (!has(from, o.name, to, q.name)) out.push([o.name, q.name]);
+      if (!has(from, o.name, to, q.name)) out.push([o.name, q.name, false]);
+      if (o.type === 'rotary' && !has(from, o.name, to, q.name)) out.push([o.name, q.name, true]);
     }
   }
   return out;
@@ -487,16 +524,16 @@ async function join(from, to) {
     toast(`${to} does not take what ${from} makes`);
     return;
   }
-  const send = async ([fp, tp]) => {
+  const send = async ([fp, tp, belt]) => {
     if (!(await draft())) return;
     const res = await net.send('ConnectComponent',
-      { id: bench.id, from, fromPort: fp, to, toPort: tp });
+      { id: bench.id, from, fromPort: fp, to, toPort: tp, belt });
     if (res.ok) await refresh(false);
   };
   wiring(false);
   if (opts.length === 1) return send(opts[0]);
   menu('connect', opts.slice(0, 14).map(o => ({
-    label: `${from}.${o[0]} → ${to}.${o[1]}`,
+    label: `${from}.${o[0]} → ${to}.${o[1]}${o[2] ? " · belt" : ""}`,
     pick: () => send(o),
   })));
 }
@@ -569,6 +606,7 @@ function centreOf(name) {
 /// Nothing here is sent anywhere.
 function paint() {
   if (!ready) return;
+  if ($('benchplan')) plan.show(design, net.state.parts, { selected: bench.sel, snapshot: state, holding: bench.holding, level: bench.level, face: bench.face });
   const m = { ghost: null, link: null, targets: [], wires: [] };
 
   // The connections that are already there, as lines between what makes and
@@ -603,5 +641,6 @@ function paint() {
 }
 
 export function resize() {
+  if ($('benchplan') && mode === 'plan') plan.fit();
   if (ready) plant.fit();
 }

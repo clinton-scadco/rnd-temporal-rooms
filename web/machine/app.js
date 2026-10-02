@@ -56,6 +56,12 @@ async function main() {
   views();
   authoring();
   await designs();
+  const query = new URLSearchParams(location.search);
+  if (query.get("style") === "yard") {
+    plant.view.style = "yard";
+    $('#formstyle').value = "yard";
+  }
+  if (query.get("view") === "form") $('#viewform').click();
 
   requestAnimationFrame(loop);
 }

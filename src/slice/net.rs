@@ -35,8 +35,7 @@
 //! The one thing this front end adds below the shell is a canvas: `terrain.js`
 //! paints [`land`](super::land) *underneath* the plot, using the projection
 //! `world.js` exports and touching nothing. Crossing a fracture repaints the
-//! valley -- the wood becomes a street, the ore body becomes a foundry
-//! somebody else built -- while the same unforked renderer draws the factory on
+//! camera to its neighbouring patch, while the same unforked renderer draws the factory on
 //! top of it.
 //!
 //! # Two things the palette does that camp's does not
@@ -71,6 +70,11 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const ASSETS: &[(&str, &str, &str)] = &[
+    ("/disturbance.js", "text/javascript; charset=utf-8", include_str!("../../web/slice/disturbance.js")),
+    ("/machine/bench-plan.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/bench-plan.js")),
+    ("/machine/doc.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/doc.js")),
+    ("/machine/render.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/render.js")),
+    ("/landscape.js", "text/javascript; charset=utf-8", include_str!("../../web/slice/landscape.js")),
     ("/", "text/html; charset=utf-8", include_str!("../../web/slice/index.html")),
     ("/slice.css", "text/css; charset=utf-8", include_str!("../../web/slice/slice.css")),
     ("/app.js", "text/javascript; charset=utf-8", include_str!("../../web/slice/app.js")),
@@ -177,7 +181,7 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
         }
         match req.path.as_str() {
             "/api/regions" => return ok(regions()),
-            "/api/land" => return ok(land::to_json().set("ok", true)),
+            "/api/land" => return ok(land::to_json().set("geography", super::geography::to_json()).set("ok", true)),
             "/api/kit" => return ok(crate::machine::form::kit_json()),
             "/api/reference" => return ok(crate::mp::net::reference()),
             "/api/catalogue" => return ok(catalogue(&req.q("code").to_lowercase())),
@@ -201,6 +205,13 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
                     s.start();
                     Ok(Json::obj().set("ok", true).set("tick", s.now()))
                 }))
+            }
+            "/api/disturbance" => {
+                let j = req.json();
+                return answer(with_slice(|s| {
+                    s.repair_disturbance(j.at("player").as_u64().unwrap_or(0) as PlayerId)?;
+                    Ok(Json::obj().set("ok", true))
+                }));
             }
             "/api/travel" => return answer(travel(&req.json())),
             "/api/cmd" => return answer(command(&req.json())),
@@ -245,7 +256,8 @@ fn regions() -> Json {
         .set("fractures", Json::Arr(gate::FRACTURES.iter().map(|f| f.to_json()).collect()))
         .set("lanes", Json::Arr(gate::LANES.iter().map(|l| l.to_json()).collect()))
         .set("fleets", Json::Arr(gate::FLEETS.iter().map(gate::Fleet::to_json).collect()))
-        .set("plot", land::PLOT as i64)
+        .set("plot", super::geography::WIDTH as i64)
+        .set("regionWidth", land::PLOT as i64)
 }
 
 /// Which century a request is about, defaulting to the earliest.
@@ -307,7 +319,9 @@ fn catalogue(code: &str) -> Json {
     base.clone()
         .set("protos", Json::Arr(protos))
         .set("phase", p.tag())
-        .set("plot", land::PLOT as i64)
+        .set("plot", super::geography::WIDTH as i64)
+        .set("offsetX", super::geography::offset(p) as i64)
+        .set("regionWidth", land::PLOT as i64)
         .set("freeMachinery", free)
 }
 

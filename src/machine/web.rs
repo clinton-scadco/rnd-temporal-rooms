@@ -42,6 +42,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Mutex;
 
 const ASSETS: &[(&str, &str, &str)] = &[
+    ("/eras", "text/html; charset=utf-8", include_str!("../../web/machine/eras.html")),
     ("/", "text/html; charset=utf-8", include_str!("../../web/machine/index.html")),
     ("/machine.css", "text/css; charset=utf-8", include_str!("../../web/machine/machine.css")),
     ("/app.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/app.js")),
@@ -142,6 +143,14 @@ fn handle(stream: TcpStream) -> std::io::Result<()> {
         .collect();
 
     let req = Req { method, path, query, body: String::from_utf8_lossy(&body).into_owned() };
+    if req.method == "GET" && req.path == "/api/era-preview" {
+        if let Some(bytes) = super::era_study::preview(req.query.get("era").map(String::as_str).unwrap_or("")) {
+            let mut out = stream;
+            write!(out, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nCache-Control: max-age=3600\r\nConnection: close\r\n\r\n", bytes.len())?;
+            out.write_all(bytes)?;
+            return out.flush();
+        }
+    }
     let (status, mime, payload) = route(&req);
     let mut out = stream;
     let head = format!(

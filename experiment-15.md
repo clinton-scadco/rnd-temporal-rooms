@@ -1,5 +1,7 @@
 ## Experiment 15: Temporal Fracture World Slice
 
+> Current geography is one playable world divided into spatial patches, with physical crossings and global coordinates. The dates do not select stacked playable worlds. See [the realignment notes](realignment.md).
+
 **Goal:** prove the setting creates meaningful factory problems without requiring the full late-game time manipulation system.
 
 Build a tiny world of perhaps **three connected regions** representing different historical phases.

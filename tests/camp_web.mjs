@@ -516,7 +516,7 @@ async function main() {
       .map(c => c.dataset.kind);
     const kinds = shown();
     ok(kinds.length >= 30, `the bench offers the whole vocabulary: ${kinds.length} components`);
-    for (const need of ['inlet', 'pump', 'outlet', 'chute', 'hopper', 'motor']) {
+    for (const need of ['inlet', 'pump', 'outlet', 'waterwheel', 'hopper', 'motor']) {
       ok(kinds.includes(need), `\`${need}\` is on screen without touching the filter`);
     }
     ok(el('family').value === 'everything', 'because the filter opens on everything');

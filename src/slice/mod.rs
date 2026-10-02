@@ -52,14 +52,12 @@
 //! 1890 from 2037 is how power is made and carried, not a parallel catalogue of
 //! Mk2 crushers.
 //!
-//! **One landscape, three histories.** [`land`] is the module that has to make
-//! somebody say *this is the same place*. Fifteen features, authored once, each
-//! carrying three faces; the three maps are a fold over that list, so the
-//! Kestrel ore body cannot be moved in 1890 without moving the foundry that
-//! stands on it in 2037. The brief's own test -- rich deposit in 1890, deposit
-//! exhausted with a factory on it in 2037 -- is two rows of that table, and the
-//! refusal a player meets when they try to build there says both halves out
-//! loud.
+//! **One landscape, neighbouring histories.** [`geography`] assigns every tile
+//! of a 216 by 72 valley to exactly one region. Stepped seams and two physical
+//! crossings divide spatial patches; changing region selects a different part
+//! of the same world. The authored faces in [`land`] supply each patch's local
+//! resources and existing buildings. Coordinates, fixtures and player factories
+//! never overlap across eras.
 //!
 //! **An origin that is carried rather than inferred.** Every load in [`gate`]
 //! has a phase stamped on it, and a region's exports are drawn FIFO out of what
@@ -149,6 +147,8 @@
 //! template id, because that is all a snapshot carries.
 
 pub mod gate;
+pub mod disturbance;
+pub mod geography;
 pub mod land;
 pub mod net;
 pub mod phase;

@@ -166,12 +166,14 @@ pub enum Act {
         value: String,
     },
     ConnectComponent {
+        belt: bool,
         id: Id,
         from: String,
         from_port: String,
         to: String,
         to_port: String,
     },
+    SetDriveBelt { id: Id, from: String, from_port: String, to: String, to_port: String, belt: bool },
     DisconnectComponent {
         id: Id,
         from: String,
@@ -225,6 +227,7 @@ impl Act {
             Act::TuneComponent { .. } => "TuneComponent",
             Act::ConnectComponent { .. } => "ConnectComponent",
             Act::DisconnectComponent { .. } => "DisconnectComponent",
+            Act::SetDriveBelt { .. } => "SetDriveBelt",
             Act::CommitMachineDesign { .. } => "CommitMachineDesign",
             Act::Deliver { .. } => "Deliver",
         }
@@ -243,6 +246,7 @@ impl Act {
             | Act::TuneComponent { id, .. }
             | Act::ConnectComponent { id, .. }
             | Act::DisconnectComponent { id, .. }
+            | Act::SetDriveBelt { id, .. }
             | Act::CommitMachineDesign { id, .. } => Some(id),
             Act::Deliver { to, .. } => Some(to),
             Act::Restore { was, .. } => Some(was),
@@ -274,6 +278,7 @@ impl Act {
         !matches!(
             self,
             Act::OpenDesign { .. }
+            | Act::SetDriveBelt { .. }
                 | Act::CloseDesign { .. }
                 | Act::PlaceComponent { .. }
                 | Act::DeleteComponent { .. }
@@ -424,13 +429,20 @@ fn payload(a: &Act) -> Json {
             .set("unit", unit.clone())
             .set("field", field.clone())
             .set("value", value.clone()),
-        Act::ConnectComponent { id, from, from_port, to, to_port }
-        | Act::DisconnectComponent { id, from, from_port, to, to_port } => o
+        Act::ConnectComponent { id, from, from_port, to, to_port, belt } => {
+            let payload=o.set("id", Json::big(*id as u128)).set("from", from.clone())
+                .set("fromPort", from_port.clone()).set("to", to.clone()).set("toPort", to_port.clone());
+            if *belt { payload.set("belt", true) } else { payload }
+        }
+        Act::DisconnectComponent { id, from, from_port, to, to_port } => o
             .set("id", Json::big(*id as u128))
             .set("from", from.clone())
             .set("fromPort", from_port.clone())
             .set("to", to.clone())
             .set("toPort", to_port.clone()),
+        Act::SetDriveBelt { id, from, from_port, to, to_port, belt } => o
+            .set("id", *id).set("from", from.clone()).set("fromPort", from_port.clone())
+            .set("to", to.clone()).set("toPort", to_port.clone()).set("belt", *belt),
         Act::CommitMachineDesign { id, design } => {
             o.set("id", Json::big(*id as u128)).set("design", design.to_json())
         }
@@ -535,11 +547,16 @@ fn act_from_json(kind: &str, p: &Json) -> Result<Act, String> {
             value: s("value"),
         },
         "ConnectComponent" => Act::ConnectComponent {
+            belt: p.at("belt").as_bool().unwrap_or(false),
             id: id(),
             from: s("from"),
             from_port: s("fromPort"),
             to: s("to"),
             to_port: s("toPort"),
+        },
+        "SetDriveBelt" => Act::SetDriveBelt {
+            id: id(), from: s("from"), from_port: s("fromPort"), to: s("to"), to_port: s("toPort"),
+            belt: p.at("belt").as_bool().unwrap_or(false),
         },
         "DisconnectComponent" => Act::DisconnectComponent {
             id: id(),
@@ -799,11 +816,23 @@ fn apply_one(w: &mut World, c: &Cmd, out: &mut Vec<Effect>) -> Result<(), String
                 return Err(f.what);
             }
         }
-        Act::ConnectComponent { id, from, from_port, to, to_port } => {
+        Act::ConnectComponent { id, from, from_port, to, to_port, belt } => {
             let player = c.player;
             let d = draft_of(w, *id, player)?;
-            d.can_wire(from, from_port, to, to_port, false)?;
-            d.wires.push(Wire::new(from, from_port, to, to_port));
+            d.can_wire(from, from_port, to, to_port, *belt)?;
+            d.wires.push(Wire { belt: *belt, ..Wire::new(from, from_port, to, to_port) });
+        }
+        Act::SetDriveBelt { id, from, from_port, to, to_port, belt } => {
+            let d = draft_of(w, *id, c.player)?;
+            let wire = d.wires.iter_mut().find(|wire|wire.from==*from && wire.from_port==*from_port && wire.to==*to && wire.to_port==*to_port)
+                .ok_or("that connection is not there")?;
+            let prior = wire.belt;
+            wire.belt = *belt;
+            if let Some(f) = d.check().first() {
+                let error=f.what.clone();
+                d.wires.iter_mut().find(|wire|wire.from==*from && wire.from_port==*from_port && wire.to==*to && wire.to_port==*to_port).unwrap().belt=prior;
+                return Err(error);
+            }
         }
         Act::DisconnectComponent { id, from, from_port, to, to_port } => {
             let player = c.player;
@@ -999,6 +1028,7 @@ pub fn draw(id: Id, d: &Design) -> Vec<Act> {
     }
     for w in &renamed.wires {
         out.push(Act::ConnectComponent {
+            belt: w.belt,
             id,
             from: w.from.clone(),
             from_port: w.from_port.clone(),

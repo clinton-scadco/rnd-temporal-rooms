@@ -52,7 +52,7 @@
 //! matters here for a second reason: the three regions have to *need* each
 //! other, or the fractures between them are scenery.
 
-use super::land::{self, PLOT};
+use super::land;
 use super::phase::Phase;
 use crate::json::Json;
 use crate::model::Qty;
@@ -219,17 +219,18 @@ impl Region {
     /// The plot as it stands at tick zero.
     pub fn furnish(&self) -> (World, Ports) {
         let mut w = World::new(self.tag);
-        w.plot = PLOT;
+        w.plot = super::geography::WIDTH;
+        let ox = super::geography::offset(self.phase);
         let mut ports = Ports::default();
         // The ground first, resolved out of the shared land at this region's
         // own date, so that anything placed on it finds it already there.
         for (item, f, yields) in land::seams(self.phase) {
-            w.seam(item, f.x, f.y, f.w, f.h, yields);
+            w.seam(item, f.x + ox, f.y, f.w, f.h, yields);
         }
         for f in self.kit {
             let Some(p) = proto(f.proto) else { continue };
             let item = f.item.map(str::to_string);
-            let Ok(id) = w.place(p, f.x, f.y, 0, item, None, 0, 0) else { continue };
+            let Ok(id) = w.place(p, f.x + ox, f.y, 0, item, None, 0, 0) else { continue };
             w.rate(id, f.rated);
             ports.fixtures.push(id);
             match f.port {
@@ -251,34 +252,16 @@ impl Region {
 
     /// Why nothing may be built on this rectangle, if nothing may.
     ///
-    /// The sentence is the point. It names what is standing there, and it names
-    /// what the same tiles are in the phase where they are open -- because the
-    /// one thing a player has to come away understanding is that these are the
-    /// same tiles.
+    /// Name the obstruction in this patch. Other eras occupy neighbouring
+    /// coordinates, so changing region never frees this footprint.
     pub fn built_over(&self, x: i32, y: i32, w: i32, h: i32) -> Option<String> {
+        if !super::geography::contains(self.phase, x, y, w, h) {
+            return Some("this footprint crosses a region boundary; build in the neighbouring region or connect through its crossing".into());
+        }
+        let x = x - super::geography::offset(self.phase);
         let f = land::taken_by(self.phase, x, y, w, h)?;
         let here = f.face(self.phase);
-        let elsewhere: Vec<String> = super::phase::PHASES
-            .iter()
-            .filter(|p| **p != self.phase && !f.face(**p).taken())
-            .map(|p| {
-                let face = f.face(*p);
-                match face.yields() {
-                    Some((item, q)) => format!(
-                        "in {} it is open ground with {q} {} a second under it",
-                        p.tag(),
-                        crate::mp::lower::item_title(item)
-                    ),
-                    None => format!("in {} it is {}", p.tag(), face.title()),
-                }
-            })
-            .collect();
-        let mut s = format!("{} is {} in {}", f.name, here.title(), self.phase.tag());
-        if !elsewhere.is_empty() {
-            s.push_str(" -- ");
-            s.push_str(&elsewhere.join(", and "));
-        }
-        Some(s)
+        Some(format!("{} is {} in this {} patch", f.name, here.title(), self.phase.tag()))
     }
 
     /// What this region can dig, in the order the land lays it out.
@@ -299,7 +282,9 @@ impl Region {
             .set("phase", self.phase.tag())
             .set("year", self.phase.year() as i64)
             .set("template", self.template)
-            .set("plot", PLOT as i64)
+            .set("plot", super::geography::WIDTH as i64)
+            .set("offsetX", super::geography::offset(self.phase) as i64)
+            .set("polygon", super::geography::polygon(self.phase))
             .set("problem", self.problem)
             .set("note", self.note)
             .set("y", self.my as i64)
@@ -324,12 +309,12 @@ impl Region {
                 Json::Arr(
                     land::LAND
                         .iter()
-                        .filter(|f| f.face(self.phase).taken())
+                        .filter(|f| f.tag != "rift" && f.face(self.phase).taken())
                         .map(|f| {
                             Json::obj()
                                 .set("name", f.name)
                                 .set("what", f.face(self.phase).title())
-                                .set("x", f.x as i64)
+                                .set("x", (f.x + super::geography::offset(self.phase)) as i64)
                                 .set("y", f.y as i64)
                                 .set("w", f.w as i64)
                                 .set("h", f.h as i64)

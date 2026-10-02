@@ -1,5 +1,7 @@
 # temporal-rooms
 
+**Current play direction:** experiments 14–16 now extend the camp and machine workspace. The designer has a side-by-side era workshop; the slice is one spatial valley with neighbouring historical patches; Experiment 16 opens that factory with one local disturbance. See [the realignment notes](realignment.md) for behavior and launch commands. Earlier experiment write-ups below document their original laboratory versions.
+
 An event-driven factory simulator with exact closed-form solvers, built to
 answer questions about billions of factory objects without touching most of
 them.
@@ -152,7 +154,7 @@ project has spent the promise it has been making since Prototype 1.
 .\run.ps1 -Machine heat designs/20-steamline.machine
 .\run.ps1 -Machine run designs/19-waterline.machine
 
-# Experiment 15: three regions of one valley, a hundred and eighty years apart
+# Experiment 15: neighbouring era patches in one fractured valley
 .\run.ps1 -Slice                               # three centuries, at :8797
 .\run.ps1 -Slice play                          # the whole slice, played headlessly
 .\run.ps1 -Slice check                         # its front end, without a browser
@@ -162,8 +164,9 @@ project has spent the promise it has been making since Prototype 1.
 .\run.ps1 -Slice cross                         # the fractures, and what holds them open
 .\run.ps1 -Slice price --part motor            # what a crate of machinery costs
 
-# Experiment 16: nothing is sent -- what crosses a fracture is what tears
-.\run.ps1 -Combat                              # the district, at :8800
+# Experiment 16: one local disturbance in the factory slice
+.\run.ps1 -Combat                              # the integrated factory slice, at :8800
+.\run.ps1 -Combat lab                          # the original combat diagnostic scene
 .\run.ps1 -Combat play                         # an afternoon at the gantry, and what it cost
 .\run.ps1 -Combat play --rate 400              # the same, ten times the tonnage
 .\run.ps1 -Combat scale                        # 40 to 400,000 t/s, anchored and not

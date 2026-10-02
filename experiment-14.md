@@ -1,5 +1,7 @@
 ## Experiment 14: Era Machines and Physical Operating Limits
 
+> The implemented construction study and shared Plan/Form bench are described in [the realignment notes](realignment.md). Compare the actual era machines at the designer’s `/eras` page.
+
 **Goal:** prove that machine design becomes more interesting when components have material, energy and thermal properties, and that old-style machinery is mechanically different rather than cosmetically antique.
 
 Start with one small production problem:

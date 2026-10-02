@@ -1,7 +1,8 @@
 //! Experiment 16, from a terminal.
 //!
 //! ```text
-//!   combat serve [--port N] [--host A]         the district, in a browser
+//!   combat serve [--port N] [--host A]         the factory slice, in a browser
+//!   combat lab   [--port N] [--host A]         the original combat diagnostic scene
 //!   combat play  [--rate T] [--trace K]        an afternoon of shipping, headlessly,
 //!                                              and the questions the experiment asks
 //!   combat scale                               the same afternoon at five volumes, timed
@@ -32,10 +33,15 @@ fn main() {
     let rest = if args.is_empty() { &args[..] } else { &args[1..] };
     let seed = flag(rest, "--seed").and_then(|s| s.parse().ok()).unwrap_or(16);
     let code = match cmd {
-        "serve" => {
+        "serve" | "lab" => {
             let port = flag(rest, "--port").and_then(|s| s.parse().ok()).unwrap_or(8800);
             let host = flag(rest, "--host").unwrap_or("127.0.0.1");
-            match temporal_rooms::combat::net::serve(host, port) {
+            let result = if cmd == "lab" {
+                temporal_rooms::combat::net::serve(host, port)
+            } else {
+                temporal_rooms::slice::net::serve(host, port)
+            };
+            match result {
                 Ok(()) => 0,
                 Err(e) => {
                     eprintln!("cannot serve on {host} port {port}: {e}");
@@ -50,7 +56,7 @@ fn main() {
         ),
         "scale" => scale(seed),
         other => {
-            eprintln!("`{other}` is not a command. Try `serve`, `play` or `scale`.");
+            eprintln!("`{other}` is not a command. Try `serve`, `lab`, `play` or `scale`.");
             2
         }
     };

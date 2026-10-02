@@ -364,3 +364,6 @@ label.belt span { font-size: 12px; }
 .macro b { color: var(--ink); }
 .macro .lead { color: var(--accent); }
 .macro div { padding: .05rem 0; }
+
+#bar a { color:var(--muted); font-size:11px; text-decoration:none; padding:4px; }
+#bar a:hover { color:var(--accent); }

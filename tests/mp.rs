@@ -1383,12 +1383,14 @@ fn commands_survive_json() {
             value: "40".into(),
         },
         Act::ConnectComponent {
+            belt: false,
             id: 3,
             from: "A".into(),
             from_port: "out".into(),
             to: "B".into(),
             to_port: "in".into(),
         },
+        Act::SetDriveBelt { id: 3, from: "A".into(), from_port: "rotary".into(), to: "B".into(), to_port: "drive".into(), belt: true },
         Act::DisconnectComponent {
             id: 3,
             from: "A".into(),
