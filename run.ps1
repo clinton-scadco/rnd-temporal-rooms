@@ -25,6 +25,9 @@ param(
     #   -Machine form designs/x.machine [--png shot.png] [--obj plant.obj]
     #   -Machine forms                 every design built, counted and hashed
     #   -Machine kit [--png sheet.png] the asset library, one of everything
+    #   -Machine kit --studio --png kit.png   a close, charcoal-background preview
+    #   -Machine form designs/x.machine --unit NAME --studio --png asset.png
+    #                                      one installed component, close up
     # Experiment 09 builds it four ways and compares them:
     #   -Machine read designs/x.machine [--png sheet.png]
     #   -Machine reads                 every design, at all four grades
@@ -140,6 +143,8 @@ if ($Machine) {
         try {
             Start-Sleep -Milliseconds 700
             node (Join-Path $PSScriptRoot "tests\machine_web.mjs") $port
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            node (Join-Path $PSScriptRoot "tests\connections_web.mjs") $port
             exit $LASTEXITCODE
         } finally {
             if (-not $srv.HasExited) { Stop-Process -Id $srv.Id -Force }

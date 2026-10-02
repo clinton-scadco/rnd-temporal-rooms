@@ -785,10 +785,28 @@ fn form_one(args: &[String]) -> i32 {
         Err(e) => return bail(e),
     };
     let ask = ask_of(args);
-    let scene = match form::build(&d, ask) {
+    let mut scene = match form::build(&d, ask) {
         Ok(s) => s,
         Err(e) => return bail(format!("{path}: {e}")),
     };
+    // Asset inspection uses the generated component, including its mounting
+    // frame. No new machine is compiled.
+    if let Some(name) = flag(args, "--unit") {
+        let ids: Vec<_> = scene.owners.iter().enumerate()
+            .filter(|(_, o)| o.name == name && matches!(o.class, form::Owns::Unit | form::Owns::Frame))
+            .map(|(i, _)| i as u16).collect();
+        scene.pieces.retain(|p| ids.contains(&p.of));
+        if scene.pieces.is_empty() { return bail(format!("no component named {name} in {path}")); }
+        for p in &mut scene.pieces { p.of = ids.iter().position(|id| *id == p.of).unwrap() as u16; }
+        scene.owners = ids.iter().map(|id| scene.owners[*id as usize].clone()).collect();
+        scene.bounds = scene.pieces.iter().skip(1).fold(scene.pieces[0].vol(), |v, p| v.join(p.vol()));
+        scene.proxy = scene.bounds;
+        scene.routes.clear();
+        scene.units.retain(|u| u.name == name);
+        scene.levels = (scene.bounds.hi.y.max(1) + 1999) / 2000;
+        scene.issues.clear();
+        scene.name = format!("{} / {name}", scene.name);
+    }
     let s = scene.stats();
     println!("{path}\n");
     println!("  {:<16}{}", "machine", scene.name);
@@ -860,8 +878,9 @@ fn form_one(args: &[String]) -> i32 {
     if let Some(out) = flag(args, "--png") {
         let eye = eye_of(args);
         let lod: u8 = flag(args, "--lod").and_then(|s| s.parse().ok()).unwrap_or(0);
-        let (w, h) = (1100usize, 700usize);
-        let img = form::shot::render(&scene, w, h, eye, lod);
+        let studio = args.iter().any(|a| a == "--studio");
+        let (w, h) = if studio { (1600usize, 1200usize) } else { (1100usize, 700usize) };
+        let img = form::shot::render_export(&scene, w, h, eye, lod, studio);
         if let Err(e) = std::fs::write(out, img.png()) {
             return bail(format!("cannot write {out}: {e}"));
         }
@@ -904,7 +923,9 @@ fn kit_sheet(args: &[String]) -> i32 {
             pitch: flag(args, "--pitch").and_then(|x| x.parse().ok()).unwrap_or(0.5),
             zoom: flag(args, "--zoom").and_then(|x| x.parse().ok()).unwrap_or(0.8),
         };
-        let img = form::shot::render(&s, 1100, 700, eye, 0);
+        let studio = args.iter().any(|a| a == "--studio");
+        let (w, h) = if studio { (1600, 1200) } else { (1100, 700) };
+        let img = form::shot::render_export(&s, w, h, eye, 0, studio);
         if let Err(e) = std::fs::write(out, img.png()) {
             return bail(format!("cannot write {out}: {e}"));
         }
@@ -1401,9 +1422,10 @@ fn read_all(args: &[String]) -> i32 {
 }
 
 fn eye_of(args: &[String]) -> form::shot::Eye {
+    let studio = args.iter().any(|a| a == "--studio");
     form::shot::Eye {
         yaw: flag(args, "--yaw").and_then(|s| s.parse().ok()).unwrap_or(0.72),
-        pitch: flag(args, "--pitch").and_then(|s| s.parse().ok()).unwrap_or(0.34),
+        pitch: flag(args, "--pitch").and_then(|s| s.parse().ok()).unwrap_or(if studio { 0.7 } else { 0.34 }),
         zoom: flag(args, "--zoom").and_then(|s| s.parse().ok()).unwrap_or(1.0),
     }
 }

@@ -86,7 +86,7 @@ pub fn infer(
 ) {
     // Experiment 10, and the first thing that happens, because everything
     // after it stands on the answer.
-    decks(plan, grade, owners, out);
+    decks(plan, routes, grade, owners, out);
 
     for u in &plan.units {
         let id = own(owners, &u.name, u.mount.tag(), Owns::Frame);
@@ -99,8 +99,8 @@ pub fn infer(
                     // Even a thing that stands on the floor stands on
                     // something: a slab, poured to its own outline.
                     out.push(Piece::slab(Mat::Concrete, Vol::new(
-                        p3(u.vol.lo.x - 200, -150, u.vol.lo.z - 200),
-                        p3(u.vol.hi.x + 200, 100, u.vol.hi.z + 200),
+                        p3(u.vol.lo.x - 200, u.base - 150, u.vol.lo.z - 200),
+                        p3(u.vol.hi.x + 200, u.base + 100, u.vol.hi.z + 200),
                     )).lod(FAR));
                     if grade.detailed() {
                         holding_down(u.vol, 100, out);
@@ -133,7 +133,7 @@ pub fn infer(
                 platform(u, y.max(floor), out);
             }
             let y = u.vol.lo.y + (u.vol.hi.y - u.vol.lo.y) / (levels + 1);
-            stair(u, y.max(floor), u.base, plan, grade, &mut r, out);
+            stair(u, y.max(floor), u.base, plan, routes, grade, &mut r, out);
             for p in out[n1..].iter_mut() {
                 p.of = pid;
             }
@@ -146,6 +146,21 @@ pub fn infer(
     // each other -- which is both what a works looks like and, incidentally,
     // fewer pieces.
     let racked = if grade.articulated() { rack(plan, routes, owners, out) } else { BTreeSet::new() };
+
+    // Jockey pulleys carry redirected belts; their stands are frames, not
+    // part of the moving rubber loop or pipe-support vocabulary.
+    for r in routes.iter().filter(|r| r.belt && r.path.len() > 2) {
+        let id = own(owners, &r.name, "idler stand", Owns::Frame);
+        let radius = (r.bore * 2).clamp(360, 700);
+        let n0 = out.len();
+        for &p in &r.path[1..r.path.len() - 1] {
+            if p.y <= radius + 200 { continue; }
+            out.push(Piece::up(Mesh::Beam, Mat::Dark, p3(p.x, 0, p.z), p3(160, p.y - radius, 160)).lod(MEDIUM));
+            out.push(Piece::up(Mesh::Box, Mat::Concrete, p3(p.x, -150, p.z), p3(600, 300, 600)).lod(MEDIUM));
+            out.push(Piece::span(Mesh::Beam, Mat::Steel, p3(p.x, p.y - radius, p.z), p.sub(r.axes.0.mul(180)), 140).lod(MEDIUM));
+        }
+        for p in &mut out[n0..] { p.of = id; }
+    }
 
     for (ri, r) in routes.iter().enumerate() {
         if r.props.is_empty() {
@@ -165,25 +180,38 @@ pub fn infer(
             if racked.contains(&(ri, pi)) {
                 continue;
             }
-            // Do not stand a post inside a machine.
-            if plan.units.iter().any(|u| u.vol.grow_flat(200).has(p3(at.x, u.vol.lo.y + 1, at.z))) {
-                continue;
-            }
             // The post stands from the ground to the underside of the pipe.
             let h = at.y - pipe / 2;
             if h < 900 {
                 continue;
             }
+            let mut base = p3(at.x, 0, at.z);
+            // If the pipe passes over equipment, carry it on a cantilever
+            // from outside the body instead of silently leaving it floating.
+            if let Some(u) = plan.units.iter().find(|u| u.vol.grow_flat(200).has(p3(at.x, u.vol.lo.y + 1, at.z))) {
+                if h <= u.top() + 150 { continue; }
+                let candidates = [p3(u.vol.lo.x - 700, 0, at.z), p3(u.vol.hi.x + 700, 0, at.z),
+                    p3(at.x, 0, u.vol.lo.z - 700), p3(at.x, 0, u.vol.hi.z + 700)];
+                let Some(foot) = candidates.into_iter().filter(|p| {
+                    !plan.units.iter().any(|u| u.vol.grow_flat(300).has(p3(p.x, u.vol.lo.y + 1, p.z)))
+                }).min_by_key(|p| p.taxi(base)) else { continue };
+                base = foot;
+                out.push(Piece::span(Mesh::Beam, Mat::Dark, p3(base.x, h - 170, base.z), p3(at.x, h - 170, at.z), 160).lod(MEDIUM));
+            }
+            let dir = super::route::heading_at(&r.path, at).unwrap_or(super::EAST);
+            // Keep the cradle height fixed. Scaling its cross-head with the
+            // entire post height leaves a visible gap under high pipes.
             out.push(
-                Piece::up(Mesh::Support, Mat::Dark, p3(at.x, 0, at.z), p3(od, h, od))
-                    .lod(MEDIUM),
+                Piece::up(Mesh::Beam, Mat::Dark, base, p3(od / 3, h - 140, od / 3)).lod(MEDIUM),
             );
+            out.push(Piece::up(Mesh::Support, Mat::Dark, p3(at.x, h - 141, at.z), p3(pipe * 13 / 10, 150, pipe))
+                .spin(if dir.x != 0 { 1 } else { 0 }).lod(MEDIUM));
             if grade.detailed() {
                 // A post stands on a pad, and a tall one is braced. Both are
                 // the difference between a pipe on a stick and a pipe on a
                 // support.
                 out.push(
-                    Piece::up(Mesh::Box, Mat::Concrete, p3(at.x, -150, at.z), p3(od + 400, 300, od + 400))
+                    Piece::up(Mesh::Box, Mat::Concrete, p3(base.x, -150, base.z), p3(od + 400, 300, od + 400))
                         .lod(CLOSE),
                 );
                 if h > 3500 {
@@ -192,8 +220,8 @@ pub fn infer(
                         Piece::span(
                             Mesh::Beam,
                             Mat::Dark,
-                            p3(at.x + side * (od + 500), 100, at.z),
-                            p3(at.x, h - 600, at.z),
+                            p3(base.x + side * (od + 500), 100, base.z),
+                            p3(base.x, h - 600, base.z),
                             160,
                         )
                         .lod(MEDIUM),
@@ -225,7 +253,7 @@ pub fn infer(
 /// Grouped by storey rather than by component on purpose. Four machines on
 /// level three share one floor, which is both what a works looks like and the
 /// difference between a mezzanine and four coffee tables.
-fn decks(plan: &Plan, grade: Grade, owners: &mut Vec<Owner>, out: &mut Vec<Piece>) {
+fn decks(plan: &Plan, routes: &[Run], grade: Grade, owners: &mut Vec<Owner>, out: &mut Vec<Piece>) {
     let mut by: BTreeMap<i32, Vec<&super::layout::Placed>> = BTreeMap::new();
     for u in plan.units.iter().filter(|u| u.level > 0) {
         by.entry(u.level).or_default().push(u);
@@ -327,7 +355,7 @@ fn decks(plan: &Plan, grade: Grade, owners: &mut Vec<Owner>, out: &mut Vec<Piece
                 );
             }
         }
-        flight(deck, y, plan, out);
+        flight(deck, y, plan, routes, out);
 
         for p in out[n0..].iter_mut() {
             p.of = id;
@@ -341,7 +369,7 @@ fn decks(plan: &Plan, grade: Grade, owners: &mut Vec<Owner>, out: &mut Vec<Piece
 /// that lands inside a machine is a flight nobody can use -- but it climbs the
 /// whole storey rather than a fraction of a vessel, so it gets a landing at
 /// the top and a stringer either side.
-fn flight(deck: Vol, y: Mm, plan: &Plan, out: &mut Vec<Piece>) {
+fn flight(deck: Vol, y: Mm, plan: &Plan, routes: &[Run], out: &mut Vec<Piece>) {
     let n = (y / RISE).max(2);
     let reach = n * GOING;
     let sides = [
@@ -360,7 +388,7 @@ fn flight(deck: Vol, y: Mm, plan: &Plan, out: &mut Vec<Piece>) {
                     p3(at.x - 700, at.y - RISE, at.z - 700),
                     p3(at.x + 700, at.y + RAIL_H, at.z + 700),
                 );
-                plan.units.iter().any(|o| o.vol.hits(tread))
+                plan.units.iter().any(|o| o.vol.hits(tread)) || route_clash(routes, tread)
             })
             .count()
     };
@@ -420,7 +448,7 @@ fn rack(
         }
         let pts: Vec<P3> = mine.iter().map(|(r, p)| routes[*r].props[*p]).collect();
         let (lo, hi) = pts.iter().fold((pts[0], pts[0]), |(a, b), p| (a.min(*p), b.max(*p)));
-        let top = hi.y + 200;
+        let top = mine.iter().map(|(ri, pi)| routes[*ri].props[*pi].y - super::route::outer(routes[*ri].dom, routes[*ri].bore) / 2).min().unwrap() - 180;
         // The bar spans the way the props are spread, which for a set of
         // parallel runs is across them: exactly where a bar belongs.
         let along_x = (hi.x - lo.x) >= (hi.z - lo.z);
@@ -439,11 +467,17 @@ fn rack(
             );
         }
         out.push(Piece::span(Mesh::Beam, Mat::Dark, a, b, 260).lod(MEDIUM));
-        // A second tier, if anything is running well above the bar.
-        if hi.y - lo.y > 1200 {
-            let low = lo.y + 200;
-            let (c, d) = (p3(a.x, low, a.z), p3(b.x, low, b.z));
-            out.push(Piece::span(Mesh::Beam, Mat::Dark, c, d, 220).lod(MEDIUM));
+        for &(ri, pi) in &mine {
+            let r = &routes[ri]; let at = r.props[pi];
+            let pipe = super::route::outer(r.dom, r.bore);
+            let h = at.y - pipe / 2;
+            let foot = if along_x { p3(at.x, top, a.z) } else { p3(a.x, top, at.z) };
+            let under = p3(at.x, top, at.z);
+            if foot != under { out.push(Piece::span(Mesh::Beam, Mat::Dark, foot, under, 140).lod(MEDIUM)); }
+            if h - 141 > top { out.push(Piece::up(Mesh::Beam, Mat::Dark, under, p3(120, h - 141 - top, 120)).lod(MEDIUM)); }
+            let dir = super::route::heading_at(&r.path, at).unwrap_or(super::EAST);
+            out.push(Piece::up(Mesh::Support, Mat::Dark, p3(at.x, h - 141, at.z), p3(pipe * 13 / 10, 150, pipe))
+                .spin(if dir.x != 0 { 1 } else { 0 }).lod(MEDIUM));
         }
         for p in out[n0..].iter_mut() {
             p.of = id;
@@ -477,8 +511,8 @@ fn own(owners: &mut Vec<Owner>, name: &str, what: &str, class: Owns) -> u16 {
 /// Concrete, to the outline of the machine and a bit over.
 fn plinth(u: &Placed, grade: Grade, out: &mut Vec<Piece>) {
     let v = Vol::new(
-        p3(u.vol.lo.x - 250, -200, u.vol.lo.z - 250),
-        p3(u.vol.hi.x + 250, u.lift, u.vol.hi.z + 250),
+        p3(u.vol.lo.x - 250, u.base - 200, u.vol.lo.z - 250),
+        p3(u.vol.hi.x + 250, u.base + u.lift, u.vol.hi.z + 250),
     );
     out.push(Piece::slab(Mat::Concrete, v).lod(FAR));
     if grade.detailed() {
@@ -489,13 +523,13 @@ fn plinth(u: &Placed, grade: Grade, out: &mut Vec<Piece>) {
             Piece::slab(
                 Mat::Concrete,
                 Vol::new(
-                    p3(v.lo.x - 350, -250, v.lo.z - 350),
-                    p3(v.hi.x + 350, (u.lift - 150).max(-100), v.hi.z + 350),
+                    p3(v.lo.x - 350, u.base - 250, v.lo.z - 350),
+                    p3(v.hi.x + 350, u.base + (u.lift - 150).max(-100), v.hi.z + 350),
                 ),
             )
             .lod(MEDIUM),
         );
-        holding_down(u.vol, u.lift, out);
+        holding_down(u.vol, u.base + u.lift, out);
     }
 }
 
@@ -505,16 +539,16 @@ fn frame(u: &Placed, grade: Grade, out: &mut Vec<Piece>) {
     let s = u.vol.size();
     let f = u.vol.foot();
     let (hx, hz) = (s.x / 2 - 200, s.z / 2 - 200);
-    let h = u.lift;
+    let h = u.base + u.lift;
     let corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)];
     for (dx, dz) in corners {
-        let at = p3(f.x + dx * hx, 0, f.z + dz * hz);
-        out.push(Piece::up(Mesh::Beam, Mat::Dark, at, p3(300, h, 300)).lod(FAR));
-        out.push(Piece::up(Mesh::Box, Mat::Concrete, p3(at.x, -150, at.z), p3(700, 300, 700)).lod(CLOSE));
+        let at = p3(f.x + dx * hx, u.base, f.z + dz * hz);
+        out.push(Piece::up(Mesh::Beam, Mat::Dark, at, p3(300, u.lift, 300)).lod(FAR));
+        out.push(Piece::up(Mesh::Box, Mat::Concrete, p3(at.x, u.base - 150, at.z), p3(700, 300, 700)).lod(CLOSE));
         // A column meets its pad through a base plate, and the plate is what
         // makes the joint look like a joint.
         if grade.detailed() {
-            out.push(Piece::up(Mesh::Anchor, Mat::Dark, p3(at.x, 100, at.z), p3(420, 420, 420)).lod(CLOSE));
+            out.push(Piece::up(Mesh::Anchor, Mat::Dark, p3(at.x, u.base + 100, at.z), p3(420, 420, 420)).lod(CLOSE));
         }
     }
     // Head beams, both ways.
@@ -529,7 +563,7 @@ fn frame(u: &Placed, grade: Grade, out: &mut Vec<Piece>) {
     // Bracing, on the two faces where it will be seen.
     if h > 1500 {
         for dz in [-1, 1] {
-            let a = p3(f.x - hx, 100, f.z + dz * hz);
+            let a = p3(f.x - hx, u.base + 100, f.z + dz * hz);
             let b = p3(f.x + hx, h - 300, f.z + dz * hz);
             out.push(Piece::span(Mesh::Beam, Mat::Dark, a, b, 180).lod(MEDIUM));
         }
@@ -630,6 +664,7 @@ fn stair(
     y: Mm,
     floor: Mm,
     plan: &Plan,
+    routes: &[Run],
     grade: Grade,
     r: &mut super::seed::Rng,
     out: &mut Vec<Piece>,
@@ -657,7 +692,7 @@ fn stair(
         (at.add(slide), dir)
     };
     let want = want + 4;
-    let side = if grade.detailed() {
+    let side = {
         let reach = (drop / RISE).max(2) * GOING;
         let room = |k: usize| -> Mm {
             let (start, dir) = spot(k);
@@ -682,22 +717,17 @@ fn stair(
                     p3(at.x - 600, at.y - RISE, at.z - 600),
                     p3(at.x + 600, at.y + RAIL_H, at.z + 600),
                 );
-                if plan.units.iter().any(|o| o.name != u.name && o.vol.hits(tread)) {
+                if plan.units.iter().any(|o| o.name != u.name && o.vol.hits(tread)) || route_clash(routes, tread) {
                     hits += 1;
                 }
             }
             hits
         };
-        // Landing on the plot comes first, because a flight that walks off
-        // into the yard to dodge a machine has not solved anything -- it has
-        // swapped experiment 09's bug back in to fix this one. Among the sides
-        // that do land on the plot, the one that goes through the least plant
-        // wins; then the roomiest; then the seed.
+        // Clear equipment and routes first, then prefer the plot.
+        // All grades use the same access layout.
         (0..12)
-            .max_by_key(|&k| (room(k) >= 0, Reverse(clash(k)), room(k), k == want, Reverse(k)))
+            .max_by_key(|&k| (clash(k) == 0, room(k) >= 0, Reverse(clash(k)), room(k), k == want, Reverse(k)))
             .unwrap_or(want)
-    } else {
-        want
     };
     let (start, dir) = spot(side);
     let n = (drop / RISE).max(2);
@@ -725,7 +755,7 @@ fn stair(
     // both stringers, and both handrails, were being drawn down the centreline
     // of the flight on top of each other. What that looks like from any
     // distance is a bare diagonal wire hanging over the plant.
-    let end = start.add(dir.mul(GOING * n)).add(p3(0, -y, 0));
+    let end = start.add(dir.mul(GOING * n)).add(p3(0, -drop, 0));
     for off in [-500, 500] {
         let side = super::right_of(dir, 0).mul(off).div(1000);
         let a = start.add(p3(side.x, 0, side.z));
@@ -736,4 +766,10 @@ fn stair(
                 .lod(CLOSE),
         );
     }
+}
+
+fn route_clash(routes: &[Run], v: Vol) -> bool {
+    routes.iter().any(|r| r.path.windows(2).any(|p| {
+        Vol::new(p[0].min(p[1]), p[0].max(p[1])).grow(super::route::outer(r.dom, r.bore) / 2 + 120).hits(v)
+    }))
 }

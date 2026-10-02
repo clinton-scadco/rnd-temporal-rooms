@@ -1,4 +1,38 @@
-use temporal_rooms::machine::form::{kit::{Mat, MATS}, surface::{Surface, SIZE}};
+use temporal_rooms::machine::form::{kit::{Mat, MATS}, surface::{finish, Surface, SIZE}};
+
+#[test]
+fn enamel_wear_is_restrained_and_concentrated_at_joints() {
+    let base = [0.55, 0.49, 0.38];
+    let mut face_change = 0.0;
+    let mut edge_change = 0.0;
+    let mut close_damage = 0.0;
+    let mut distant_damage = 0.0;
+    for tint in 0..=6 {
+        for x in 0..512 {
+            let p = [x as f32 * 0.0137, 2.0, 0.4];
+            let (face, _) = finish(base, Mat::Cream, p, [1.0, 0.0, 0.0], 4.0, tint, 0.001);
+            let edge = [p[0], 0.001, p[2]];
+            let (close, near_rough) = finish(base, Mat::Cream, edge, [1.0, 0.0, 0.0], 4.0, tint, 0.001);
+            let (_, far_rough) = finish(base, Mat::Cream, edge, [1.0, 0.0, 0.0], 4.0, tint, 0.1);
+            let delta = |c: [f32; 3]| (0..3).map(|k| (base[k] - c[k]).abs()).sum::<f32>();
+            assert!(delta(face) < 0.07, "large enamel faces became mottled: {face:?}");
+            face_change += delta(face);
+            edge_change += delta(close);
+            close_damage += near_rough;
+            distant_damage += far_rough;
+        }
+    }
+    assert!(edge_change > face_change * 2.0, "wear should gather at casing joints");
+    assert!(close_damage > distant_damage * 1.1, "subpixel chips must fade, not become larger patches");
+}
+
+#[test]
+fn macro_wear_does_not_damage_insulation_rubber_or_concrete() {
+    let base = [0.3, 0.4, 0.5];
+    for mat in [Mat::Concrete, Mat::Rubber, Mat::Lag] {
+        assert_eq!(finish(base, mat, [0.7, 0.0, 0.2], [1.0, 0.0, 0.0], 1.0, 6, 0.001), (base, 0.0));
+    }
+}
 
 #[test]
 fn textures_are_deterministic_and_have_complete_mip_chains() {

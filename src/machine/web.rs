@@ -50,6 +50,10 @@ const ASSETS: &[(&str, &str, &str)] = &[
     ("/render.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/render.js")),
     ("/panels.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/panels.js")),
     ("/form.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/form.js")),
+    ("/connections", "text/html; charset=utf-8", include_str!("../../web/machine/connections.html")),
+    ("/connections.css", "text/css; charset=utf-8", include_str!("../../web/machine/connections.css")),
+    ("/connections.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/connections.js")),
+    ("/connections-cases.js", "text/javascript; charset=utf-8", include_str!("../../web/machine/connections-cases.js")),
 ];
 
 /// Where designs are read from and written to. The only directory this server
@@ -203,7 +207,8 @@ fn route(req: &Req) -> (&'static str, &'static str, String) {
                 let style = req.query.get("style").map(String::as_str).unwrap_or("works");
                 let world = req.query.get("seed").and_then(|s| s.parse().ok()).unwrap_or(0);
                 let grade = req.query.get("grade").map(String::as_str).unwrap_or("full");
-                return ("200 OK", mime, formed(&req.body, style, world, grade).to_string());
+                let diagnostics = req.query.get("diagnostics").is_some_and(|v| v == "1");
+                return ("200 OK", mime, formed(&req.body, style, world, grade, diagnostics).to_string());
             }
             "/api/verify" => return ("200 OK", mime, verified(&req.body, t()).to_string()),
             "/api/save" => {
@@ -314,7 +319,7 @@ fn totals_json(t: &super::sim::Totals) -> Json {
 /// The same document that `/api/state` simulates, sent to a different pass of
 /// a different module tree, which is the whole architectural claim of
 /// experiment 08 expressed as two routes that share nothing but their input.
-fn formed(body: &str, style: &str, world: u64, grade: &str) -> Json {
+fn formed(body: &str, style: &str, world: u64, grade: &str, diagnostics: bool) -> Json {
     let d = match incoming(body) {
         Ok(d) => d,
         Err(e) => return e,
@@ -325,7 +330,41 @@ fn formed(body: &str, style: &str, world: u64, grade: &str) -> Json {
         grade: super::form::Grade::by_tag(grade).unwrap_or_default(),
     };
     match super::form::build(&d, ask) {
-        Ok(s) => s.to_json().set("ok", true),
+        Ok(s) => {
+            let mut answer = s.to_json().set("ok", true);
+            if diagnostics {
+                // Read the same solved interfaces and routed paths used to dress
+                // the scene. Coordinates are metres, like the instance buffers.
+                let xyz = |p: super::form::P3| {
+                    Json::arr(vec![p.x as f64 / 1000.0, p.y as f64 / 1000.0, p.z as f64 / 1000.0])
+                };
+                let plan = super::form::layout::plan(&d);
+                let sockets = plan.units.iter().flat_map(|u| {
+                    u.sockets.iter().map(|p| {
+                        let port = super::parts::part(u.kind).ports[p.port].name;
+                        Json::obj()
+                            .set("name", format!("{}.{port}", u.name))
+                            .set("domain", p.dom.tag())
+                            .set("connected", p.connected)
+                            .set("at", xyz(p.at))
+                            .set("out", Json::arr(vec![p.out.x, p.out.y, p.out.z]))
+                            .set("stub", p.stub as f64 / 1000.0)
+                            .set("bore", p.bore as i64)
+                    }).collect::<Vec<_>>()
+                }).collect::<Vec<_>>();
+                let physical = super::form::route::physical_runs(&s.routes);
+                let paths = s.routes.iter().zip(&physical).map(|(r, drawn)| {
+                    Json::obj()
+                        .set("name", r.name.clone())
+                        .set("points", Json::arr(r.path.iter().map(|&p| xyz(p)).collect::<Vec<_>>()))
+                        .set("physical_points", Json::arr(drawn.path.iter().map(|&p| xyz(p)).collect::<Vec<_>>()))
+                        .set("supports", Json::arr(drawn.props.iter().map(|&p| xyz(p)).collect::<Vec<_>>()))
+                }).collect::<Vec<_>>();
+                answer = answer.set("diagnostics", Json::obj()
+                    .set("sockets", Json::arr(sockets)).set("paths", Json::arr(paths)));
+            }
+            answer
+        }
         Err(e) => err(&e),
     }
 }

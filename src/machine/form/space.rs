@@ -408,7 +408,7 @@ pub fn check(plan: &Plan, routes: &[Run]) -> (Vec<Placement>, Vec<Issue>) {
     // does not reach. That is a fault with one remedy, and the remedy is to
     // move something, which is the only kind of fault worth painting red.
     for r in routes {
-        if !matches!(r.dom, Domain::Rotary | Domain::Mech) || !r.laid() {
+        if !matches!(r.dom, Domain::Rotary | Domain::Mech) || !r.laid() || r.belt {
             continue;
         }
         let (a, b) = (r.path[0], r.path[r.path.len() - 1]);

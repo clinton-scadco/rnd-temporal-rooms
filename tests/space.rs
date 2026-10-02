@@ -242,10 +242,10 @@ fn a_laid_run_obeys_the_rules_it_was_laid_under() {
     for (path, d) in all_designs() {
         let plan = form::layout::plan(&d);
         let s = built(&d);
-        for r in s.routes.iter().filter(|r| r.laid()) {
+        for r in s.routes.iter().filter(|r| r.laid() && !r.belt) {
             let rule = form::route::rules(r.dom, r.bore);
 
-            // Orthogonal, still and always.
+            // Rigid routes stay orthogonal; flexible belts may span diagonally.
             for i in 1..r.path.len() {
                 assert!(
                     r.path[i].sub(r.path[i - 1]).is_axis(),
@@ -329,7 +329,7 @@ fn a_short_section_is_a_price_the_router_pays() {
     let mut worst: Vec<String> = Vec::new();
     for (path, d) in all_designs() {
         let s = built(&d);
-        for r in s.routes.iter().filter(|r| r.laid()) {
+        for r in s.routes.iter().filter(|r| r.laid() && !r.belt) {
             let rule = form::route::rules(r.dom, r.bore);
             for i in 2..r.path.len().saturating_sub(1) {
                 let len = r.path[i].sub(r.path[i - 1]).len();

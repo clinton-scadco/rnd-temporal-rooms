@@ -49,7 +49,7 @@
 //!
 //! ```text
 //!   Piece {
-//!       mesh   one of twenty-nine
+//!       mesh   one of thirty
 //!       mat    one of twelve
 //!       at     where the mesh's origin lands
 //!       dir    where the mesh's +Y points
@@ -820,7 +820,8 @@ pub fn build(d: &Design, ask: Ask) -> Result<Scene, String> {
     }
 
     let routes = route::run(d, &plan, &seed);
-    for r in &routes {
+    let physical = route::physical_runs(&routes);
+    for r in &physical {
         let id = owners.len() as u16;
         owners.push(Owner { name: r.name.clone(), what: r.dom.tag().to_string(), class: Owns::Run });
         route::dress(r, &seed, ask.grade, id, &mut pieces);
@@ -829,7 +830,7 @@ pub fn build(d: &Design, ask: Ask) -> Result<Scene, String> {
     // every line is laid, so it is decided here rather than in either of them.
     route::junctions(&routes, &owners, ask.grade, &mut pieces);
 
-    frame::infer(&plan, &routes, &seed, ask.grade, &mut owners, &mut pieces);
+    frame::infer(&plan, &physical, &seed, ask.grade, &mut owners, &mut pieces);
     let (kind, bounds) = shell::enclose(&plan, &routes, &seed, ask.style, &mut owners, &mut pieces);
 
     // Experiment 09's whole first section, and the last thing that happens:
@@ -1041,6 +1042,7 @@ impl Scene {
                                 .set("metres", (r.length / 1000) as i64)
                                 .set("bends", r.bends as i64)
                                 .set("bore", r.bore as i64)
+                                .set("belt", r.belt)
                         })
                         .collect(),
                 ),
@@ -1078,7 +1080,7 @@ impl Scene {
     }
 }
 
-/// The library itself, sent once: twenty-nine meshes and twelve materials,
+/// The library itself, sent once: thirty meshes and twelve materials,
 /// including their shared surface maps. Everything after it is instances.
 pub fn kit_json() -> Json {
     let meshes: Vec<Json> = kit::MESHES

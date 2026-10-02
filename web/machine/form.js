@@ -50,6 +50,7 @@ out float vTint;
 out float vPick;
 out vec3 vLocal;
 out vec3 vLocalNrm;
+out vec3 vShape;
 flat out float vLength;
 
 mat3 basis(vec3 d, float spin) {
@@ -72,6 +73,7 @@ void main() {
   vNrm = normalize(n);
   vWorld = world;
   vLocal = local;
+  vShape = aPos;
   vLocalNrm = normalize(aNrm / max(iSize, vec3(1e-4)));
   vLength = iSize.y;
   vTint = iTint;
@@ -87,6 +89,7 @@ in float vTint;
 in float vPick;
 in vec3 vLocal;
 in vec3 vLocalNrm;
+in vec3 vShape;
 flat in float vLength;
 
 uniform vec3 uColour;
@@ -97,8 +100,42 @@ uniform highp sampler2DArray uSurfaces;
 uniform float uSurface;
 uniform float uRepeat;
 uniform float uJoints;
+uniform float uWeather;
+uniform float uGauge;
+uniform mat4 uLightVP;
+uniform highp sampler2D uShadow;
+uniform float uShadowOn;
+uniform float uFogStart;
 
 out vec4 outColour;
+
+float weatherHash(ivec3 p) {
+  uint h = uint(p.x) * 0x9e3779b9u ^ uint(p.y) * 0x85ebca6bu ^ uint(p.z) * 0xc2b2ae35u;
+  h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15;
+  return float(h & 65535u) / 65535.0;
+}
+float weatherNoise(vec3 p) {
+  ivec3 c = ivec3(floor(p));
+  vec3 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  float v = 0.0;
+  for (int z = 0; z < 2; z++) for (int y = 0; y < 2; y++) for (int x = 0; x < 2; x++) {
+    vec3 w = mix(1.0 - f, f, vec3(x, y, z));
+    v += weatherHash(c + ivec3(x, y, z)) * w.x * w.y * w.z;
+  }
+  return v;
+}
+float visibility(float lam) {
+  if (uShadowOn < 0.5) return 1.0;
+  vec4 clip = uLightVP * vec4(vWorld, 1.0);
+  vec3 p = clip.xyz / clip.w * 0.5 + 0.5;
+  if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return 1.0;
+  float bias = 0.00045 + 0.00032 * sqrt(max(0.0, 1.0 - lam * lam)) / max(lam, 0.15);
+  float lit = 0.0;
+  vec2 texel = 1.0 / vec2(textureSize(uShadow, 0));
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++)
+    lit += p.z - bias <= texture(uShadow, p.xy + vec2(x, y) * texel).r ? 1.0 : 0.0;
+  return lit / 9.0;
+}
 
 void main() {
   vec3 n = normalize(vNrm);
@@ -107,7 +144,7 @@ void main() {
   // A sky that is brighter than the ground, which is most of what makes an
   // untextured plant read as an object rather than a diagram.
   float sky = 0.5 + 0.5 * n.y;
-  vec3 amb = mix(vec3(0.20, 0.21, 0.24), vec3(0.46, 0.51, 0.58), sky);
+  vec3 amb = mix(vec3(0.065, 0.075, 0.09), vec3(0.27, 0.31, 0.38), sky);
 
   vec3 base = uColour * (1.0 - vTint * 0.035);
   // Tile in local metres, not canonical UVs: a stretched pipe keeps the same
@@ -122,17 +159,49 @@ void main() {
   float rough = clamp(uRough + (tex.g - 0.5) * 0.4, 0.04, 1.0);
   float seam = (1.0 - smoothstep(0.0, 0.045, min(vLocal.y, vLength - vLocal.y)))
              * pow(1.0 - abs(ln.y), 4.0) * uJoints;
-  base *= (0.7 + tex.r * 0.6) * (1.0 - seam * (0.035 + min(vTint, 5.0) * 0.019));
-  vec3 col = base * (amb + lam * 0.85);
+  float weather = 0.0;
+  if (uWeather > 0.5) {
+    float seed = vTint * 7.13;
+    float broad = weatherNoise(vLocal * 2.2 + seed);
+    float footprint = max(length(dFdx(vLocal)), length(dFdy(vLocal)));
+    float fine = weatherNoise(vLocal * 95.0 + seed);
+    float detail = 1.0 - smoothstep(0.004, 0.025, footprint);
+    float jointWidth = clamp(vLength * 0.08, 0.001, 0.045);
+    float joint = (1.0 - smoothstep(0.0, jointWidth, min(vLocal.y, vLength - vLocal.y))) * (1.0 - abs(ln.y));
+    float wear = 0.018 + min(vTint, 6.0) * 0.006;
+    float damage = smoothstep(0.62 - wear, 0.82, broad);
+    float chip = smoothstep(0.72 - joint * 0.14, 0.90 - joint * 0.10, fine)
+               * damage * (0.04 + joint * 0.96) * detail;
+    float oxide = damage * (joint * 0.075 + chip * 0.25);
+    float streak = weatherNoise(vec3(vLocal.x * 7.0 + seed, vLocal.y * 0.18, vLocal.z * 7.0));
+    float grime = smoothstep(0.64, 0.88, streak) * (0.018 + wear * 0.3 + joint * 0.025) * (1.0 - abs(ln.y));
+    float exposed = uWeather > 1.5 ? chip : 0.0;
+    base = mix(mix(base, vec3(0.09, 0.105, 0.12), exposed), vec3(0.19, 0.065, 0.023), oxide) * (1.0 - grime);
+    weather = oxide + exposed * 0.3;
+  }
+  if (uGauge > 0.5 && vShape.y > 0.905 && length(vShape.xz) < 0.405)
+    base = vShape.y < 0.915 ? vec3(0.69, 0.64, 0.51) : vec3(0.025, 0.03, 0.032);
+  base *= (0.7 + tex.r * 0.6) * (1.0 - seam * (0.16 + min(vTint, 5.0) * 0.025));
+  float lit = visibility(lam);
+  vec3 col = base * (amb + lam * lit * vec3(1.12, 1.03, 0.90));
 
   vec3 view = normalize(uEye - vWorld);
   vec3 h = normalize(view + sun);
-  float spec = pow(max(dot(n, h), 0.0), mix(90.0, 8.0, rough)) * (0.04 + 0.5 * uMetal);
-  col += vec3(spec) * lam;
+  float spec = pow(max(dot(n, h), 0.0), mix(180.0, 12.0, clamp(rough + weather * 0.25, 0.04, 1.0))) * (0.045 + 0.42 * uMetal);
+  col += vec3(1.0, 0.95, 0.84) * spec * lam * lit;
+  float rim = pow(1.0 - max(dot(n, view), 0.0), 4.0) * mix(0.015, 0.075, uMetal);
+  col += rim * vec3(0.60, 0.73, 0.94);
+  // Broad environment reflection complements the small direct sun highlight.
+  float facing = max(dot(n, view), 0.0);
+  float reflectedY = 2.0 * facing * n.y - view.y;
+  vec3 env = mix(vec3(0.055, 0.045, 0.032), vec3(0.36, 0.45, 0.56), smoothstep(-0.25, 0.65, reflectedY));
+  vec3 f0 = mix(vec3(0.025), base, uMetal);
+  col -= base * (amb + lam * lit * vec3(1.12, 1.03, 0.90)) * uMetal * 0.22;
+  col += env * mix(f0, vec3(0.72), pow(1.0 - facing, 5.0)) * (1.0 - clamp(rough + weather * 0.25, 0.04, 1.0) * 0.5);
 
   // Depth haze: a plant seen across a yard.
   float d = length(uEye - vWorld);
-  col = mix(col, vec3(0.72, 0.76, 0.80), clamp((d - 40.0) / 220.0, 0.0, 0.55));
+  col = mix(col, vec3(0.72, 0.76, 0.80), clamp((d - uFogStart) / 220.0, 0.0, 0.55));
 
   col = mix(col, vec3(1.0, 0.86, 0.35), vPick * 0.45);
   outColour = vec4(pow(col, vec3(0.4545)), 1.0);
@@ -239,6 +308,11 @@ let lineUni = {};
 let lineVao = null;
 let kit = null;      // { meshes: {tag: {vao-parts}}, mats: {tag: {...}} }
 let surfaces = null;
+let shadowProg = null;
+let shadowVP = null;
+let shadowTexture = null;
+let shadowFramebuffer = null;
+const SHADOW_SIZE = 2048;
 let scene = null;    // { batches: [...], bounds }
 let canvas = null;
 let cam = { yaw: 0.7, pitch: 0.5, dist: 60, at: [0, 4, 0] };
@@ -273,9 +347,23 @@ export async function initForm(el) {
   if (!gl) return false;
 
   prog = link(VERT, FRAG);
-  for (const n of ['uViewProj', 'uColour', 'uRough', 'uMetal', 'uEye', 'uPick', 'uSurfaces', 'uSurface', 'uRepeat', 'uJoints']) {
+  for (const n of ['uViewProj', 'uColour', 'uRough', 'uMetal', 'uEye', 'uPick', 'uSurfaces', 'uSurface', 'uRepeat', 'uJoints', 'uWeather', 'uGauge', 'uLightVP', 'uShadow', 'uShadowOn', 'uFogStart']) {
     uni[n] = gl.getUniformLocation(prog, n);
   }
+  shadowProg = link(VERT, '#version 300 es\nprecision highp float;\nvoid main() {}');
+  shadowVP = gl.getUniformLocation(shadowProg, 'uViewProj');
+  shadowTexture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, shadowTexture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.DEPTH_COMPONENT24, SHADOW_SIZE, SHADOW_SIZE);
+  for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
+  for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
+  shadowFramebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFramebuffer);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shadowTexture, 0);
+  gl.drawBuffers([gl.NONE]);
+  gl.readBuffer(gl.NONE);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('Cannot create sun shadow map');
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   lineProg = link(LINE_VERT, LINE_FRAG);
   for (const n of ['uViewProj', 'uColour', 'uLo', 'uHi']) {
     lineUni[n] = gl.getUniformLocation(lineProg, n);
@@ -411,7 +499,10 @@ export function show(json, refit) {
       colour: colour.map(v => Math.pow(v / 255, 2.2)),
       rough: mat.rough / 100, metal: mat.metal ? 1 : 0,
       surface: mat.layer ?? 0, repeat: mat.surface?.metres ?? 0.6,
-      joints: ['cyl', 'fins', 'cone'].includes(b.mesh) ? 1 : 0,
+      joints: ['cyl', 'fins', 'cone', 'volute'].includes(b.mesh) ? 1 : 0,
+      weather: json.grade === 'grey' || ['concrete', 'rubber', 'lagging'].includes(b.mat) ? 0
+        : ['paint', 'cream', 'water', 'oil', 'warn'].includes(b.mat) ? 2 : 1,
+      gauge: b.mesh === 'gauge' ? 1 : 0,
     });
   }
   // An edit moves the plant, not the viewer: the camera is only reset when a
@@ -448,16 +539,36 @@ function free() {
   scene = null;
 }
 
-export function fit() {
+export function fit({ zoom = 1 } = {}) {
   if (!scene || !scene.bounds) return;
   const { lo, hi } = scene.bounds;
   cam.at = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
   const span = Math.max(hi[0] - lo[0], hi[2] - lo[2], hi[1] - lo[1]);
-  cam.dist = span * 1.4 + 12;
+  cam.dist = (span * 1.4 + 12) * zoom;
   need = true;
 }
 
 export function invalidate() { need = true; }
+
+/// Repeatable inspection angles, shared by the connection testbed.
+export function cameraPreset(name) {
+  const angles = { iso: [0.7, 0.5], top: [0, 1.5], front: [0, 0.02], side: [Math.PI / 2, 0.02] };
+  if (!angles[name]) return;
+  [cam.yaw, cam.pitch] = angles[name];
+  need = true;
+}
+
+/// Discard geometry while an inspection document is being rebuilt or fails.
+export function clear() {
+  free();
+  names = [];
+  view.pick = -1;
+  view.stats = null;
+  view.units = [];
+  view.issues = [];
+  view.runs = [];
+  need = true;
+}
 
 // ------------------------------------------------------------------ camera
 
@@ -678,16 +789,29 @@ function draw() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   if (!scene) return;
 
+  if (view.lod < 3 && scene.shadowLod !== view.lod) drawShadow();
+  gl.viewport(0, 0, w, h);
+
   const eye = eyeAt();
   const vp = mul(perspective(0.9, w / h, 0.4, 4000), lookAt(eye, cam.at));
 
   gl.useProgram(prog);
   gl.uniformMatrix4fv(uni.uViewProj, false, vp);
   gl.uniform3fv(uni.uEye, eye);
+  // Fitting a large installation moves the camera back; that alone must not
+  // wash out all its materials. Haze begins beyond its near bounding corner.
+  const { lo, hi } = scene.bounds;
+  const radius = Math.hypot(...lo.map((v, k) => hi[k] - v)) * 0.5;
+  gl.uniform1f(uni.uFogStart, Math.max(40, cam.dist - radius + 20));
   gl.uniform1f(uni.uPick, view.pick);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D_ARRAY, surfaces);
   gl.uniform1i(uni.uSurfaces, 0);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, shadowTexture);
+  gl.uniform1i(uni.uShadow, 1);
+  gl.uniform1f(uni.uShadowOn, view.lod < 3 ? 1 : 0);
+  if (scene.lightVP) gl.uniformMatrix4fv(uni.uLightVP, false, scene.lightVP);
 
   // The very far level is one box, and drawing it is the point: it is what an
   // installation costs when it is a smudge on the horizon.
@@ -704,11 +828,43 @@ function draw() {
     gl.uniform1f(uni.uSurface, b.surface);
     gl.uniform1f(uni.uRepeat, b.repeat);
     gl.uniform1f(uni.uJoints, b.joints);
+    gl.uniform1f(uni.uWeather, b.weather);
+    gl.uniform1f(uni.uGauge, b.gauge);
     gl.bindVertexArray(b.vao);
     gl.drawElementsInstanced(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0, n);
   }
   gl.bindVertexArray(null);
   overlay(vp);
+}
+
+// Rebuilt on edits and LOD changes, reused while orbiting/picking. The same
+// VAOs and instance prefixes draw into a depth texture; no mesh duplication.
+function drawShadow() {
+  const { lo, hi } = scene.bounds;
+  const at = lo.map((v, k) => (v + hi[k]) * 0.5);
+  const radius = Math.max(1, Math.hypot(...lo.map((v, k) => hi[k] - v)) * 0.52);
+  const sun = norm([0.45, 0.82, 0.35]);
+  const eye = at.map((v, k) => v + sun[k] * radius * 2);
+  const near = 0.1, far = radius * 4;
+  const ortho = new Float32Array([1 / radius, 0, 0, 0, 0, 1 / radius, 0, 0,
+    0, 0, -2 / (far - near), 0, 0, 0, -(far + near) / (far - near), 1]);
+  scene.lightVP = mul(ortho, lookAt(eye, at));
+  gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFramebuffer);
+  gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
+  gl.clear(gl.DEPTH_BUFFER_BIT);
+  gl.disable(gl.CULL_FACE);
+  gl.useProgram(shadowProg);
+  gl.uniformMatrix4fv(shadowVP, false, scene.lightVP);
+  for (const b of scene.batches) {
+    const n = b.keep[Math.min(view.lod, 2)];
+    if (!n) continue;
+    gl.bindVertexArray(b.vao);
+    gl.drawElementsInstanced(gl.TRIANGLES, b.count, gl.UNSIGNED_INT, 0, n);
+  }
+  gl.bindVertexArray(null);
+  gl.enable(gl.CULL_FACE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  scene.shadowLod = view.lod;
 }
 
 /// Green, yellow, red -- round every component, and round the room the
@@ -759,7 +915,10 @@ function intent() {
   if (wires.length || link) {
     gl.bindVertexArray(lineVaoSeg);
     gl.uniform4fv(lineUni.uColour, WIRE);
-    for (const w of wires) seg(w[0], w[1]);
+    for (const w of wires) {
+      gl.uniform4fv(lineUni.uColour, w[2] || WIRE);
+      seg(w[0], w[1]);
+    }
     if (link) {
       gl.uniform4fv(lineUni.uColour, link.ok ? GOOD : [0.98, 0.78, 0.22, 0.9]);
       seg(link.from, link.to);
@@ -810,6 +969,8 @@ function seg(a, b) {
 /// One box, from the scene's own proxy volume: what an installation costs when
 /// it is a smudge on the horizon.
 function proxy() {
+  gl.uniform1f(uni.uWeather, 0);
+  gl.uniform1f(uni.uGauge, 0);
   if (!scene.proxy || !kit.meshes.box) return;
   const { lo, hi } = scene.proxy;
   if (!scene.proxyBatch) {

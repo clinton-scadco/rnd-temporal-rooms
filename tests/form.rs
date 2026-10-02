@@ -233,7 +233,7 @@ fn routes_are_orthogonal() {
             // A run the router refused to lay has no geometry to check.
             // Experiment 10 replaced the apologetic straight line with an
             // honest absence, which is a much easier thing to assert about.
-            if !r.laid() {
+            if !r.laid() || r.belt {
                 continue;
             }
             for i in 1..r.path.len() {
@@ -322,7 +322,7 @@ fn each_domain_gets_its_own_treatment() {
 
 #[test]
 fn the_library_stays_small() {
-    assert!(kit::MESHES.len() <= 30, "the note asked for twenty to thirty meshes");
+    assert!(kit::MESHES.len() <= 31, "thirty shared primitives plus the rectangular connection bend");
     // Experiment 08 held this at eight and experiment 09 raised it to twelve,
     // which is a ceiling being moved on purpose rather than a limit failing:
     // the material *language* needed four more distinctions than the material
@@ -336,7 +336,7 @@ fn the_library_stays_small() {
         // Canonical space: footprint centred, standing on the origin plane.
         // The elbow is the one exception, and it is not a sloppy one -- it
         // reaches out to exactly the bend radius the router places it by.
-        let wide = if m == kit::Mesh::Elbow { kit::Mesh::ELBOW_R + 0.5 } else { 0.62 };
+        let wide = if matches!(m, kit::Mesh::Elbow | kit::Mesh::DuctBend) { kit::Mesh::ELBOW_R + 0.5 } else { 0.62 };
         // A handrail is the one piece whose *height* runs along its local +Z,
         // because its length has to run along +Y like every other stretchable
         // thing, and something has to give.
@@ -346,7 +346,7 @@ fn the_library_stays_small() {
         // is *scaled by its own height* may use it, because a piece that
         // stands proud by a fraction of a four-metre post stands proud by a
         // metre: that was the pipe support, and it went through its pipe.
-        let tall = if m == kit::Mesh::Elbow { kit::Mesh::ELBOW_R + 0.6 } else { 1.1 };
+        let tall = if matches!(m, kit::Mesh::Elbow | kit::Mesh::DuctBend) { kit::Mesh::ELBOW_R + 0.6 } else { 1.1 };
         for i in 0..g.verts() {
             let (x, y, z) = (g.pos[i * 3], g.pos[i * 3 + 1], g.pos[i * 3 + 2]);
             assert!(x.abs() <= wide, "{m} is wider than canonical: {x}");
@@ -388,6 +388,32 @@ fn kit_triangles_have_area_and_outward_winding() {
             }
         }
     }
+}
+
+/// A scroll casting must be a closed solid and keep its asymmetric mouth.
+/// Weld by position so split shading vertices do not hide cracks in the mesh.
+#[test]
+fn volute_is_closed_and_has_a_tangential_silhouette() {
+    let g = kit::geom(kit::Mesh::Volute);
+    let key = |i: u32| -> [i32; 3] {
+        std::array::from_fn(|k| (g.pos[i as usize * 3 + k] * 1_000_000.0).round() as i32)
+    };
+    let mut edges = std::collections::BTreeMap::new();
+    for tri in g.idx.chunks_exact(3) {
+        for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            let (a, b) = (key(a), key(b));
+            let (edge, direction) = if a < b { ((a, b), 1) } else { ((b, a), -1) };
+            let entry = edges.entry(edge).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += direction;
+        }
+    }
+    assert!(edges.values().all(|&v| v == (2, 0)), "scroll casting has an open or reversed edge");
+    let rim: Vec<_> = g.pos.chunks_exact(3).filter(|v| (v[1] - 0.16).abs() < 1e-5).collect();
+    let positive = rim.iter().map(|v| v[0]).fold(0.0f32, f32::max);
+    let negative = rim.iter().map(|v| -v[0]).fold(0.0f32, f32::max);
+    assert!(positive > negative * 1.15, "scroll silhouette collapsed to a round drum");
+    assert!(rim.iter().any(|v| v[0] > 0.47 && v[2] > 0.44), "missing tangential mouth");
 }
 
 /// Test openings against the actual triangles, rather than the presence of a
@@ -833,11 +859,11 @@ fn a_stair_has_two_sides() {
     for (path, d) in all_designs() {
         let scene = form::build(&d, Ask { style: Style::Yard, world: 0, grade: Grade::Full })
             .unwrap_or_else(|e| panic!("{path}: {e}"));
-        // A stair's stringers are the only sloping beams in the plant.
+        // Descending beams are stair stringers; rising beams also include frame braces.
         let sloping: Vec<&Piece> = scene
             .pieces
             .iter()
-            .filter(|p| p.mesh == Mesh::Beam && p.dir.y != 0 && (p.dir.x != 0 || p.dir.z != 0))
+            .filter(|p| p.mesh == Mesh::Beam && p.dir.y < 0 && (p.dir.x != 0 || p.dir.z != 0))
             .collect();
         for a in &sloping {
             let twins = sloping.iter().filter(|b| b.at == a.at && b.dir == a.dir).count();
@@ -868,7 +894,7 @@ fn a_stair_comes_down_where_there_is_room_for_it() {
                 .iter()
                 .filter(|p| {
                     s.owners[p.of as usize].class == Owns::Unit
-                        && matches!(p.mesh, Mesh::Cyl | Mesh::Box | Mesh::Fins | Mesh::Cone)
+                        && matches!(p.mesh, Mesh::Cyl | Mesh::Box | Mesh::Fins | Mesh::Cone | Mesh::Volute)
                 })
                 .map(|p| p.vol())
                 .collect();

@@ -1,4 +1,4 @@
-//! The library: twenty-nine canonical meshes, twelve materials, and nothing
+//! The library: thirty canonical meshes, twelve materials, and nothing
 //! that knows what a turbine is.
 //!
 //! Experiment 08's second section asks for a *tiny authored asset library* and
@@ -10,7 +10,7 @@
 //! So there is no `turbine.mesh` here. A turbine is a `Cyl` with a `Dome` on
 //! each end, a `Rotor` in the middle, four `Anchor` feet and a `Nozzle` per
 //! port -- and a mill is those same meshes at different proportions in a
-//! different material. Thirty-eight components share twenty-nine meshes, which
+//! different material. Thirty-eight components share thirty meshes, which
 //! is the claim in section 2 of the note, made countable.
 //!
 //! # Canonical space
@@ -51,6 +51,8 @@ pub enum Mesh {
     /// A quarter bend. Bend radius 1.5, tube radius 0.5, in the canonical XY
     /// plane: in at the origin along `+Y`, out at `(1.5, 1.5, 0)` along `+X`.
     Elbow,
+    /// A rectangular-section quarter bend for chutes and cable trays.
+    DuctBend,
     /// A run with a branch: where one wire feeds two.
     Tee,
     Flange,
@@ -99,14 +101,18 @@ pub enum Mesh {
     /// A saddle: base plate, web plates and a cradle. What a horizontal vessel
     /// sits in, as opposed to on.
     Saddle,
+    /// A rounded scroll casting with a tangential mouth: pumps and blowers.
+    /// Its shaft runs along +Y; the discharge bulge is in the +X/+Z quadrant.
+    Volute,
 }
 
-pub const MESHES: [Mesh; 29] = [
+pub const MESHES: [Mesh; 31] = [
     Mesh::Box,
     Mesh::Cyl,
     Mesh::Dome,
     Mesh::Cone,
     Mesh::Elbow,
+    Mesh::DuctBend,
     Mesh::Tee,
     Mesh::Flange,
     Mesh::Nozzle,
@@ -131,6 +137,7 @@ pub const MESHES: [Mesh; 29] = [
     Mesh::Clamp,
     Mesh::Cowl,
     Mesh::Saddle,
+    Mesh::Volute,
 ];
 
 impl Mesh {
@@ -141,6 +148,7 @@ impl Mesh {
             Mesh::Dome => "dome",
             Mesh::Cone => "cone",
             Mesh::Elbow => "elbow",
+            Mesh::DuctBend => "ductbend",
             Mesh::Tee => "tee",
             Mesh::Flange => "flange",
             Mesh::Nozzle => "nozzle",
@@ -165,6 +173,7 @@ impl Mesh {
             Mesh::Clamp => "clamp",
             Mesh::Cowl => "cowl",
             Mesh::Saddle => "saddle",
+            Mesh::Volute => "volute",
         }
     }
 
@@ -353,6 +362,57 @@ impl Geom {
         self.quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]);
     }
 
+    /// Clipped edges catch a narrow highlight while retaining the exact
+    /// installation envelope. Six faces, twelve bevels and eight corners.
+    fn bevel_box(&mut self, lo: [f32; 3], hi: [f32; 3], radius: f32) {
+        for axis in 0..3 {
+            let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
+            for side in [0, 1] {
+                let mut points = [[0.0; 3]; 4];
+                for (p, (sb, sc)) in points.iter_mut().zip([(0, 0), (1, 0), (1, 1), (0, 1)]) {
+                    p[axis] = if side == 0 { lo[axis] } else { hi[axis] };
+                    p[b] = if sb == 0 { lo[b] + radius } else { hi[b] - radius };
+                    p[c] = if sc == 0 { lo[c] + radius } else { hi[c] - radius };
+                }
+                if side == 0 { points.reverse(); }
+                self.quad(points[0], points[1], points[2], points[3]);
+            }
+            for sb in [0, 1] {
+                for sc in [0, 1] {
+                    let mut points = [[0.0; 3]; 4];
+                    for (p, (end, inset)) in points.iter_mut().zip([(0, false), (1, false), (1, true), (0, true)]) {
+                        p[axis] = if end == 0 { lo[axis] + radius } else { hi[axis] - radius };
+                        p[b] = if sb == 0 { lo[b] } else { hi[b] };
+                        p[c] = if sc == 0 { lo[c] } else { hi[c] };
+                        let a = if inset { b } else { c };
+                        p[a] += if (if inset { sb } else { sc }) == 0 { radius } else { -radius };
+                    }
+                    let n = normal(points[0], points[1], points[2]);
+                    if n[b] * (if sb == 0 { -1.0 } else { 1.0 }) < 0.0 { points.reverse(); }
+                    self.quad(points[0], points[1], points[2], points[3]);
+                }
+            }
+        }
+        for x in [0, 1] {
+            for y in [0, 1] {
+                for z in [0, 1] {
+                    let sides = [x, y, z];
+                    let corner: [f32; 3] = std::array::from_fn(|k| if sides[k] == 0 { lo[k] } else { hi[k] });
+                    let mut p = [corner; 3];
+                    for axis in 0..3 {
+                        for k in 0..3 {
+                            if k != axis { p[axis][k] += if sides[k] == 0 { radius } else { -radius }; }
+                        }
+                    }
+                    let mut n = normal(p[0], p[1], p[2]);
+                    if n[0] * (if x == 0 { -1.0 } else { 1.0 }) < 0.0 { p.swap(1, 2); n = normal(p[0], p[1], p[2]); }
+                    let ids = p.map(|v| self.vert(v, n));
+                    self.tri(ids[0], ids[1], ids[2]);
+                }
+            }
+        }
+    }
+
     /// Revolve an ordered (radius, height) outline. Travel up the outside and
     /// down the inside: inward walls and flat shoulders then get their own
     /// correct normals, with hard edges between profile segments.
@@ -383,6 +443,58 @@ impl Geom {
     /// A hollow sleeve with real wall thickness and annular end faces.
     fn ring(&mut self, outer: f32, inner: f32, y0: f32, y1: f32, seg: usize) {
         self.profile(&[[outer, y0], [outer, y1], [inner, y1], [inner, y0], [outer, y0]], seg);
+    }
+
+    /// One continuous closed casting, rather than a drum with a box stuck on.
+    /// The expanding scroll ends in a tangential mouth. Rounded shoulders
+    /// soften both axial faces; separate face vertices retain the cover seam.
+    fn volute(&mut self) {
+        let mut outline = vec![[0.48, 0.24], [0.48, 0.45]];
+        for i in 0..=48 {
+            let t = i as f32 / 48.0;
+            let a = std::f32::consts::FRAC_PI_2 + t * std::f32::consts::PI * 1.5;
+            let r = 0.45 - 0.15 * t;
+            outline.push([a.cos() * r, a.sin() * r]);
+        }
+        let rings = [(0.0, 0.87), (0.06, 0.94), (0.16, 1.0),
+            (0.84, 1.0), (0.94, 0.94), (1.0, 0.87)];
+        let point = |i: usize, y: f32, scale: f32| {
+            [outline[i][0] * scale, y, outline[i][1] * scale]
+        };
+        let first = self.verts();
+        for pair in rings.windows(2) {
+            let [(y0, s0), (y1, s1)] = [pair[0], pair[1]];
+            for i in 0..outline.len() {
+                let j = (i + 1) % outline.len();
+                self.quad(point(i, y0, s0), point(i, y1, s1),
+                    point(j, y1, s1), point(j, y0, s0));
+            }
+        }
+        // Smooth only the cast shell. Axial covers retain separate flat
+        // normals so the bolted face does not shade like an inflated disc.
+        let last = self.verts();
+        let mut sums = std::collections::BTreeMap::<[u32; 3], [f32; 3]>::new();
+        for i in first..last {
+            let key = std::array::from_fn(|k| self.pos[i * 3 + k].to_bits());
+            let sum = sums.entry(key).or_insert([0.0; 3]);
+            for k in 0..3 { sum[k] += self.nrm[i * 3 + k]; }
+        }
+        for i in first..last {
+            let key = std::array::from_fn(|k| self.pos[i * 3 + k].to_bits());
+            let n = norm(sums[&key]);
+            self.nrm[i * 3..i * 3 + 3].copy_from_slice(&n);
+        }
+        for (y, sign) in [(0.0, -1.0), (1.0, 1.0)] {
+            let n = [0.0, sign, 0.0];
+            let centre = self.vert([0.0, y, 0.0], n);
+            for i in 0..outline.len() {
+                let j = (i + 1) % outline.len();
+                let a = self.vert(point(i, y, 0.87), n);
+                let b = self.vert(point(j, y, 0.87), n);
+                if sign > 0.0 { self.tri(centre, b, a); }
+                else { self.tri(centre, a, b); }
+            }
+        }
     }
 
     /// A hex head with a small bevel; flat side normals keep it a bolt rather
@@ -557,11 +669,32 @@ const SEG: usize = 24;
 pub fn geom(m: Mesh) -> Geom {
     let mut g = Geom::default();
     match m {
-        Mesh::Box => g.cuboid([-0.5, 0.0, -0.5], [0.5, 1.0, 0.5]),
-        Mesh::Cyl => g.barrel(0.5, 0.5, 0.0, 1.0, SEG, true),
-        Mesh::Dome => g.dome(0.5, 1.0, 0.0, SEG, 8),
-        Mesh::Cone => g.barrel(0.5, 0.16, 0.0, 1.0, SEG, true),
-        Mesh::Elbow => g.bend(Mesh::ELBOW_R, 0.5, SEG, 8),
+        Mesh::Box => g.bevel_box([-0.5, 0.0, -0.5], [0.5, 1.0, 0.5], 0.018),
+        Mesh::Cyl => g.profile(&[
+            [0.0, 0.0], [0.48, 0.0], [0.5, 0.012],
+            [0.5, 0.988], [0.48, 1.0], [0.0, 1.0],
+        ], 48),
+        Mesh::Dome => g.dome(0.5, 1.0, 0.0, 48, 8),
+        Mesh::Cone => g.barrel(0.5, 0.16, 0.0, 1.0, 48, true),
+        Mesh::Elbow => g.bend(Mesh::ELBOW_R, 0.5, 48, 8),
+        Mesh::DuctBend => {
+            for k in 0..16 {
+                let section = |step: usize, side: usize| {
+                    let t = step as f32 / 16.0 * std::f32::consts::FRAC_PI_2;
+                    let (rad, z) = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)][side % 4];
+                    [Mesh::ELBOW_R - (Mesh::ELBOW_R + rad) * t.cos(), (Mesh::ELBOW_R + rad) * t.sin(), z]
+                };
+                for side in 0..4 {
+                    let a = section(k, side); let b = section(k + 1, side);
+                    let c = section(k + 1, side + 1); let d = section(k, side + 1);
+                    let n = normal(a, d, c);
+                    let first = (g.pos.len() / 3) as u32;
+                    for v in [a, d, c, b] { g.vert(v, n); }
+                    g.tri(first, first + 1, first + 2); g.tri(first, first + 2, first + 3);
+                }
+            }
+        }
+        Mesh::Volute => g.volute(),
         Mesh::Tee => {
             g.barrel(0.5, 0.5, 0.0, 1.0, SEG, true);
             // The branch reaches clear of the run and stops, which is as far
@@ -691,8 +824,8 @@ pub fn geom(m: Mesh) -> Geom {
             g.barrel(0.045, 0.045, 0.94, 0.98, 8, true);
         }
         Mesh::Panel => {
-            g.cuboid([-0.5, 0.0, -0.5], [0.5, 1.0, 0.44]);
-            g.cuboid([-0.45, 0.05, 0.44], [0.45, 0.95, 0.49]);
+            g.bevel_box([-0.5, 0.0, -0.5], [0.5, 1.0, 0.44], 0.018);
+            g.bevel_box([-0.45, 0.05, 0.44], [0.45, 0.95, 0.49], 0.012);
             // A door reveal, hinges and a raised pull catch the light even
             // when the whole cabinet shares one material.
             for y in [0.18, 0.76] {

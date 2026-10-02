@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Machine connection testbed</title>
+  <link rel="stylesheet" href="/connections.css">
+  <link rel="icon" href="data:,">
+</head>
+<body>
+  <header>
+    <div><b>Connection testbed</b><span>machine view · live routing and pipe geometry</span></div>
+    <a href="/">Machine designer</a>
+    <button id="run-all">Check all presets</button>
+    <output id="suite" aria-live="polite"></output>
+  </header>
+  <main>
+    <aside class="cases">
+      <h2>Connection layouts <span id="count"></span></h2>
+      <nav id="cases" aria-label="Connection presets"></nav>
+      <p class="help">Presets use the same generator and renderer as machine view. Edit a layout to reproduce a defect, then export it.</p>
+    </aside>
+    <section class="stage">
+      <div class="intro"><div><h1 id="title">Loading…</h1><p id="note"></p></div><div class="pager"><button id="previous" aria-label="Previous preset">←</button><button id="next" aria-label="Next preset">→</button></div></div>
+      <div class="toolbar">
+        <label>Show <select id="geometry"><option value="equipment">Equipment + pipes</option><option value="pipes">Pipes only</option><option value="all">Whole installation</option></select></label>
+        <label>Look <select id="grade"><option value="full">Full</option><option value="detail">Detail</option><option value="paint">Paint</option><option value="grey">Grey</option></select></label>
+        <label>LOD <select id="lod"><option value="0">Close</option><option value="1">Medium</option><option value="2">Far</option></select></label>
+        <label>Seed <input id="seed" type="number" min="0" max="9999" step="1" value="0"></label>
+        <label>Style <select id="style"><option value="yard">Yard</option><option value="works">Works</option><option value="hall">Hall</option></select></label>
+      </div>
+      <div class="viewport">
+        <canvas id="gl" tabindex="0" aria-label="Interactive machine connection render"></canvas>
+        <p id="error" role="alert" hidden></p>
+        <div class="angles"><button data-camera="iso">Isometric</button><button data-camera="top">Top</button><button data-camera="front">Front</button><button data-camera="side">Side</button><button id="fit">Fit</button></div>
+        <div class="legend"><span class="blue">Blue: routed centreline</span><span class="amber">Amber: port + required straight stub</span></div>
+      </div>
+      <div class="overlays">
+        <label><input id="paths" type="checkbox"> Route paths</label>
+        <label><input id="ports" type="checkbox"> Port stubs</label>
+        <label><input id="boxes" type="checkbox"> Clearance boxes</label>
+        <span>Drag to orbit · right-drag / Shift-drag to pan · scroll to zoom</span>
+      </div>
+      <div id="stats" aria-live="polite"></div>
+      <div class="routes"><h2>Connections <span>click a row to highlight its pipework</span></h2><div id="routes"></div></div>
+    </section>
+    <aside class="inspector">
+      <h2>Layout</h2>
+      <div class="positions">
+        <label>Component <select id="unit"></select></label>
+        <div class="coordinates"><label>X<input id="x" type="number" step="1"></label><label>Y<input id="y" type="number" step="1"></label><label>Level<input id="z" type="number" min="0" step="1"></label></div>
+        <label>Facing <select id="face"><option value="">Automatic</option><option value="east">East</option><option value="south">South</option><option value="west">West</option><option value="north">North</option></select></label>
+        <button id="apply-position">Apply position / rotation</button>
+      </div>
+      <label for="source" class="source-label">Machine document</label>
+      <textarea id="source" spellcheck="false" aria-label="Editable machine document"></textarea>
+      <div class="actions"><button id="rebuild">Rebuild</button><button id="reset">Reset preset</button></div>
+      <div class="actions"><button id="export-source">Export .machine</button><button id="export-report">Export diagnostics</button></div>
+      <h2>Spatial report</h2>
+      <div id="issues"></div>
+      <p class="help">Clean / tight / lost describes routing. A clean route still needs visual inspection for gaps or fitting defects. Overlays remain visible through equipment.</p>
+    </aside>
+  </main>
+  <script type="module" src="/connections.js"></script>
+</body>
+</html>

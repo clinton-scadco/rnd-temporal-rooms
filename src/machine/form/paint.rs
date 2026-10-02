@@ -159,6 +159,16 @@ pub fn skin(u: &Placed) -> Mat {
 fn unit(u: &Placed, p: &Piece) -> Mat {
     // An authored gasket remains rubber even when its reusable mesh is Band.
     if p.mat == Mat::Rubber { return Mat::Rubber; }
+    if p.mat == Mat::Warn && p.mesh == Mesh::Box { return Mat::Warn; }
+    // The neck that bridges an authored drive port is a shaft, rather than
+    // part of the painted motor or pump casting.
+    if p.mesh == Mesh::Cyl && u.sockets.iter().any(|s| {
+        matches!(s.dom, Domain::Rotary | Domain::Mech) && p.at.add(p.dir) == s.at
+    }) { return Mat::Steel; }
+    // Small authored covers and instrument tubes are exposed metal fittings.
+    if p.mat == Mat::Steel && p.lod == super::CLOSE && matches!(p.mesh, Mesh::Cyl | Mesh::Dome | Mesh::Box) {
+        return Mat::Steel;
+    }
     match p.mesh {
         // Structure, and the things bolted to it.
         Mesh::Beam | Mesh::Anchor | Mesh::Bearing | Mesh::Saddle | Mesh::Coupling => Mat::Dark,
@@ -199,6 +209,7 @@ fn unit(u: &Placed, p: &Piece) -> Mat {
 /// the fluid domain splits again by what is in it, which is the one place the
 /// palette knows something the geometry does not.
 fn line(dom: Domain, serve: Subst, p: &Piece) -> Mat {
+    if p.mat == Mat::Rubber { return Mat::Rubber; }
     let body = match dom {
         Domain::Heat => Mat::Lag,
         Domain::Gas => Mat::Steel,

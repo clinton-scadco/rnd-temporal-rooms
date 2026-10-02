@@ -228,6 +228,9 @@ pub struct Placed {
 #[derive(Clone, Copy, Debug)]
 pub struct Socket {
     pub port: usize,
+    pub connected: bool,
+    /// The largest bore of the connections actually attached to this port.
+    pub join_bore: Mm,
     pub dom: Domain,
     pub dir: Dir,
     /// On the surface of the component.
@@ -921,8 +924,24 @@ fn sockets(d: &Design, units: &[Placed], i: usize) -> Vec<Socket> {
         }
         let bore = bore(port.rate);
         let class = Press::of(port.dom, port.rate);
+        let mut join_bore = bore;
+        for wire in &d.wires {
+            let peer = if wire.from == me.name && wire.from_port == port.name {
+                Some((&wire.to, &wire.to_port))
+            } else if wire.to == me.name && wire.to_port == port.name {
+                Some((&wire.from, &wire.from_port))
+            } else { None };
+            if let Some((name, pname)) = peer {
+                if let Some(unit) = d.unit(name) {
+                    let part = parts::part(unit.kind);
+                    if let Some(pi) = part.port_index(pname) { join_bore = join_bore.max(self::bore(part.ports[pi].rate)); }
+                }
+            }
+        }
         out.push(Socket {
             port: pi,
+            connected: peer_of(d, units, &me.name, port.name, port.dir).is_some(),
+            join_bore,
             dom: port.dom,
             dir: port.dir,
             at,

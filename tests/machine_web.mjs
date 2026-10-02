@@ -19,6 +19,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const port = process.argv[2] || '8788';
 const base = `http://127.0.0.1:${port}`;
@@ -538,7 +539,7 @@ console.log('hiding');
 console.log('the form');
 {
   const kit = await fetch(base + '/api/kit').then(r => r.json());
-  ok(kit.ok && kit.meshes.length >= 20 && kit.meshes.length <= 30,
+  ok(kit.ok && kit.meshes.length >= 20 && kit.meshes.length <= 31,
      `${kit.meshes.length} canonical meshes`);
   ok(kit.mats.length === 12, 'twelve materials for a whole plant');
   for (const m of kit.mats) {
@@ -802,6 +803,13 @@ console.log('the connection is the component');
 console.log('modules');
 for (const f of readdirSync(web).filter(f => f.endsWith('.js'))) {
   try {
+    // UI entry points start asynchronous fetches and require real canvas
+    // elements. Parse them without booting a page inside this DOM shim.
+    if (['app.js', 'connections.js'].includes(f)) {
+      const parsed = spawnSync(process.execPath, ['--check', join(web, f)], { encoding: 'utf8' });
+      ok(parsed.status === 0, `${f}: ${parsed.stderr || 'parsed'}`);
+      continue;
+    }
     await import(pathToUrl(join(web, f)));
     ok(true, f);
   } catch (e) {

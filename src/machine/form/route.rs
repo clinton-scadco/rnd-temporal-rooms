@@ -181,6 +181,7 @@ pub struct Run {
     /// that will. Since the player now says which one they are building by
     /// marking the wire, the plant can draw what they said.
     pub belt: bool,
+    pub axes: (P3, P3),
 }
 
 /// How hard the router had to try.
@@ -449,7 +450,7 @@ fn treat(d: Domain) -> Treat {
             mat: Mat::Galv,
             wide: 42,
             trim: Some((Mesh::Box, Mat::Dark, 2200)),
-            elbow: false,
+            elbow: true,
             bend_cost: 18,
             min_straight: 1000,
             layer: Layer::Tray,
@@ -460,7 +461,7 @@ fn treat(d: Domain) -> Treat {
             mat: Mat::Galv,
             wide: 230,
             trim: Some((Mesh::Band, Mat::Dark, 2600)),
-            elbow: false,
+            elbow: true,
             bend_cost: 48,
             min_straight: 2500,
             layer: Layer::Feed,
@@ -716,7 +717,7 @@ fn one(
         // whole component lets the pipe leave through the far wall, which
         // looks exactly as wrong as it sounds.
         let held = [pocket(g, sa.at), pocket(g, sb.at)];
-        let got = attempt(g, sa, sb, &rule, tier);
+        let got = if belt { belt_path(g, sa, sb).or_else(|| attempt(g, sa, sb, &rule, tier)) } else { attempt(g, sa, sb, &rule, tier) };
         for saved in held {
             for (i, m) in saved {
                 g.mark[i] = m;
@@ -745,7 +746,9 @@ fn one(
             bends += 1;
         }
     }
-    let props = if path.len() >= 2 { props_along(&path, rule.span) } else { Vec::new() };
+    let props = if belt { Vec::new() } else if path.len() >= 2 {
+        props_along(&path, rule.span, rule.bend, outer(dom, bore), treat_of(dom, belt).elbow)
+    } else { Vec::new() };
     (
         Run {
             name,
@@ -759,9 +762,24 @@ fn one(
             props,
             tier,
             belt,
+            axes: (sa.out, sb.out),
         },
         took,
     )
+}
+
+fn belt_path(g: &Grid, a: &Socket, b: &Socket) -> Option<(Vec<(i32, i32, i32)>, Vec<P3>)> {
+    let d = b.at.sub(a.at);
+    let n = (d.len() / 200).max(1);
+    let mut cells = Vec::new();
+    for k in 0..=n {
+        let p = a.at.add(p3((d.x as i64 * k as i64 / n as i64) as Mm,
+            (d.y as i64 * k as i64 / n as i64) as Mm, (d.z as i64 * k as i64 / n as i64) as Mm));
+        let c = g.cell_of(p);
+        if g.mark[g.idx(c)] & (SOLID | TAKEN) != 0 { return None; }
+        if cells.last() != Some(&c) { cells.push(c); }
+    }
+    Some((cells, vec![a.at, b.at]))
 }
 
 /// One try, under one tier's rules. `None` means there is no such route, which
@@ -1255,12 +1273,13 @@ fn turns(a: P3, b: P3, c: P3) -> bool {
 /// straight, because a thirteen-metre span made of eight short sections is
 /// still a thirteen-metre span, and the first version of this function
 /// cheerfully left it hanging in the air.
-fn props_along(path: &[P3], gap: Mm) -> Vec<P3> {
+fn props_along(path: &[P3], gap: Mm, bend: Mm, od: Mm, rounded: bool) -> Vec<P3> {
     if gap <= 0 {
         return Vec::new();
     }
     let mut out = Vec::new();
     let mut since = gap / 2;
+    let bent = elbows(path, bend, rounded);
     for i in 1..path.len() {
         let (a, b) = (path[i - 1], path[i]);
         let len = b.sub(a).len();
@@ -1270,21 +1289,91 @@ fn props_along(path: &[P3], gap: Mm) -> Vec<P3> {
         if a.y != b.y {
             // Going up or down is not a span, but the tape keeps running:
             // a riser does not reset the need for the next support.
-            since += len / 2;
+            since = (since + len / 2).min(gap);
             continue;
         }
-        let mut t = 0;
-        while since + (len - t) >= gap {
-            t += gap - since;
+        // A support must be on an actual straight, not the unrounded corner
+        // that was removed to fit an elbow. Never extrapolate behind a segment
+        // when a tall riser has used up the support spacing.
+        let start = if bent[i - 1] { bend + od / 2 } else { od / 2 };
+        let end = len - if bent[i] { bend + od / 2 } else { od / 2 };
+        if start > end { since = (since + len).min(gap); continue; }
+        let mut t = (gap - since).max(start);
+        while t <= end {
             since = 0;
             out.push(p3(a.x + (b.x - a.x) * t / len, a.y, a.z + (b.z - a.z) * t / len));
+            t += gap;
         }
-        since += len - t;
+        since = if let Some(p) = out.last().filter(|p| on_segment(a, b, **p)) {
+            b.sub(*p).len().min(gap)
+        } else { (since + len).min(gap) };
     }
     out
 }
 
 // ------------------------------------------------------------- the pipework
+
+fn on_segment(a: P3, b: P3, p: P3) -> bool {
+    p.taxi(a) + p.taxi(b) == a.taxi(b)
+}
+
+/// Walk two paths away from a common port to the point where they actually
+/// split. Their first corners may be different distances along the same run.
+fn divergence(a: &[P3], b: &[P3]) -> Option<P3> {
+    if a.first() != b.first() || a.len() < 2 || b.len() < 2 { return None; }
+    let (mut i, mut j, mut at) = (1, 1, a[0]);
+    while i < a.len() && j < b.len() {
+        let (da, db) = (a[i].sub(at), b[j].sub(at));
+        if unit_mm(da, 1000) != unit_mm(db, 1000) { break; }
+        at = if da.len() <= db.len() { a[i] } else { b[j] };
+        if at == a[i] { i += 1; }
+        if at == b[j] { j += 1; }
+    }
+    (at != a[0]).then_some(at)
+}
+
+fn after(path: &[P3], at: P3) -> Vec<P3> {
+    for i in 1..path.len() {
+        if on_segment(path[i - 1], path[i], at) {
+            let mut tail = vec![at];
+            tail.extend(path[i..].iter().copied().filter(|p| *p != at));
+            return tail;
+        }
+    }
+    Vec::new()
+}
+
+/// The physical pipework shares a trunk even though the document contains
+/// two independent connections. Keep the semantic paths intact for routing
+/// and reporting, but dress the shared portion only once.
+pub fn physical_runs(runs: &[Run]) -> Vec<Run> {
+    let mut out = runs.to_vec();
+    for i in 0..out.len() {
+        if !runs[i].laid() || runs[i].belt { continue; }
+        for reverse in [false, true] {
+            let orient = |p: &[P3]| if reverse { p.iter().rev().copied().collect::<Vec<_>>() } else { p.to_vec() };
+            let child = orient(&runs[i].path);
+            // Compare semantic paths before trimming: a third branch may
+            // share more trunk with the second branch than with the first.
+            let at = runs[..i].iter().filter(|p| p.laid() && p.dom == runs[i].dom && !p.belt)
+                .filter_map(|p| divergence(&child, &orient(&p.path)))
+                .max_by_key(|at| child.windows(2).take_while(|ab| !on_segment(ab[0], ab[1], *at))
+                    .map(|ab| ab[1].sub(ab[0]).len()).sum::<Mm>() +
+                    child.windows(2).find(|ab| on_segment(ab[0], ab[1], *at)).map_or(0, |ab| at.sub(ab[0]).len()));
+            if let Some(at) = at {
+                let mut trimmed = after(&orient(&out[i].path), at);
+                if reverse { trimmed.reverse(); }
+                out[i].path = trimmed;
+            }
+        }
+        let r = &mut out[i];
+        r.length = r.path.windows(2).map(|p| p[1].sub(p[0]).len()).sum();
+        r.bends = r.path.windows(3).filter(|p| turns(p[0], p[1], p[2])).count();
+        let rule = rules(r.dom, r.bore);
+        r.props = props_along(&r.path, rule.span, rule.bend, outer(r.dom, r.bore), treat(r.dom).elbow);
+    }
+    out
+}
 
 /// A routed connection, as pieces.
 pub fn dress(r: &Run, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) {
@@ -1294,6 +1383,10 @@ pub fn dress(r: &Run, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) 
     // shows a hole where the player has asked for something impossible,
     // instead of a pipe through a machine.
     if !r.laid() {
+        return;
+    }
+    if r.belt {
+        dress_belt(r, id, out);
         return;
     }
     let t = treat_of(r.dom, r.belt);
@@ -1366,7 +1459,7 @@ pub fn dress(r: &Run, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) 
         if bent[i] {
             let at = b.sub(unit_mm(u, bend));
             out.push(
-                Piece::new(Mesh::Elbow, t.mat, at, u, p3(od, od, od))
+                Piece::new(if t.mesh == Mesh::Box { Mesh::DuctBend } else { Mesh::Elbow }, t.mat, at, u, p3(od, od, od))
                     .spin(spin_for(u, v))
                     .lod(MEDIUM),
             );
@@ -1384,6 +1477,13 @@ pub fn dress(r: &Run, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) 
             // a lump on the outside of the bend.
             out.push(Piece::new(t.mesh, t.mat, b, u.neg(), p3(od, od / 2, od)).lod(MEDIUM));
             out.push(Piece::new(t.mesh, t.mat, b, v, p3(od, od / 2, od)).lod(MEDIUM));
+            if matches!(r.dom, Domain::Rotary | Domain::Mech) {
+                // A right-angle drive needs a transfer housing, not two
+                // bare shaft ends clipped together.
+                out.push(Piece::up(Mesh::Box, Mat::Steel, b.sub(p3(0, od, 0)), p3(od * 2, od * 2, od * 2)).lod(MEDIUM));
+            } else if t.mesh == Mesh::Box {
+                out.push(Piece::up(Mesh::Box, t.mat, b.sub(p3(0, od / 2, 0)), p3(od, od, od)).lod(MEDIUM));
+            }
         }
     }
 
@@ -1426,6 +1526,38 @@ pub fn dress(r: &Run, seed: &Seed, grade: Grade, id: u16, out: &mut Vec<Piece>) 
     for p in out[n0..].iter_mut() {
         p.of = id;
     }
+}
+
+fn dress_belt(r: &Run, id: u16, out: &mut Vec<Piece>) {
+    let a = r.path[0];
+    let b = *r.path.last().unwrap();
+    let radius = (r.bore * 2).clamp(360, 700);
+    let width = 180;
+    let n0 = out.len();
+    let mut ends = vec![(a, r.axes.0), (b, r.axes.1)];
+    for &p in &r.path[1..r.path.len() - 1] {
+        ends.push((p, r.axes.0));
+    }
+    for (p, axis) in ends {
+        out.push(Piece::new(Mesh::Cyl, Mat::Steel, p.sub(axis.mul(width / 2)), axis, p3(radius * 2, width, radius * 2)).lod(MEDIUM));
+        out.push(Piece::new(Mesh::Band, Mat::Rubber, p.sub(axis.mul(width / 2 + 10)), axis, p3(radius * 2 + 40, width + 20, radius * 2 + 40)).lod(MEDIUM));
+        out.push(Piece::new(Mesh::Coupling, Mat::Steel, p.sub(axis.mul(130)), axis, p3(radius / 2, 260, radius / 2)).lod(MEDIUM));
+    }
+    // Distinct working and return strands, seated on the pulley rims. A
+    // small sag makes the flexible link readable even from the side.
+    for ab in r.path.windows(2) {
+        for sign in [-1, 1] {
+            let from = ab[0].add(p3(0, sign * radius, 0));
+            let to = ab[1].add(p3(0, sign * radius, 0));
+            let middle = p3((from.x + to.x) / 2, (from.y + to.y) / 2 - (r.length / 30).clamp(120, 500), (from.z + to.z) / 2);
+            for (p, q) in [(from, middle), (middle, to)] {
+                let d = q.sub(p);
+                // A flat belt rather than a square duct or a dark shaft.
+                out.push(Piece::new(Mesh::Box, Mat::Rubber, p, d, p3(width, d.len(), 45)).lod(MEDIUM));
+            }
+        }
+    }
+    for p in &mut out[n0..] { p.of = id; }
 }
 
 /// Experiment 09, section 2: the same routing, with the vocabulary of how a
@@ -1566,7 +1698,7 @@ fn vocabulary(r: &Run, seed: &Seed, od: Mm, out: &mut Vec<Piece>) {
 /// A prop is always on a segment of the path, because that is where
 /// `props_along` put it -- but it is looked up rather than assumed, because
 /// hanging a clamp in mid-air would be a very quiet way to be wrong.
-fn heading_at(path: &[P3], at: P3) -> Option<P3> {
+pub fn heading_at(path: &[P3], at: P3) -> Option<P3> {
     for i in 1..path.len() {
         let (a, b) = (path[i - 1], path[i]);
         let d = b.sub(a);
@@ -1597,34 +1729,26 @@ pub fn junctions(runs: &[Run], owners: &[Owner], grade: Grade, out: &mut Vec<Pie
     if !grade.detailed() {
         return;
     }
-    for r in runs.iter() {
-        if !r.laid() {
-            continue;
+    let physical = physical_runs(runs);
+    let mut seen = std::collections::BTreeSet::new();
+    for (i, r) in runs.iter().enumerate() {
+        if !r.laid() || r.belt || !physical[i].laid() { continue; }
+        for (old, at, near) in [
+            (r.path[0], physical[i].path[0], physical[i].path[1]),
+            (*r.path.last().unwrap(), *physical[i].path.last().unwrap(), physical[i].path[physical[i].path.len() - 2]),
+        ] {
+            if old == at || !seen.insert((r.dom.tag(), at)) { continue; }
+            let Some(parent) = runs[..i].iter().find(|p| p.dom == r.dom && p.path.windows(2).any(|s| on_segment(s[0], s[1], at))) else { continue };
+            let Some(d) = heading_at(&parent.path, at) else { continue };
+            let branch = near.sub(at);
+            if unit_mm(d, 1000) == unit_mm(branch, 1000) || unit_mm(d, 1000) == unit_mm(branch, -1000) { continue; }
+            let Some(id) = owners.iter().position(|o| o.class == Owns::Run && o.name == r.name) else { continue };
+            let od = outer(r.dom, r.bore);
+            // Remove the artificial equipment joint at the branch point.
+            out.retain(|p| !(p.of == id as u16 && matches!(p.mesh, Mesh::Flange | Mesh::Reducer | Mesh::Valve) && p.at.sub(at).len() < od * 4));
+            out.push(Piece::new(Mesh::Tee, treat(r.dom).mat, at.sub(unit_mm(d, od)), d, p3(od * 11 / 10, od * 2, od * 11 / 10))
+                .spin(spin_for(d, branch)).lod(MEDIUM).of(id as u16));
         }
-        let at = r.path[0];
-        // The first run out of a socket carries the tee and the rest are
-        // branches off it. "First" is document order, which is fixed.
-        let mates: Vec<&Run> =
-            runs.iter().filter(|o| o.dom == r.dom && o.path.first() == Some(&at)).collect();
-        if mates.len() < 2 || !std::ptr::eq(mates[0], r) {
-            continue;
-        }
-        let Some(id) = owners.iter().position(|o| o.class == Owns::Run && o.name == r.name) else {
-            continue;
-        };
-        let t = treat_of(r.dom, r.belt);
-        let od = outer(r.dom, r.bore);
-        let d = r.path[1].sub(at);
-        if d.len() < od * 3 {
-            continue;
-        }
-        let branch = mates[1].path.get(1).map(|p| p.sub(at)).unwrap_or(d);
-        out.push(
-            Piece::new(Mesh::Tee, t.mat, at.add(unit_mm(d, od)), d, p3(od * 11 / 10, od * 3 / 2, od * 11 / 10))
-                .spin(spin_for(d, branch))
-                .lod(MEDIUM)
-                .of(id as u16),
-        );
     }
 }
 

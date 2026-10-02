@@ -5,6 +5,63 @@ use super::kit::Mat;
 
 pub const SIZE: usize = 64;
 
+fn smooth(a: f32, b: f32, v: f32) -> f32 {
+    let t = ((v - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Integer lattice noise; the WebGL shader uses the same hash and scale.
+/// Piece-local metres keep weather attached when machinery is moved/turned.
+fn weather_noise(p: [f32; 3]) -> f32 {
+    let cell = p.map(|v| v.floor() as i32);
+    let f = p.map(|v| { let t = v - v.floor(); t * t * (3.0 - 2.0 * t) });
+    let mut value = 0.0;
+    for z in 0..2 {
+        for y in 0..2 {
+            for x in 0..2 {
+                let mut h = ((cell[0] + x) as u32).wrapping_mul(0x9e3779b9)
+                    ^ ((cell[1] + y) as u32).wrapping_mul(0x85ebca6b)
+                    ^ ((cell[2] + z) as u32).wrapping_mul(0xc2b2ae35);
+                h ^= h >> 16;
+                h = h.wrapping_mul(0x7feb352d);
+                h ^= h >> 15;
+                let weight = |k: usize, s: i32| if s == 0 { 1.0 - f[k] } else { f[k] };
+                value += (h & 65535) as f32 / 65535.0 * weight(0, x) * weight(1, y) * weight(2, z);
+            }
+        }
+    }
+    value
+}
+
+/// Sparse chips expose steel at joints; broad enamel stays quiet. Subpixel
+/// damage fades out rather than turning into larger blotches. Wear never touches
+/// geometry or the service palette. Returns colour and added roughness.
+pub fn finish(base: [f32; 3], mat: Mat, p: [f32; 3], n: [f32; 3], length: f32, tint: u8, footprint: f32) -> ([f32; 3], f32) {
+    if matches!(mat, Mat::Concrete | Mat::Rubber | Mat::Lag) { return (base, 0.0); }
+    let seed = tint as f32 * 7.13;
+    let broad = weather_noise(p.map(|v| v * 2.2 + seed));
+    let fine = weather_noise(p.map(|v| v * 95.0 + seed));
+    let detail = 1.0 - smooth(0.004, 0.025, footprint);
+    let joint_width = (length * 0.08).min(0.045).max(0.001);
+    let joint = (1.0 - smooth(0.0, joint_width, p[1].min(length - p[1]))) * (1.0 - n[1].abs());
+    let wear = 0.018 + tint.min(6) as f32 * 0.006;
+    let damage = smooth(0.62 - wear, 0.82, broad);
+    let chip = smooth(0.72 - joint * 0.14, 0.90 - joint * 0.10, fine)
+        * damage * (0.04 + joint * 0.96) * detail;
+    let oxide = damage * (joint * 0.075 + chip * 0.25);
+    let streak = weather_noise([p[0] * 7.0 + seed, p[1] * 0.18, p[2] * 7.0]);
+    let grime = smooth(0.64, 0.88, streak) * (0.018 + wear * 0.3 + joint * 0.025) * (1.0 - n[1].abs());
+    let painted = matches!(mat, Mat::Paint | Mat::Cream | Mat::Water | Mat::Oil | Mat::Warn);
+    let exposed = if painted { chip } else { 0.0 };
+    let out = std::array::from_fn(|k| {
+        let steel = [0.09, 0.105, 0.12][k];
+        let rust = [0.19, 0.065, 0.023][k];
+        let c = base[k] * (1.0 - exposed) + steel * exposed;
+        (c * (1.0 - oxide) + rust * oxide) * (1.0 - grime)
+    });
+    (out, oxide + exposed * 0.3)
+}
+
 pub struct Surface {
     /// Metres per repeat, independent of the dimensions of a mesh instance.
     pub metres: f32,
@@ -69,10 +126,10 @@ impl Surface {
                 let broad = noise(u, v, 5, 31) - 0.5;
                 let grain = noise(u, v, 24, 59) - 0.5;
                 let (tone, rough) = match mat {
-                    Mat::Concrete => (0.91 + broad * 0.26 + grain * 0.13 + fine * 0.11, 0.07 + grain * 0.1),
+                    Mat::Concrete => (0.95 + broad * 0.10 + grain * 0.045 + fine * 0.025, 0.07 + grain * 0.1),
                     Mat::Galv => {
                         let crystal = zinc(u, v) - 0.5;
-                        (0.97 + crystal * 0.28 + fine * 0.03, crystal * 0.2)
+                        (0.98 + crystal * 0.10 + fine * 0.015, crystal * 0.12)
                     }
                     Mat::Steel | Mat::Copper => {
                         let brush = hash(0, y as i32, 113) - 0.5;

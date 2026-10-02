@@ -1,4 +1,4 @@
-//! Procedural dressing: forty-four components, assembled out of twenty-nine
+//! Procedural dressing: forty-four components, assembled out of thirty
 //! meshes.
 //!
 //! This is the pass that would traditionally be a folder of models. What is
@@ -95,12 +95,20 @@ pub fn dress(u: &Placed, _plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: 
     // Every port gets a stub, whatever the archetype: it is what makes a pipe
     // look bolted on rather than pushed through the wall.
     let bodies: Vec<_> = out[n0..].iter().filter(|p| {
-        matches!(p.mesh, Mesh::Box | Mesh::Cyl | Mesh::Fins | Mesh::Cone | Mesh::Dome) && p.mat != Mat::Dark
+        matches!(p.mesh, Mesh::Box | Mesh::Cyl | Mesh::Fins | Mesh::Cone | Mesh::Dome | Mesh::Volute) && p.mat != Mat::Dark
     }).cloned().collect();
-    for s in &u.sockets {
-        let b = s.bore;
+    for s in u.sockets.iter().filter(|s| s.connected) {
+        let b = super::route::outer(s.dom, s.join_bore);
         if g.detailed() {
-            if let Some(start) = neck_start(s, &bodies, u.vol.size().len()) {
+            // The pump's fluid belongs to its process casing, and an external
+            // drive belongs to its rear housing. Do not attach a water neck
+            // to whichever motor surface happens to be nearest the socket.
+            let solids = if g.articulated() && matches!(u.kind, crate::machine::parts::Kind::Pump | crate::machine::parts::Kind::MechPump) {
+                if s.dom == Domain::Fluid { &bodies[..1] }
+                else if matches!(s.dom, Domain::Rotary | Domain::Mech) { &bodies[1..2] }
+                else { &bodies[..] }
+            } else { &bodies[..] };
+            if let Some(start) = neck_start(s, solids, u.vol.size().len()) {
                 let run = s.at.sub(start);
                 if run.len() > 30 {
                     out.push(Piece::new(Mesh::Cyl, nozzle_mat(s.dom), start, run, p3(b, run.len(), b)).lod(MEDIUM));
@@ -162,6 +170,9 @@ fn inside_body(p: &Piece, at: P3) -> bool {
     match p.mesh {
         Mesh::Box => x.abs() <= 500 && z.abs() <= 500,
         Mesh::Cyl => radial <= 500 * 500,
+        // A conservative core lies inside the scroll at every axial depth,
+        // including its rounded shoulders. Necks overlap the casting skin.
+        Mesh::Volute => radial <= 250 * 250,
         Mesh::Fins => radial <= 420 * 420,
         Mesh::Cone => radial <= (500 - 340 * y / p.size.y.max(1) as i64).pow(2),
         Mesh::Dome => radial + (500 * y / p.size.y.max(1) as i64).pow(2) <= 500 * 500,
@@ -284,11 +295,30 @@ fn vessel(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) 
             Piece::new(Mesh::Flange, Mat::Steel, p3(f.x + d / 2 - 60, y, f.z), super::EAST, p3(man, man / 3, man))
                 .lod(CLOSE),
         );
+        // A sealed access cover, recessed inside the flange's bolt circle.
+        // The reusable flange is hollow; without the lid a manway looks open.
+        out.push(Piece::new(Mesh::Cyl, Mat::Steel,
+            p3(f.x + d / 2 - 60 + man / 3 - 25, y, f.z), super::EAST,
+            p3(man * 7 / 10, 45, man * 7 / 10)).lod(CLOSE));
+        // A narrow fabricated seam where the dished head meets the barrel.
+        out.push(Piece::up(Mesh::Band, Mat::Steel,
+            p3(f.x, f.y + 300 + barrel - 25, f.z), p3(d + 24, 50, d + 24)).lod(MEDIUM));
     }
 
     // Articulation: what is bolted to the top of it, and what lets the skirt
     // breathe. Neither changes the shape of the vessel by a millimetre.
     if g.articulated() {
+        // External level instrument: two shell taps, a slim vertical body,
+        // and retaining collars. It sits beside the access platform.
+        let z = f.z + d / 2 + 110;
+        let low = f.y + 300 + barrel / 4;
+        let high = f.y + 300 + barrel * 3 / 4;
+        out.push(Piece::up(Mesh::Cyl, Mat::Steel, p3(f.x, low, z), p3(100, high - low, 100)).lod(CLOSE));
+        for y in [low, high] {
+            out.push(Piece::new(Mesh::Cyl, Mat::Steel, p3(f.x, y, f.z + d / 2 - 30),
+                super::SOUTH, p3(85, 140, 85)).lod(CLOSE));
+            out.push(Piece::up(Mesh::Band, Mat::Steel, p3(f.x, y - 15, z), p3(140, 30, 140)).lod(CLOSE));
+        }
         for k in [1usize, 5] {
             let (cx, cz) = RING[k];
             let at = p3(f.x + cx * d / 5000, f.y + 300 + barrel + head / 2, f.z + cz * d / 5000);
@@ -306,7 +336,7 @@ fn vessel(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) 
         // A davit: the little crane that lifts the head off. Two beams, and
         // the vessel suddenly looks maintained rather than delivered.
         let top = f.y + 300 + barrel + head;
-        out.push(Piece::up(Mesh::Beam, Mat::Dark, p3(f.x + d / 2, top, f.z), p3(160, 1200, 160)).lod(MEDIUM));
+        out.push(Piece::up(Mesh::Beam, Mat::Dark, p3(f.x + d / 2, f.y + 300 + barrel - 150, f.z), p3(160, head + 1350, 160)).lod(MEDIUM));
         out.push(
             Piece::span(Mesh::Beam, Mat::Dark, p3(f.x + d / 2, top + 1200, f.z), p3(f.x + d / 6, top + 1200, f.z), 140)
                 .lod(MEDIUM),
@@ -393,7 +423,7 @@ fn shell(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
         // A manway on the crown, and a lifting lug either side of it.
         let man = (d / 4).clamp(500, 1000);
         out.push(
-            Piece::up(Mesh::Flange, Mat::Steel, p3(c.x, axis.y + d / 2 - 60, c.z), p3(man, man / 3, man))
+            Piece::up(Mesh::Flange, Mat::Steel, p3(axis.x, axis.y + d / 2 - 60, axis.z), p3(man, man / 3, man))
                 .lod(CLOSE),
         );
         out.push(
@@ -484,13 +514,24 @@ fn portal(u: &Placed, _r: &mut super::seed::Rng, out: &mut Vec<Piece>) {
         Piece::up(Mesh::Box, Mat::Steel, p3(f.x, f.y + s.y / 2, f.z), p3(s.x / 3, s.y / 3, s.z / 3))
             .lod(FAR),
     );
+    out.push(Piece::up(Mesh::Box, Mat::Steel, p3(f.x, f.y + 500, f.z), p3(s.x * 3 / 4, 400, s.z * 3 / 4)).lod(MEDIUM));
+    out.push(Piece::up(Mesh::Box, Mat::Dark, p3(f.x, f.y + 900, f.z), p3(s.x / 3, 160, s.z / 3)).lod(MEDIUM));
+    for side in [-1, 1] {
+        out.push(Piece::up(Mesh::Cyl, Mat::Steel, p3(f.x + side * s.x / 4, f.y + 1100, f.z), p3(140, (s.y - 1900).max(400), 140)).lod(MEDIUM));
+    }
+    out.push(Piece::up(Mesh::Panel, Mat::Galv, p3(f.x + s.x / 2 - 200, f.y + 500, f.z + s.z / 3), p3(450, 900, 280)).lod(CLOSE));
     anchors(u, out);
 }
 
 // --------------------------------------------------------------------- cans
 
 fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
-    let a = along(u);
+    if g.articulated() && matches!(u.kind, crate::machine::parts::Kind::Pump | crate::machine::parts::Kind::MechPump) {
+        pump(u, out);
+        return;
+    }
+    let drive_socket = u.sockets.iter().find(|s| matches!(s.dom, Domain::Rotary | Domain::Mech));
+    let a = if g.detailed() { drive_socket.map(|s| s.out).unwrap_or_else(|| super::layout::face(u.yaw)) } else { along(u) };
     let (len, wide) = extent(u, a);
     let s = u.vol.size();
     let mut d = wide.min(s.y).max(600);
@@ -499,6 +540,7 @@ fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
     if g.detailed() {
         if let Some(socket) = u.sockets.iter().find(|s| matches!(s.dom, Domain::Rotary | Domain::Mech)) {
             axis.y = socket.at.y;
+            if a.x != 0 { axis.z = socket.at.z; } else { axis.x = socket.at.x; }
         }
         d = d.min((axis.y - u.vol.lo.y - 300).max(100) * 2);
     }
@@ -538,9 +580,9 @@ fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
             );
         }
     }
-    if r.chance(80) || g.articulated() {
+    if u.kind == crate::machine::parts::Kind::Motor && (r.chance(80) || g.articulated()) {
         out.push(
-            Piece::up(Mesh::Panel, Mat::Dark, p3(c.x, axis.y + d / 2 - 60, c.z), p3(420, 300, 320))
+            Piece::up(Mesh::Panel, Mat::Dark, p3(axis.x, axis.y + d / 2 - 60, axis.z), p3(420, 300, 320))
                 .lod(CLOSE),
         );
     }
@@ -567,10 +609,24 @@ fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
             .find(|so| matches!(so.dom, Domain::Rotary | Domain::Mech))
             .map(|so| if so.out.x * a.x + so.out.z * a.z >= 0 { 1 } else { -1 })
             .unwrap_or(1);
+        // Split castings have machined rims and fastening circles. These
+        // live on the dished end bells, within the existing casing envelope.
+        let side = across(a);
+        for end in [-1, 1] {
+            let rim = axis.add(a.mul(end * (len / 2 - 170)));
+            out.push(Piece::new(Mesh::Band, Mat::Steel, rim, a.mul(end),
+                p3(d + 30, 65, d + 30)).lod(CLOSE));
+            for (cx, cy) in RING {
+                let bolt = axis.add(a.mul(end * (len / 2 - 18)))
+                    .add(side.mul(cx * d / 2600)).add(p3(0, cy * d / 2600, 0));
+                out.push(Piece::new(Mesh::Anchor, Mat::Steel, bolt, a.mul(end),
+                    p3(110, 45, 110)).lod(CLOSE));
+            }
+        }
         let nose = axis.add(a.mul(drive * (len / 2 - 150)));
-        out.push(
-            Piece::new(Mesh::Cyl, Mat::Steel, nose, a.mul(drive), p3(d / 5, len / 5, d / 5)).lod(MEDIUM),
-        );
+        if drive_socket.is_none() {
+            out.push(Piece::new(Mesh::Cyl, Mat::Steel, nose, a.mul(drive), p3(d / 5, len / 5, d / 5)).lod(MEDIUM));
+        }
         let tail = axis.sub(a.mul(drive * (len / 2 - 260)));
         out.push(
             Piece::new(Mesh::Cowl, Mat::Galv, tail, a.mul(-drive), p3(d * 9 / 10, len / 6, d * 9 / 10))
@@ -578,10 +634,93 @@ fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
         );
         // A lifting eye, because nothing this heavy is carried.
         out.push(
-            Piece::up(Mesh::Band, Mat::Steel, p3(c.x, axis.y + d / 2 - 40, c.z), p3(220, 260, 220))
+            Piece::up(Mesh::Band, Mat::Steel, p3(axis.x, axis.y + d / 2 - 40, axis.z), p3(220, 260, 220))
                 .lod(CLOSE),
         );
     }
+}
+
+// A pump needs two readable masses: the process casing and its drive. This
+// scroll casting supplies its silhouette; the router owns every real interface.
+fn pump(u: &Placed, out: &mut Vec<Piece>) {
+    let drive = u.sockets.iter().find(|s| matches!(s.dom, Domain::Rotary | Domain::Mech));
+    let a = drive.map(|s| s.out.neg()).unwrap_or_else(|| super::layout::face(u.yaw));
+    let (len, wide) = extent(u, a);
+    let c = u.vol.centre();
+    let y = drive.map(|s| s.at.y).unwrap_or(u.vol.lo.y + u.vol.size().y * 4 / 7);
+    let axis = drive.map(|s| if a.x != 0 { p3(c.x, y, s.at.z) } else { p3(s.at.x, y, c.z) }).unwrap_or(p3(c.x, y, c.z));
+    let d = wide.min(u.vol.size().y).min((y - u.vol.lo.y - 250).max(300) * 2);
+    let side = across(a);
+    let m = skin(u);
+    let case = axis.add(a.mul(len / 4));
+    let back = axis.sub(a.mul(len / 4));
+    let case_len = len / 6;
+    let motor_len = len / 3;
+    let motor_d = d * 3 / 5;
+    let powered = drive.is_none();
+
+    out.push(Piece::new(Mesh::Volute, m, case.sub(a.mul(case_len / 2)), a, p3(d, case_len, d)).lod(FAR));
+    out.push(Piece::new(if powered { Mesh::Fins } else { Mesh::Cyl }, m,
+        back.sub(a.mul(motor_len / 2)), a, p3(motor_d, motor_len, motor_d)).lod(FAR));
+    for end in [-1, 1] {
+        let rim = case.add(a.mul(end * case_len / 2));
+        out.push(Piece::new(Mesh::Band, Mat::Steel, rim.sub(a.mul(end * 25)), a.mul(end),
+            p3(d * 56 / 100, 55, d * 56 / 100)).lod(MEDIUM));
+        out.push(Piece::new(Mesh::Dome, m, rim, a.mul(end), p3(d / 2, 65, d / 2)).lod(MEDIUM));
+        if end == 1 {
+            for (cx, cy) in RING {
+                let bolt = rim.add(a.mul(45)).add(side.mul(cx * d / 4500)).add(p3(0, cy * d / 4500, 0));
+                out.push(Piece::new(Mesh::Anchor, Mat::Steel, bolt, a, p3(85, 40, 85)).lod(CLOSE));
+            }
+            out.push(Piece::new(Mesh::Cyl, Mat::Steel, rim.add(a.mul(80)), a,
+                p3(d / 4, 55, d / 4)).lod(CLOSE));
+        }
+    }
+
+    let shaft_start = back.add(a.mul(motor_len / 2));
+    let shaft_len = len / 2 - motor_len / 2 - case_len / 2;
+    out.push(Piece::new(Mesh::Cyl, Mat::Steel, shaft_start, a, p3(160, shaft_len, 160)).lod(CLOSE));
+    out.push(Piece::new(Mesh::Coupling, Mat::Steel, shaft_start.add(a.mul(shaft_len / 2 - 90)), a,
+        p3(300, 180, 300)).lod(MEDIUM));
+    // An open guard leaves the coupling visible through the space between
+    // its straps. The yellow belongs to the guard, not the entire casing.
+    let guard_w = 500;
+    let guard_h = 340;
+    for sign in [-1, 1] {
+        let at = shaft_start.add(side.mul(sign * guard_w / 2)).add(p3(0, guard_h / 2, 0));
+        out.push(Piece::new(Mesh::Box, Mat::Warn, at, a, p3(35, shaft_len, guard_h)).lod(MEDIUM));
+    }
+    for i in 0..3 {
+        let at = shaft_start.add(a.mul((shaft_len - 45) * i / 2)).add(p3(0, guard_h, 0));
+        out.push(Piece::new(Mesh::Box, Mat::Warn, at, a, p3(guard_w + 35, 45, 35)).lod(CLOSE));
+    }
+
+    // Separate seats support each casting on the shared bedplate.
+    let floor = u.vol.lo.y + 160;
+    let size = u.vol.size();
+    out.push(Piece::up(Mesh::Box, Mat::Dark, p3(c.x, u.vol.lo.y, c.z), p3(size.x, 160, size.z)).lod(MEDIUM));
+    for (centre, dia) in [(case, d), (back, motor_d)] {
+        for sign in [-1, 1] {
+            let at = centre.add(side.mul(sign * dia / 4));
+            let height = (y - dia * 38 / 100 - floor).max(40);
+            out.push(Piece::up(Mesh::Box, Mat::Dark, p3(at.x, floor, at.z),
+                p3(if a.x != 0 { 340 } else { 260 }, height, if a.x != 0 { 260 } else { 340 })).lod(MEDIUM));
+        }
+    }
+    anchors(u, out);
+    if powered {
+        out.push(Piece::new(Mesh::Cowl, Mat::Galv, back.sub(a.mul(motor_len / 2 - 60)), a.neg(),
+            p3(motor_d, 180, motor_d)).lod(MEDIUM));
+        out.push(Piece::up(Mesh::Panel, Mat::Galv, back.add(p3(0, motor_d * 2 / 5 - 40, 0)),
+            p3(320, 240, 260)).lod(CLOSE));
+    } else {
+        out.push(Piece::new(Mesh::Dome, m, back.sub(a.mul(motor_len / 2)), a.neg(),
+            p3(motor_d, 90, motor_d)).lod(MEDIUM));
+    }
+    let instrument = case.add(side.mul(d * 30 / 100)).add(p3(0, d / 5, 0));
+    out.push(Piece::new(Mesh::Gauge, Mat::Steel, instrument, side, p3(180, 150, 180)).lod(CLOSE));
+    out.push(Piece::new(Mesh::Band, Mat::Steel, case.add(p3(0, d * 42 / 100 - 40, 0)), side,
+        p3(150, 100, 150)).lod(CLOSE));
 }
 
 // ---------------------------------------------------------------------- bins
@@ -677,11 +816,13 @@ fn pad(u: &Placed, r: &mut super::seed::Rng, out: &mut Vec<Piece>) {
 // ------------------------------------------------------------------ turning
 
 fn wheel(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
-    let a = along(u);
+    let drive = u.sockets.iter().find(|s| matches!(s.dom, Domain::Rotary | Domain::Mech));
+    let a = if g.detailed() { drive.map(|s| s.out).unwrap_or_else(|| along(u)) } else { along(u) };
     let (len, wide) = extent(u, a);
     let c = u.vol.centre();
-    let axis = p3(c.x, super::layout::SHAFT_Y.min(u.vol.hi.y - 400), c.z);
-    let d = wide.min(u.vol.size().y) - 200;
+    let y = drive.map(|s| s.at.y).unwrap_or(u.base + super::layout::SHAFT_Y).min(u.vol.hi.y - 400);
+    let axis = drive.map(|s| if a.x != 0 { p3(c.x, y, s.at.z) } else { p3(s.at.x, y, c.z) }).unwrap_or(p3(c.x, y, c.z));
+    let d = (wide.min(u.vol.size().y) - 200).min((y - u.vol.lo.y - 150).max(300) * 2);
 
     out.push(Piece::new(Mesh::Rotor, Mat::Steel, axis.sub(a.mul(200)), a, p3(d, 400, d)).lod(FAR));
     for sgn in [1, -1] {
@@ -703,6 +844,16 @@ fn wheel(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) 
             );
         }
     }
+    if g.articulated() && u.kind == crate::machine::parts::Kind::Crank {
+        let side = across(a);
+        let pin = axis.add(side.mul(d / 3)).add(a.mul(280));
+        out.push(Piece::new(Mesh::Cyl, Mat::Steel, pin.sub(a.mul(120)), a, p3(220, 480, 220)).lod(MEDIUM));
+        out.push(Piece::span(Mesh::Beam, Mat::Steel, axis.add(a.mul(240)), pin, 240).lod(MEDIUM));
+        if let Some(socket) = u.sockets.iter().find(|s| s.dom == Domain::Mech && s.connected) {
+            out.push(Piece::span(Mesh::Cyl, Mat::Steel, pin, socket.at, 180).lod(MEDIUM));
+        }
+        out.push(Piece::up(Mesh::Box, Mat::Dark, u.vol.foot(), p3(u.vol.size().x, 140, u.vol.size().z)).lod(MEDIUM));
+    }
 }
 
 fn turbine(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
@@ -712,7 +863,7 @@ fn turbine(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>
     let c = u.vol.centre();
     let mut d = wide.min(u.vol.size().y).max(800);
     let y = if g.detailed() { drive.map(|s| s.at.y).unwrap_or(u.base + super::layout::SHAFT_Y) } else { super::layout::SHAFT_Y };
-    let axis = p3(c.x, y, c.z);
+    let axis = drive.map(|s| if a.x != 0 { p3(c.x, y, s.at.z) } else { p3(s.at.x, y, c.z) }).unwrap_or(p3(c.x, y, c.z));
     if g.detailed() { d = d.min((y - u.vol.lo.y - 180).max(100) * 2); }
     let m = skin(u);
 
@@ -728,9 +879,9 @@ fn turbine(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>
     }
     out.push(Piece::new(Mesh::Rotor, Mat::Steel, axis.sub(a.mul(len / 6)), a, p3(d - 100, 400, d - 100)).lod(MEDIUM));
     // The shaft end, and the bearing it runs in.
-    out.push(
-        Piece::new(Mesh::Cyl, Mat::Steel, axis.add(a.mul(len / 6)), a, p3(260, len / 3, 260)).lod(MEDIUM),
-    );
+    if drive.is_some_and(|s| s.connected) {
+        out.push(Piece::new(Mesh::Cyl, Mat::Steel, axis.add(a.mul(len / 6)), a, p3(260, len / 3, 260)).lod(MEDIUM));
+    }
     out.push(
         Piece::new(Mesh::Bearing, Mat::Dark, p3(axis.x, u.vol.lo.y, axis.z).add(a.mul(len / 3)), super::UP, p3(600, axis.y - u.vol.lo.y, 600))
             .spin(if a.x != 0 { 1 } else { 0 })
@@ -776,17 +927,18 @@ fn turbine(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>
 // ------------------------------------------------------------------- others
 
 fn inline(u: &Placed, _r: &mut super::seed::Rng, out: &mut Vec<Piece>) {
-    let a = along(u);
+    let a = super::layout::face(u.yaw);
     let (len, _) = extent(u, a);
     let c = u.vol.centre();
     let bore = u.sockets.first().map(|s| s.bore).unwrap_or(240);
-    let axis = p3(c.x, u.vol.lo.y + 700, c.z);
+    let socket = u.sockets.iter().find(|s| s.connected).or(u.sockets.first());
+    let axis = socket.map(|s| if a.x != 0 { p3(c.x, s.at.y, s.at.z) } else { p3(s.at.x, s.at.y, c.z) }).unwrap_or(p3(c.x, u.vol.lo.y + 700, c.z));
     out.push(Piece::new(Mesh::Cyl, Mat::Steel, axis.sub(a.mul(len / 2)), a, p3(bore, len, bore)).lod(MEDIUM));
     out.push(
         Piece::new(Mesh::Valve, Mat::Paint, axis.sub(a.mul(bore)), a, p3(bore * 3 / 2, bore * 2, bore * 3 / 2))
             .lod(MEDIUM),
     );
-    out.push(Piece::up(Mesh::Beam, Mat::Dark, p3(c.x, 0, c.z), p3(200, axis.y - 200, 200)).lod(MEDIUM));
+    out.push(Piece::up(Mesh::Beam, Mat::Dark, p3(axis.x, u.base, axis.z), p3(200, (axis.y - u.base - bore / 2).max(50), 200)).lod(MEDIUM));
 }
 
 fn bank(u: &Placed, _r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {

@@ -29,6 +29,7 @@ pub struct Shot {
     /// the *machine* rather than the yard it stands in, and this is how it
     /// tells them apart after the fact.
     who: Vec<u8>,
+    normals: Vec<[f32; 3]>,
 }
 
 /// Where the camera is, in the same terms the browser's orbit control uses.
@@ -60,17 +61,52 @@ pub fn render(s: &Scene, w: usize, h: usize, eye: Eye, lod: u8) -> Shot {
 /// the four are framed on one volume, and the only thing that changes between
 /// the panels is what is in them.
 pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod: u8) -> Shot {
+    render_framed(s, frame, w, h, eye, lod, false)
+}
+
+/// A tightly framed asset preview against a charcoal studio background.
+pub fn render_studio(s: &Scene, w: usize, h: usize, eye: Eye, lod: u8) -> Shot {
+    render_framed(s, s.bounds, w, h, eye, lod, true)
+}
+
+/// Four samples per output pixel, resolved in linear light. Thin handrails,
+/// grate bars and pipe collars retain coverage instead of becoming jagged dots.
+/// Keep diagnostic renders at their requested resolution for pixel measurements.
+pub fn render_export(s: &Scene, w: usize, h: usize, eye: Eye, lod: u8, studio: bool) -> Shot {
+    let high = render_framed(s, s.bounds, w * 2, h * 2, eye, lod, studio);
+    let mut shot = Shot { w, h, px: Vec::with_capacity(w * h), z: Vec::with_capacity(w * h),
+        who: Vec::with_capacity(w * h), normals: Vec::with_capacity(w * h) };
+    for y in 0..h {
+        for x in 0..w {
+            let a = y * 2 * high.w + x * 2;
+            let samples = [a, a + 1, a + high.w, a + high.w + 1];
+            shot.px.push(std::array::from_fn(|k| samples.iter().map(|&i| high.px[i][k]).sum::<f32>() * 0.25));
+            let closest = *samples.iter().min_by(|&&a, &&b| high.z[a].total_cmp(&high.z[b])).unwrap();
+            shot.z.push(high.z[closest]);
+            shot.who.push(high.who[closest]);
+            shot.normals.push(high.normals[closest]);
+        }
+    }
+    shot
+}
+
+fn render_framed(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod: u8, studio: bool) -> Shot {
     let mut shot = Shot {
         w,
         h,
-        px: vec![[0.80, 0.84, 0.88]; w * h],
+        px: vec![if studio { [0.012, 0.017, 0.023] } else { [0.80, 0.84, 0.88] }; w * h],
         z: vec![f32::MAX; w * h],
         who: vec![0; w * h],
+        normals: vec![[0.0; 3]; w * h],
     };
     let b = frame;
+    // A wide yard carries most of its visual weight near the ground. Aim
+    // lower there; a tall isolated component still uses its volume centre.
+    let studio_height = ((b.hi.y - b.lo.y) as f32
+        / (b.hi.x - b.lo.x).max(b.hi.z - b.lo.z).max(1) as f32).clamp(0.35, 1.0);
     let at = [
         mid(b.lo.x, b.hi.x),
-        mid(b.lo.y, b.hi.y) * 0.7,
+        mid(b.lo.y, b.hi.y) * if studio { studio_height } else { 0.7 },
         mid(b.lo.z, b.hi.z),
     ];
     let span = [
@@ -78,7 +114,9 @@ pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod
         (b.hi.y - b.lo.y) as f32 / 1000.0,
         (b.hi.z - b.lo.z) as f32 / 1000.0,
     ];
-    let dist = (span[0].max(span[2]).max(span[1]) * 1.35 + 12.0) * eye.zoom;
+    let dist = if studio {
+        dot(span, span).sqrt() * 1.38 * (h as f32 / w as f32).max(1.0) * eye.zoom
+    } else { (span[0].max(span[2]).max(span[1]) * 1.35 + 12.0) * eye.zoom };
     let cam = [
         at[0] + dist * eye.pitch.cos() * eye.yaw.sin(),
         at[1] + dist * eye.pitch.sin(),
@@ -95,8 +133,10 @@ pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod
 
     let sun = unit([0.45, 0.82, 0.35]);
     let surfaces: Vec<_> = kit::MATS.iter().map(|&m| Surface::new(m)).collect();
+    let meshes: Vec<_> = kit::MESHES.iter().map(|&m| kit::geom(m)).collect();
+    let shadow = Shadow::new(s, &meshes, lod, sun);
     for p in s.pieces.iter().filter(|p| p.lod >= lod) {
-        let g = kit::geom(p.mesh);
+        let g = &meshes[p.mesh as usize];
         let (r, fw, u) = axes(p);
         let sz = [p.size.x as f32 / 1000.0, p.size.y as f32 / 1000.0, p.size.z as f32 / 1000.0];
         let org = [p.at.x as f32 / 1000.0, p.at.y as f32 / 1000.0, p.at.z as f32 / 1000.0];
@@ -141,7 +181,12 @@ pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod
             origin: org,
             length: sz[1],
             tint: p.tint,
-            joints: matches!(p.mesh, Mesh::Cyl | Mesh::Fins | Mesh::Cone),
+            joints: matches!(p.mesh, Mesh::Cyl | Mesh::Fins | Mesh::Cone | Mesh::Volute),
+            mat: p.mat,
+            mesh: p.mesh,
+            size: sz,
+            weather: s.grade.painted(),
+            shadow: &shadow,
             who: match s.owner(p.of).class {
                 super::Owns::Unit => 1,
                 super::Owns::Run => 2,
@@ -171,7 +216,8 @@ pub fn render_in(s: &Scene, frame: super::Vol, w: usize, h: usize, eye: Eye, lod
             );
         }
     }
-    shot.haze();
+    shot.occlusion(right, up, fwd, f);
+    if !studio { shot.haze(); }
     shot
 }
 
@@ -212,6 +258,100 @@ struct Look<'a> {
     length: f32,
     tint: u8,
     joints: bool,
+    mat: Mat,
+    mesh: Mesh,
+    size: [f32; 3],
+    weather: bool,
+    shadow: &'a Shadow,
+}
+
+/// Orthographic sun depth, shared by every material. Both faces cast so a
+/// thin grate or an open pipe wall still shades the machinery behind it.
+struct Shadow {
+    depth: Vec<f32>,
+    right: [f32; 3],
+    up: [f32; 3],
+    sun: [f32; 3],
+    lo: [f32; 2],
+    span: [f32; 2],
+}
+
+impl Shadow {
+    const SIZE: usize = 1024;
+
+    fn project(&self, p: [f32; 3]) -> [f32; 3] {
+        [
+            (dot(p, self.right) - self.lo[0]) / self.span[0] * Self::SIZE as f32,
+            (dot(p, self.up) - self.lo[1]) / self.span[1] * Self::SIZE as f32,
+            -dot(p, self.sun),
+        ]
+    }
+
+    fn new(s: &Scene, meshes: &[kit::Geom], lod: u8, sun: [f32; 3]) -> Self {
+        let right = unit(cross(sun, [0.0, 1.0, 0.0]));
+        let up = cross(right, sun);
+        let mut lo = [f32::MAX; 2];
+        let mut hi = [f32::MIN; 2];
+        for x in [s.bounds.lo.x, s.bounds.hi.x] {
+            for y in [s.bounds.lo.y, s.bounds.hi.y] {
+                for z in [s.bounds.lo.z, s.bounds.hi.z] {
+                    let p = [x as f32 / 1000.0, y as f32 / 1000.0, z as f32 / 1000.0];
+                    for (k, axis) in [right, up].iter().enumerate() {
+                        lo[k] = lo[k].min(dot(p, *axis) - 0.2);
+                        hi[k] = hi[k].max(dot(p, *axis) + 0.2);
+                    }
+                }
+            }
+        }
+        let mut map = Self { depth: vec![f32::MAX; Self::SIZE.pow(2)], right, up, sun,
+            lo, span: [hi[0] - lo[0], hi[1] - lo[1]] };
+        for p in s.pieces.iter().filter(|p| p.lod >= lod) {
+            let g = &meshes[p.mesh as usize];
+            let (r, fw, u) = axes(p);
+            let sz = [p.size.x as f32 / 1000.0, p.size.y as f32 / 1000.0, p.size.z as f32 / 1000.0];
+            let org = [p.at.x as f32 / 1000.0, p.at.y as f32 / 1000.0, p.at.z as f32 / 1000.0];
+            let vertices: Vec<_> = g.pos.chunks_exact(3).map(|v| {
+                map.project(std::array::from_fn(|k| org[k] + r[k] * v[0] * sz[0] + u[k] * v[1] * sz[1] + fw[k] * v[2] * sz[2]))
+            }).collect();
+            for t in g.idx.chunks_exact(3) {
+                let [a, b, c] = [vertices[t[0] as usize], vertices[t[1] as usize], vertices[t[2] as usize]];
+                let area = edge(a, b, c);
+                if area.abs() < 1e-8 { continue; }
+                let minx = a[0].min(b[0]).min(c[0]).floor().max(0.0) as usize;
+                let maxx = a[0].max(b[0]).max(c[0]).ceil().clamp(0.0, Self::SIZE as f32) as usize;
+                let miny = a[1].min(b[1]).min(c[1]).floor().max(0.0) as usize;
+                let maxy = a[1].max(b[1]).max(c[1]).ceil().clamp(0.0, Self::SIZE as f32) as usize;
+                for y in miny..maxy {
+                    for x in minx..maxx {
+                        let q = [x as f32 + 0.5, y as f32 + 0.5, 0.0];
+                        let w = [edge(b, c, q) / area, edge(c, a, q) / area, edge(a, b, q) / area];
+                        if w.iter().any(|v| *v < 0.0) { continue; }
+                        let d = w[0] * a[2] + w[1] * b[2] + w[2] * c[2];
+                        let i = y * Self::SIZE + x;
+                        map.depth[i] = map.depth[i].min(d);
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    fn visibility(&self, pos: [f32; 3], lam: f32) -> f32 {
+        let p = self.project(pos);
+        // A texel-scaled slope bias keeps large plant previews free of acne.
+        let slope = (1.0 - lam * lam).max(0.0).sqrt() / lam.max(0.15);
+        let bias = (self.span[0].max(self.span[1]) / Self::SIZE as f32) * (1.4 + 1.2 * slope);
+        let mut lit = 0.0;
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let x = p[0].floor() as i32 + dx;
+                let y = p[1].floor() as i32 + dy;
+                if x < 0 || y < 0 || x >= Self::SIZE as i32 || y >= Self::SIZE as i32
+                    || p[2] - bias <= self.depth[y as usize * Self::SIZE + x as usize] { lit += 1.0; }
+            }
+        }
+        lit / 9.0
+    }
 }
 
 impl Shot {
@@ -256,6 +396,7 @@ impl Shot {
                 let pos = [mix(w, 0), mix(w, 1), mix(w, 2)];
                 self.z[i] = z;
                 self.who[i] = look.who;
+                self.normals[i] = nn;
                 let ddx = std::array::from_fn(|k| (numerator_dx[k] - pos[k] * denom_dx) * z);
                 let ddy = std::array::from_fn(|k| (numerator_dy[k] - pos[k] * denom_dy) * z);
                 let footprint = dot(ddx, ddx).max(dot(ddy, ddy)).sqrt();
@@ -264,13 +405,52 @@ impl Shot {
         }
     }
 
+    /// Contact occlusion from nearby visible surfaces, in camera metres.
+    /// The normal test avoids darkening a sloping plane against itself.
+    fn occlusion(&mut self, right: [f32; 3], up: [f32; 3], fwd: [f32; 3], f: f32) {
+        let radius = 0.65;
+        let scale = self.h as f32 * f * 0.5;
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let i = y * self.w + x;
+                let z = self.z[i];
+                if z == f32::MAX { continue; }
+                let nn = self.normals[i];
+                let n = [dot(nn, right), dot(nn, up), dot(nn, fwd)];
+                let r = (radius * scale / z).clamp(2.0, 48.0);
+                let mut ao = 0.0;
+                for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0),
+                    (0.707, 0.707), (-0.707, 0.707), (0.707, -0.707), (-0.707, -0.707),
+                    (0.38, 0.16), (-0.38, -0.16), (0.16, -0.38), (-0.16, 0.38)] {
+                    let sx = x as i32 + (dx * r).round() as i32;
+                    let sy = y as i32 + (dy * r).round() as i32;
+                    if sx < 0 || sy < 0 || sx >= self.w as i32 || sy >= self.h as i32 { continue; }
+                    let other = self.z[sy as usize * self.w + sx as usize];
+                    if other == f32::MAX { continue; }
+                    let delta = [
+                        ((sx as f32 + 0.5 - self.w as f32 * 0.5) * other - (x as f32 + 0.5 - self.w as f32 * 0.5) * z) / scale,
+                        ((self.h as f32 * 0.5 - sy as f32 - 0.5) * other - (self.h as f32 * 0.5 - y as f32 - 0.5) * z) / scale,
+                        other - z,
+                    ];
+                    let dist = dot(delta, delta).sqrt();
+                    if dist > 0.01 && dist < radius {
+                        ao += (dot(n, delta) / dist - 0.08).max(0.0) * (1.0 - dist / radius);
+                    }
+                }
+                let visibility = (1.0 - ao * 0.23).max(0.45);
+                for c in &mut self.px[i] { *c *= visibility; }
+            }
+        }
+    }
+
     /// Distance haze, applied at the end because it only needs the depth.
     fn haze(&mut self) {
+        let near = self.z.iter().copied().fold(f32::MAX, f32::min);
         for i in 0..self.px.len() {
             if self.z[i] == f32::MAX {
                 continue;
             }
-            let t = ((self.z[i] - 40.0) / 220.0).clamp(0.0, 0.55);
+            let t = ((self.z[i] - near - 20.0) / 220.0).clamp(0.0, 0.55);
             for k in 0..3 {
                 self.px[i][k] = lerp(self.px[i][k], [0.72, 0.76, 0.80][k], t);
             }
@@ -298,7 +478,7 @@ impl Shot {
 fn shade(n: [f32; 3], pos: [f32; 3], footprint: f32, look: &Look) -> [f32; 3] {
     let lam = dot(n, look.sun).max(0.0);
     let sky = 0.5 + 0.5 * n[1];
-    let amb = [lerp(0.20, 0.46, sky), lerp(0.21, 0.51, sky), lerp(0.24, 0.58, sky)];
+    let amb = [lerp(0.065, 0.27, sky), lerp(0.075, 0.31, sky), lerp(0.09, 0.38, sky)];
     let view = unit(sub(look.cam, pos));
     let half = unit([view[0] + look.sun[0], view[1] + look.sun[1], view[2] + look.sun[2]]);
     let local = look.axes.map(|axis| dot(sub(pos, look.origin), axis));
@@ -306,14 +486,34 @@ fn shade(n: [f32; 3], pos: [f32; 3], footprint: f32, look: &Look) -> [f32; 3] {
     let tex = look.surface.sample(local, ln, footprint);
     let t = (local[1].min(look.length - local[1]) / 0.045).clamp(0.0, 1.0);
     let seam = if look.joints { (1.0 - t * t * (3.0 - 2.0 * t)) * (1.0 - ln[1].abs()).powi(4) } else { 0.0 };
-    let tone = tex[0] * (1.0 - seam * (0.035 + look.tint.min(5) as f32 * 0.019));
-    let power = lerp(90.0, 8.0, (look.rough + tex[1]).clamp(0.04, 1.0));
-    let spec = dot(n, half).max(0.0).powf(power) * (0.04 + if look.metal { 0.5 } else { 0.0 }) * lam;
-    [
-        look.base[0] * tone * (amb[0] + lam * 0.85) + spec,
-        look.base[1] * tone * (amb[1] + lam * 0.85) + spec,
-        look.base[2] * tone * (amb[2] + lam * 0.85) + spec,
-    ]
+    let tone = tex[0] * (1.0 - seam * (0.16 + look.tint.min(5) as f32 * 0.025));
+    let (mut base, weather) = if look.weather {
+        super::surface::finish(look.base, look.mat, local, ln, look.length, look.tint, footprint)
+    } else { (look.base, 0.0) };
+    let canonical: [f32; 3] = std::array::from_fn(|k| local[k] / look.size[k].max(1e-4));
+    if look.mesh == Mesh::Gauge && canonical[1] > 0.905 && canonical[0].hypot(canonical[2]) < 0.405 {
+        base = if canonical[1] < 0.915 { [0.69, 0.64, 0.51] } else { [0.025, 0.03, 0.032] };
+    }
+    let power = lerp(180.0, 12.0, (look.rough + tex[1] + weather * 0.25).clamp(0.04, 1.0));
+    let visibility = look.shadow.visibility(pos, lam);
+    let spec = dot(n, half).max(0.0).powf(power) * (0.045 + if look.metal { 0.42 } else { 0.0 }) * lam * visibility;
+    let rim = (1.0 - dot(n, view).max(0.0)).powi(4) * if look.metal { 0.075 } else { 0.015 };
+    // A broad sky reflection gives steel a readable sweep, even when the
+    // small sun highlight misses it. Enamel retains its softer dielectric sheen.
+    let facing = dot(n, view).max(0.0);
+    let reflected_y = 2.0 * facing * n[1] - view[1];
+    let env_t = ((reflected_y + 0.25) / 0.9).clamp(0.0, 1.0);
+    let env_t = env_t * env_t * (3.0 - 2.0 * env_t);
+    let fresnel = (1.0 - facing).powi(5);
+    let rough = (look.rough + tex[1] + weather * 0.25).clamp(0.04, 1.0);
+    std::array::from_fn(|k| {
+        let f0 = if look.metal { base[k] * tone } else { 0.025 };
+        let env = lerp([0.055, 0.045, 0.032][k], [0.36, 0.45, 0.56][k], env_t);
+        base[k] * tone * (amb[k] + lam * visibility * [1.12, 1.03, 0.90][k])
+            * if look.metal { 0.78 } else { 1.0 }
+            + env * lerp(f0, 0.72, fresnel) * (1.0 - rough * 0.5)
+            + spec * [1.0, 0.95, 0.84][k] + rim * [0.60, 0.73, 0.94][k]
+    })
 }
 
 fn edge(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> f32 {
@@ -349,6 +549,46 @@ fn unit(v: [f32; 3]) -> [f32; 3] {
 }
 fn neg(v: [f32; 3]) -> [f32; 3] {
     [-v[0], -v[1], -v[2]]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::form::{p3, Piece};
+
+    #[test]
+    fn sun_shadow_occludes_the_floor_and_not_the_lit_top() {
+        let mut s = crate::machine::form::sheet();
+        s.pieces = vec![
+            Piece::up(Mesh::Box, Mat::Concrete, p3(0, 0, 0), p3(6000, 200, 6000)),
+            Piece::up(Mesh::Box, Mat::Steel, p3(0, 200, 0), p3(1000, 1800, 1000)),
+        ];
+        s.bounds = s.pieces[0].vol().join(s.pieces[1].vol());
+        let meshes: Vec<_> = kit::MESHES.iter().map(|&m| kit::geom(m)).collect();
+        let sun = unit([0.45, 0.82, 0.35]);
+        let shadow = Shadow::new(&s, &meshes, 0, sun);
+        assert!(shadow.visibility([-0.7, 0.2, -0.55], sun[1]) < 0.1, "the block must cast onto the floor");
+        for p in [[0.0, 2.0, 0.0], [1.8, 0.2, 1.8], [-2.0, 0.2, 2.0]] {
+            assert!(shadow.visibility(p, sun[1]) > 0.95, "unobstructed face self-shadows at {p:?}");
+        }
+    }
+
+    #[test]
+    fn contact_occlusion_does_not_stripe_a_sloping_plane() {
+        let (w, h, f) = (96, 64, 2.0);
+        let n = unit([0.0, 0.8, -0.6]);
+        let mut shot = Shot { w, h, px: vec![[0.5; 3]; w * h], z: vec![0.0; w * h],
+            who: vec![1; w * h], normals: vec![n; w * h] };
+        let scale = h as f32 * f * 0.5;
+        for y in 0..h {
+            for x in 0..w {
+                let ry = (h as f32 * 0.5 - y as f32 - 0.5) / scale;
+                shot.z[y * w + x] = -6.0 / (n[1] * ry + n[2]);
+            }
+        }
+        shot.occlusion([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], f);
+        assert!(shot.px.iter().all(|p| (p[0] - 0.5).abs() < 1e-4), "a plane cannot occlude itself");
+    }
 }
 
 // ------------------------------------------------- experiment 09: comparing
