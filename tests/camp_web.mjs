@@ -567,7 +567,7 @@ async function main() {
     ok((built.ports || []).length > 0, 'and it has the port its design gave it');
 
     panels.renderInspector(mine.id, { open() {} });
-    ok(/open the machine/.test(el('inspect').innerHTML),
+    ok(/open the design/.test(el('inspect').innerHTML),
       'and the inspector now offers to open it rather than to design it');
 
     // ---- the two gestures the play session could not find

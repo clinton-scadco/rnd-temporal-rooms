@@ -521,6 +521,7 @@ fn form(req: &Req) -> Result<Json, String> {
     Ok(scene
         .to_json()
         .set("ok", true)
+        .set("facility", crate::mp::facility::layout(&design).to_json())
         .set("design", design.to_json())
         .set("source", design.emit()))
 }
@@ -556,7 +557,7 @@ fn inside(j: &Json) -> Result<Json, String> {
     let c = crate::machine::orbit::compile(&design)?;
     let r = crate::machine::eval::report(&design, &c);
     let phase = c.equivalent_tick(now / crate::mp::DESIGN_TICK);
-    let m = c.state_at(&design, phase)?;
+    let m = c.state_at(&design, now / crate::mp::DESIGN_TICK)?;
     Ok(crate::machine::snap::render(&design, &m, &r)
         .set("ok", true)
         .set("phase", phase as i64)

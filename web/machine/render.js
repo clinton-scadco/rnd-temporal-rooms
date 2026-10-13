@@ -191,8 +191,8 @@ export function draw(ctx, view, ui) {
   const byName = new Map();
   const wireFlow = new Map();
   if (snap) {
-    for (const u of snap.units) byName.set(u.name, u);
-    for (const w of snap.wires) wireFlow.set(key(w), w);
+    for (const u of (snap.units || [])) byName.set(u.name, u);
+    for (const w of (snap.wires || [])) wireFlow.set(key(w), w);
   }
 
   for (let i = 0; i < state.design.wires.length; i++) {

@@ -161,7 +161,7 @@ ok(cat.plot > 32, 'the plot has a size');
 for (const p of cat.protos) {
   ok(p.w > 0 && p.h > 0, `${p.tag} has a footprint`);
   ok(!!p.title && !!p.role && !!p.note, `${p.tag} can be drawn in the palette`);
-  if (p.role === 'machine') {
+  if (p.hasExample) {
     ok(!!p.macro, `${p.tag} carries the recipe its design compiles to`);
     ok(p.macro.cycleSeconds > 0 && p.macro.gives.length > 0, `${p.tag} makes something`);
     ok(p.macro.width === p.w && p.macro.height === p.h, `${p.tag}'s palette size is its real size`);

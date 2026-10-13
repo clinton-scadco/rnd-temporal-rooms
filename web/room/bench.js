@@ -36,10 +36,13 @@ export const bench = {
 
 let ready = false;
 let design = null;      // the document in the window, live or draft
+let layout = null;
 let state = null;       // what every component in it is doing, and why
 let cursor = null;      // where the pointer is: { hit, tile, at }
 let onLeave = () => {};
-let mode = 'form';
+let mode = 'plan';
+let intent = null;
+let setMode = () => {};
 
 export async function init(hooks) {
   onLeave = hooks.onLeave || (() => {});
@@ -62,7 +65,7 @@ export async function init(hooks) {
       onPick: picked, onGround: put,
       onHover: h => { cursor = h; paint(); }, onCancel: cancel,
     });
-    const switchMode = value => {
+    const switchMode = setMode = value => {
       mode = value;
       $('plant3d').hidden = mode === 'plan';
       $('benchplan').hidden = mode !== 'plan';
@@ -73,6 +76,7 @@ export async function init(hooks) {
     };
     $('benchviewplan').onclick = () => switchMode('plan');
     $('benchviewform').onclick = () => switchMode('form');
+    switchMode(mode);
   }
   palette();
   $('benchedit').onclick = () => draft();
@@ -110,6 +114,8 @@ export async function init(hooks) {
 
 export async function open(id) {
   bench.id = id;
+  intent = null;
+  if ($('benchstart')) $('benchside').scrollTop=0;
   bench.sel = null;
   cancel();
   await refresh(true);
@@ -147,6 +153,7 @@ export async function refresh(refit) {
   const res = await net.form(bench.id, i.hasDraft);
   if (!res.ok) return toast(res.error);
   design = res.design;
+  layout = res.facility;
   if ($('benchplan')) plan.show(design, net.state.parts, { selected: bench.sel, refit });
   plant.show(res, refit);
   // A rebuild renumbers the owners the renderer highlights by, so the
@@ -154,6 +161,8 @@ export async function refresh(refit) {
   // left pointing at whatever now holds its old index.
   plant.pick(design && design.units.some(u => u.name === bench.sel) ? bench.sel : null);
   state = await net.inside(bench.id, i.hasDraft);
+  if (refit) { palette(); if (!design?.units.length) setMode('plan'); }
+  start(i);
   $('benchname').textContent = i.name + ' · ' + i.title + (i.hasDraft ? ' · draft' : '');
   $('benchedit').disabled = !!i.editor;
   $('benchcommit').disabled = !mine;
@@ -192,7 +201,7 @@ function palette() {
   const cat = net.state.parts;
   if (!cat) return;
   const fam = $('family');
-  const fams = [...new Set(cat.parts.map(p => p.family))].sort();
+  const fams = ["source","store","sink","mechanical","process","heat","control"].filter(f=>cat.parts.some(p=>p.family===f));
   if (!fam.options.length) {
     fam.innerHTML = [EVERYTHING, ...fams].map(f => `<option>${f}</option>`).join('');
     fam.value = EVERYTHING;
@@ -201,7 +210,8 @@ function palette() {
   box.innerHTML = '';
   const showing = fam.value === EVERYTHING ? fams : [fam.value];
   for (const f of showing) {
-    const parts = cat.parts.filter(p => p.family === f);
+    const preferred=["drill","intake","bin","storagetank","dispatch","sorter"];
+    const parts = cat.parts.filter(p => p.family === f).sort((a,b)=>(preferred.includes(a.kind)?0:1)-(preferred.includes(b.kind)?0:1));
     if (!parts.length) continue;
     // A heading per family, so the whole vocabulary being on screen at once
     // is still readable rather than thirty-eight buttons in a column.
@@ -222,6 +232,16 @@ function palette() {
       // forward to is a progression nobody notices.
       if (p.locked) b.classList.add('locked');
       b.innerHTML = `<span>${p.title}</span><span class="n">${p.w}&times;${p.h}</span>`;
+      if (typeof p.native === 'boolean') {
+        b.classList.toggle('costly', !p.native && p.crateable);
+        b.classList.toggle('illegal', !p.native && !p.crateable);
+        if (!p.native) {
+          const price=document.createElement('i');price.className='price';
+          price.textContent=p.crateable ? Number(p.gears||0).toLocaleString() : 'no';
+          b.appendChild(price);
+          b.title += '\n'+(p.why||('Imported from '+p.madeIn));
+        }
+      }
       b.onclick = () => {
         if (p.locked) return toast(`${p.title} has not been unlocked yet`);
         bench.holding = bench.holding === p.kind ? null : p.kind;
@@ -239,6 +259,72 @@ function palette() {
 }
 
 const partOf = kind => (net.state.parts ? net.state.parts.parts.find(p => p.kind === kind) : null);
+
+function groundAt(i) {
+  if (!i) return null;
+  return (net.state.view?.world.deposits || []).find(d =>
+    i.x < d.x+d.w && d.x < i.x+i.w && i.y < d.y+d.h && d.y < i.y+i.h);
+}
+
+// These are suggestions on the same blank plot. They never place a prefab or
+// constrain what the player can combine in the design.
+function start(i) {
+  const box = $('benchstart');
+  if (!box) return;
+  const ground = groundAt(i);
+  const units = design?.units || [];
+  const has = kind => units.some(u => u.kind === kind);
+  if (!intent) intent = has('bin') || has('storagetank') ? 'store'
+    : has('dispatch') ? 'ship'
+    : has('drill') || has('intake') || (ground && !units.length) ? 'extract' : 'process';
+  const options = [['extract','Extract'],['process','Process'],['store','Store'],['ship','Ship']];
+  let next, why, route;
+  if (intent === 'extract') {
+    const first = ground?.item === 'Water' ? 'intake' : 'drill';
+    route = first === 'intake' ? 'Water intake pump → Product outlet' : 'Mining drill → Product outlet';
+    if (!ground) why = 'This plot has no deposit underneath it. Extract on an ore seam, coal seam or watercourse.';
+    else if (!has(first)) { next = first; why = 'Start with '+partOf(first).title+'. Click its button below, then click the plot to place it.'; }
+    else if (!has('outlet')) { next = 'outlet'; why = 'Add a product outlet so the extracted goods can leave this plot.'; }
+    else {
+      const source=units.find(u=>u.kind===first);
+      const linked=design.wires.some(w=>w.from===source.name && units.some(u=>u.name===w.to&&u.kind==='outlet'));
+      why=linked ? (i.hasDraft ? 'The extraction route is connected. Commit to install it.' : 'Extraction is ready. Connect the plot’s outside output to a store, process or shipping destination.')
+        : 'Turn on wire, click the drill or intake, then click the outlet. Join the matching solid or liquid ports.';
+    }
+  } else if (intent === 'store') {
+    route = 'Belt / pipe intake → Container / tank → Product / sorter outlet';
+    if (!has('bin') && !has('storagetank')) { next = 'bin'; why = 'Start with a bulk container for solids, or choose a liquid tank below for fluids.'; }
+    else if (!has('inlet') && !has('pump')) { next = has('storagetank') ? 'pump' : 'inlet'; why = 'Add an intake. Select it and choose the incoming goods in its settings.'; }
+    else if (!has('outlet') && !has('sorter') && !has('dispatch')) { next = 'outlet'; why = 'Add an outlet. Use sorter outlets to separate goods from a mixed container.'; }
+    else why = 'Connect each intake to a container, then connect the container to its outlets. More connected containers add capacity; loading interfaces set throughput.';
+  } else if (intent === 'ship') {
+    route = 'Belt / pipe intake → Shipping dock';
+    if (!has('inlet') && !has('pump')) { next = 'inlet'; why = 'Place an intake, then select it and choose the goods you want to ship.'; }
+    else if (!has('dispatch')) { next = 'dispatch'; why = 'Place a shipping dock. Goods delivered here will count towards orders.'; }
+    else why = 'Connect the intake to the dock and commit. Outside, connect the goods supplier to this works.';
+  } else {
+    route = 'Delivered material + drive → Process → Product outlet';
+    const processing = units.some(u => partOf(u.kind)?.family === 'process');
+    if (!processing) { next = 'crusher'; why = 'Choose the job first: a crusher reduces ore, a mill makes powder, a separator concentrates it. Start with the process, then add what its inputs need.'; }
+    else why = 'Select the process to read its inputs. Add a material intake and a drive: a water wheel, steam engine or electric motor. Connect the product to an outlet.';
+  }
+  const wired = design?.wires?.length > 0;
+  box.innerHTML = '<h2>Start here</h2>'+
+    (ground ? '<p class="site">Below this plot: <b>'+(ground.itemTitle||ground.item)+'</b> · up to '+ground.yields+'/s</p>' : '<p class="site">Open ground · choose what to build</p>')+
+    '<div class="intent">'+options.map(([key,label])=>'<button data-intent="'+key+'" class="'+(intent===key?'on':'')+'">'+label+'</button>').join('')+'</div>'+
+    '<p class="design-route">'+route+'</p><p>'+why+'</p>'+
+    (intent==='store' ? '<p class="muted">Containers on one plot share stock. Use separate plots for independent stores.</p>' : '')+
+    (next ? '<button class="startpart" data-start="'+next+'">Place '+partOf(next).title+'</button>' : '')+
+    (wired && i.hasDraft && intent!=='extract' ? '<p class="muted">Commit to install this draft. Then connect its outside ports to the rest of your works.</p>' : '')+
+    (!units.length ? '<p class="muted">These are starting points. All components remain available below.</p>' : '');
+  box.querySelectorAll('[data-intent]').forEach(b=>b.onclick=()=>{intent=b.dataset.intent;start(i);});
+  box.querySelectorAll('[data-start]').forEach(b=>b.onclick=()=>{
+    const part=partOf(b.dataset.start);
+    if (part.locked) return toast(part.title+' is not unlocked yet');
+    bench.holding=part.kind;bench.face=null;bench.wiring=false;bench.wire=null;
+    hint();paint();
+  });
+}
 
 /// What the pointer is for, in the bar, in a sentence.
 ///
@@ -299,11 +385,20 @@ async function draft() {
 
 /// One component, placed at the tile under the pointer.
 async function put(x, y) {
-  if (!bench.holding) return;
-  if (!(await draft())) return;
+  const kind=bench.holding,id=bench.id,code=net.state.code,z=bench.level,face=bench.face;
+  if (!kind) return;
+  if (!(await draft()) || bench.id!==id || net.state.code!==code) return;
   const res = await net.send('PlaceComponent', {
-    id: bench.id, kind: bench.holding, x, y, z: bench.level, face: bench.face,
+    id, kind, x, y, z, face,
   });
+  if (res.ok && kind==='drill' && bench.id===id && net.state.code===code) {
+    const ground=groundAt(net.byId(bench.id));
+    if (ground?.item==='Coal') {
+      const current=await net.form(bench.id,true);
+      const u=current.design?.units.filter(u=>u.kind==='drill').at(-1);
+      if (u) await net.send('TuneComponent',{id:bench.id,unit:u.name,field:'subst',value:'coal'});
+    }
+  }
   if (res.ok) await refresh(false);
 }
 
@@ -314,7 +409,7 @@ async function commit() {
   if (!res.ok) return toast(res.error);
   const out = await net.send('CommitMachineDesign', { id: bench.id, design: res.design });
   if (out.ok) {
-    toast('committed: the machine changes at one tick, everywhere');
+    toast('committed: this works is now running the new design');
     cancel();
     await refresh(false);
   }
@@ -325,6 +420,11 @@ async function commit() {
 function info(i) {
   const box = $('benchinfo');
   const m = i.macro || {};
+  const facility = layout || m.facility || {};
+  const units=design?.units||[];
+  const extent=units.length ? [Math.min(...units.map(u=>u.x)),Math.min(...units.map(u=>u.y)),
+    Math.max(...units.map(u=>u.x+(u.face&1?partOf(u.kind).h:partOf(u.kind).w))),
+    Math.max(...units.map(u=>u.y+(u.face&1?partOf(u.kind).w:partOf(u.kind).h)))] : [0,0,0,0];
   const sel = bench.sel && design ? design.units.find(u => u.name === bench.sel) : null;
   const live = state && state.ok ? state.units.find(u => u.name === bench.sel) : null;
   let html = '';
@@ -333,25 +433,17 @@ function info(i) {
   // opens: a room comes with ground rather than with a working pit. So it
   // says what it is short of.
   if (design && !design.units.length) {
-    html += '<div class="muted" style="font-size:11px;margin-bottom:8px">' +
-      (i.role === 'source'
-        ? 'Nothing in here yet. A head that works the ground under it is an '
-          + '<b>inlet</b> (or a <b>pump</b>, for water) set to draw what is down there, '
-          + 'wired to an <b>outlet</b> for it to leave by.'
-        : 'Nothing in here yet. Pick a component on the left and click the floor; '
-          + 'then <b>wire</b> them together.')
-      + '<br><span class="muted">Placing anything takes a draft on its own. '
-      + 'The machine outside keeps running until you commit.</span></div>';
+    html += '<p class="muted">Pick a component, then click the plot. Connect its output to the next component’s input. Commit when the design is ready.</p>';
   }
   html +=
     `<div class="row"><span>components</span><span>${design ? design.units.length : 0}</span></div>` +
     `<div class="row"><span>connections</span><span>${design ? design.wires.length : 0}</span></div>` +
     `<div class="row"><span>cycle</span><span>${(m.cycleSeconds || 0).toFixed(1)}s</span></div>` +
-    `<div class="row"><span>footprint</span><span>${m.designWidth}&times;${m.designHeight}</span></div>`;
+    `<div class="row"><span>footprint</span><span>${(extent[2]-extent[0])}&times;${(extent[3]-extent[1])}</span></div>`;
   // Section 21, at the inner altitude: what is stopping this machine, in the
   // machine's own words. The outer inspector says whether the world is
   // feeding it; this says whether it could use more if it were.
-  if (state && state.ok && state.holding && state.holding.length) {
+  if (!facility.storage && state && state.ok && state.holding && state.holding.length) {
     html += '<h2>holding it back</h2>';
     for (const h of state.holding.slice(0, 6)) {
       html += `<div class="row"><span>${h.name}</span>` +
@@ -359,11 +451,13 @@ function info(i) {
         `<div class="muted" style="font-size:10px;margin:-2px 0 4px">${h.why || ''}</div>`;
     }
   }
+  if (facility.storage) html += '<div class="row"><span>storage capacity</span><span>'+facility.capacity+'</span></div>';
   if (sel) {
     const p = net.state.parts.parts.find(p => p.kind === sel.kind);
     html += `<h2>${sel.name}</h2><div class="row"><span>${p ? p.title : sel.kind}</span>` +
       `<span>${sel.x},${sel.y},${sel.z || 0}</span></div>`;
-    if (live) {
+    if (p) html += '<p class="muted">'+p.blurb+'</p>';
+    if (live && !facility.storage) {
       html += `<div class="row"><span>doing</span>` +
         `<span style="color:var(--${live.status === 'running' ? 'good' : 'signal'})">${live.status}</span></div>` +
         `<div class="row"><span>utilisation</span><span>${(live.util || 0).toFixed(0)}%</span></div>`;
@@ -404,6 +498,7 @@ function info(i) {
     if (p && (p.tunable || p.phys?.materials?.length > 1)) html += tuner(sel, p);
   }
   box.innerHTML = html;
+  if ($('benchstart')) box.classList.toggle('has-selection', !!sel);
   if ($('bdelete')) {
     $('bdelete').onclick = async () => {
       if (!(await draft())) return;
@@ -449,7 +544,7 @@ function tuner(u, p) {
   return frame+processTuner(u,p);
 }
 function processTuner(u, p) {
-  const t = u.tune || {};
+  const t = { ...u, ...(u.tune || {}), subst: u.draws ?? u.tune?.subst };
   const field = (name, label, value, type = 'number') =>
     `<div class="row"><span>${label}</span>` +
     `<input data-tune="${name}" type="${type}" value="${value}" style="width:80px"></div>`;
@@ -458,9 +553,17 @@ function processTuner(u, p) {
     case 'gearbox': return '<h2>tune</h2>' + field('ratio', 'ratio', t.ratio ?? 4);
     case 'valve': case 'clutch': return '<h2>tune</h2>' + field('limit', 'limit', t.limit ?? 100);
     case 'column': return '<h2>tune</h2>' + field('stages', 'stages', t.stages ?? 2);
-    case 'pump': case 'inlet':
+    case 'pump': case 'inlet': case 'sorter': {
+      const defaults={ore:'IronOre',coal:'Coal',iron:'IronBillet',water:'Water',crude:'Crude',slag:'Slag'};
+      const selected=u.item||defaults[t.subst];
+      const label=tag=>tag.replace(/([a-z])([A-Z])/g,'$1 $2').replace('Gear','Gears');
+      return '<h2>Goods</h2><div class="row"><span>'+(u.kind==='sorter'?'filters':'receives')+'</span><select data-tune="item">'+
+        (p.goods||[]).map(tag=>'<option value="'+tag+'"'+(tag===selected?' selected':'')+'>'+label(tag)+'</option>').join('')+'</select></div>'+
+        '<p class="muted">'+(u.kind==='sorter'?'Only these goods leave through this sorter.':'Connect a supplier of these goods to the plot’s outside intake.')+'</p>';
+    }
+    case 'drill': case 'intake':
       return '<h2>tune</h2><div class="row"><span>draws</span><select data-tune="subst">' +
-        net.state.parts.substances.filter(s => s.source !== false).map(s =>
+        net.state.parts.substances.filter(s => s.source !== false && (u.kind!=='drill'||['ore','coal'].includes(s.tag)) && (u.kind!=='intake'||s.tag==='water') && (!['inlet','drill','sorter'].includes(u.kind)||s.domain==='material'||['ore','coal','iron','slag'].includes(s.tag))).map(s =>
           `<option value="${s.tag}"${s.tag === t.subst ? ' selected' : ''}>${s.title}</option>`).join('') +
         '</select></div>';
     default: return '';
@@ -541,6 +644,7 @@ async function join(from, to) {
 /// A click in the plant. In the wire tool it is one of the two ends; otherwise
 /// it is a selection, the way it always was.
 function picked(name) {
+  if ($('benchstart')) $('benchside').scrollTop=0;
   if (bench.wiring) {
     if (!bench.wire) {
       bench.wire = name;

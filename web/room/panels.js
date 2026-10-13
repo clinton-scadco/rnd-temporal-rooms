@@ -318,7 +318,15 @@ export function renderInspector(id, hooks) {
   if (i.macro) {
     const m = i.macro;
     const line = v => v.map(a => `${net.num(a.qty)} ${a.item}`).join(', ') || 'nothing';
-    html += '<h2>the machine inside</h2><dl>' +
+    const facility=m.facility;
+    if (facility?.storage) {
+      const ports=v=>v.map(p=>`${net.num(p.perSecond)}/s ${p.item}`).join(', ')||'none';
+      html += '<h2>Storage design</h2><dl>'+
+        `<dt>capacity</dt><dd>${net.num(facility.capacity)}</dd>`+
+        `<dt>receives</dt><dd>${ports(facility.inputs)}</dd>`+
+        `<dt>outlets</dt><dd>${ports(facility.outputs)}</dd>`+
+        `<dt>ships</dt><dd>${ports(facility.shipping)}</dd></dl>`;
+    } else html += '<h2>the design inside</h2><dl>' +
       `<dt>cycle</dt><dd>${m.cycleSeconds.toFixed(1)}s</dd>` +
       `<dt>takes</dt><dd>${line(m.takes)}</dd>` +
       `<dt>gives</dt><dd>${line(m.gives)}</dd>` +
@@ -336,7 +344,7 @@ export function renderInspector(id, hooks) {
   // yet -- which is how an empty chassis stops being empty. `designed` comes
   // from the room, so the panel does not have to know which roles those are.
   if (i.designed) {
-    html += `<button data-act="open">${i.macro ? 'open the machine' : 'design it'}</button>`;
+    html += `<button data-act="open">${i.macro ? 'open the design' : 'design it'}</button>`;
     if (i.macro) {
       html += '<button data-act="duplicate" ' +
         'title="a copy of this design, which then goes its own way">duplicate</button>';

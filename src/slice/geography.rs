@@ -10,15 +10,12 @@ pub fn offset(p: Phase) -> i32 { p.index() as i32 * land::PLOT }
 
 // Authored, stepped seams. Both neighbouring patches use the same edge.
 pub fn edge(n: usize, y: i32) -> i32 {
-    let bend = match y {
-        0..=13 => 4,
-        14..=23 => 0,
-        24..=35 => -4,
-        36..=47 => 0,
-        48..=71 => 0,
-        _ => 0,
-    };
-    n as i32 * land::PLOT + if n == 0 || n == 3 { 0 } else { bend }
+    match n {
+        0 => 0,
+        1 => match y { 0..=13=>76,14..=23=>72,24..=35=>68,36..=47=>62,48..=59=>68,_=>72 },
+        2 => match y { 0..=13=>138,14..=23=>144,24..=35=>150,36..=47=>144,48..=59=>144,_=>144 },
+        _ => WIDTH,
+    }
 }
 
 pub fn phase_at(x: i32, y: i32) -> Option<Phase> {
@@ -35,12 +32,12 @@ pub fn contains(p: Phase, x: i32, y: i32, w: i32, h: i32) -> bool {
 pub fn polygon(p: Phase) -> Json {
     let n = p.index();
     let mut pts = Vec::new();
-    for y in [0, 14, 24, 36, 48, HEIGHT] {
+    for y in [0, 14, 24, 36, 48, 60, HEIGHT] {
         let before = (y-1).max(0);
         pts.push(Json::arr(vec![edge(n, before), y]));
         pts.push(Json::arr(vec![edge(n, y.min(HEIGHT-1)), y]));
     }
-    for y in [HEIGHT, 48, 36, 24, 14, 0] {
+    for y in [HEIGHT, 60, 48, 36, 24, 14, 0] {
         let before = (y-1).max(0);
         pts.push(Json::arr(vec![edge(n+1, y.min(HEIGHT-1)), y]));
         pts.push(Json::arr(vec![edge(n+1, before), y]));

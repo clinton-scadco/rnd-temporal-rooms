@@ -263,6 +263,15 @@ const ui = {
   wiring: null, compatible: null, pointer: { x: 0, y: 0 },
   renderTime: 1234, scale: 1, flowLabels: true, font: 'sans-serif',
 };
+// Empty live works snapshots omit flow detail. Plan must still draw the first
+// draft so a player's first placement can complete.
+doc.state.design = { units: [], wires: [] };
+doc.state.snapshot = { ok: true, empty: true, units: [] };
+try {
+  const blank = stubCtx();
+  render.draw(blank, view, ui);
+  ok(blank.calls.length > 0, 'an empty works snapshot draws a usable Plan');
+} catch (e) { ok(false, `empty works Plan: ${e.message}`); }
 for (const name of names) {
   const opened = await fetch(base + '/api/design?name=' + name).then(r => r.json());
   doc.adopt(opened.design);

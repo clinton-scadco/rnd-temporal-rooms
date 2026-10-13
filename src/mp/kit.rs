@@ -143,6 +143,9 @@ pub struct Proto {
 /// powers itself, so a gear line is always a gear line *and* a power station,
 /// and a power station is always a coal problem.
 pub static PROTOS: &[Proto] = &[
+    Proto { tag: "works", title: "Works Plot", short: "Works", role: Role::Machine, w: 2, h: 2,
+        spec: Spec::Machine { design: "" },
+        blurb: "An empty plot. Design extraction, processing, storage or shipping with components." },
     // ---- extraction --------------------------------------------------
     Proto {
         tag: "head",
@@ -336,7 +339,7 @@ impl Proto {
     /// The design a freshly placed machine owns a copy of.
     pub fn design_source(&self) -> Option<&'static str> {
         match self.spec {
-            Spec::Machine { design } => Some(design),
+            Spec::Machine { design } if !design.is_empty() => Some(design),
             _ => None,
         }
     }
@@ -361,6 +364,7 @@ impl Proto {
             // Whether it is something you design. The client should not have to
             // know which roles those are.
             .set("designed", self.role.designed())
+            .set("hasExample", self.design_source().is_some())
             .set("note", self.rate_note());
         match self.spec {
             // The palette has to say that it needs ground, or the first thing

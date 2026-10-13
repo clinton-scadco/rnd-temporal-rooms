@@ -156,10 +156,10 @@ impl Install {
             // then the ground has the last word.
             // A head runs its design like any other machine, and then the
             // ground has the last word about the one thing it is standing on.
-            Spec::Extract => match (&self.lowered, &self.ground) {
+            Spec::Extract | Spec::Machine { .. } if self.digs() => match (&self.lowered, &self.ground) {
                 (Some(m), Some((item, cap))) => {
                     let cycle = m.cycle.max(1);
-                    let give = m.gives_of(item);
+                    let give = m.takes.iter().find(|(i,_)|i==item).map(|(_,q)|*q).unwrap_or(0);
                     // What the ground allows over one turn of this design.
                     //
                     // The first version of this stretched the *cycle* until the
@@ -195,7 +195,7 @@ impl Install {
                             .collect(),
                         m.gives
                             .iter()
-                            .map(|(i, q)| amount(i, if i == item { keep } else { scale(*q) }))
+                            .map(|(i, q)| amount(i, scale(*q)))
                             .collect(),
                         cycle,
                     )
@@ -205,6 +205,7 @@ impl Install {
                 // `compile` says which.
                 _ => (Vec::new(), Vec::new(), SIM_TICK_RATE),
             },
+            Spec::Extract => (Vec::new(), Vec::new(), SIM_TICK_RATE),
             Spec::Sink { .. } => {
                 let item = self.item.clone().unwrap_or_default();
                 (vec![amount(&item, 1)], Vec::new(), 1)
@@ -230,8 +231,40 @@ impl Install {
     }
 
     pub fn is_storage(&self) -> bool {
-        self.proto.role == Role::Storage
+        self.proto.role == Role::Storage || self.lowered.as_ref().is_some_and(|m| m.facility.storage)
     }
+
+    pub fn digs(&self) -> bool {
+        self.proto.digs() || self.lowered.as_ref().is_some_and(|m|!m.facility.ground.is_empty())
+    }
+
+    pub fn is_dispatch(&self) -> bool {
+        self.proto.role == Role::Sink || self.lowered.as_ref().is_some_and(|m|m.facility.dispatch)
+    }
+
+    pub fn role(&self) -> Role {
+        if self.is_storage() { Role::Storage } else if self.is_dispatch() { Role::Sink }
+        else if self.digs() { Role::Source } else { self.proto.role }
+    }
+
+    pub fn title(&self) -> &str {
+        if self.proto.tag != "works" { return self.proto.title; }
+        if self.is_storage() { "Storage Works" } else if self.is_dispatch() { "Shipping Works" }
+        else if self.digs() { "Extraction Works" } else if self.design.is_some() { "Processing Works" }
+        else { "Works Plot" }
+    }
+
+    pub fn ground_items(&self) -> Vec<String> {
+        if self.proto.digs() { self.draws() }
+        else { self.lowered.as_ref().map(|m|m.facility.ground.clone()).unwrap_or_default() }
+    }
+
+    /// The authored total budget, shared across all connected destinations.
+    pub(super) fn storage_rate(&self, item: &str, out: bool) -> Option<Qty> {
+        self.lowered.as_ref().filter(|m|m.facility.storage)
+            .map(|m|super::facility::port(&m.facility,item,out).unwrap_or(0))
+    }
+
 
     /// What this installation pulls in across its own boundary.
     ///
@@ -261,7 +294,11 @@ impl Install {
     /// [`World::ports_of`] exists and this does not try.
     pub fn ports(&self) -> Vec<Port> {
         if self.is_storage() {
-            return Vec::new();
+            return self.lowered.as_ref().filter(|m|m.facility.storage).map(|m|
+                m.facility.inputs.iter().map(|(i,q)|(i,q,false))
+                    .chain(m.facility.outputs.iter().map(|(i,q)|(i,q,true)))
+                    .map(|(i,q,out)|Port { item:i.clone(), domain:lower::domain_of(i), out,
+                        qty:*q, per_second:*q as f64 }).collect()).unwrap_or_default();
         }
         let (takes, gives, cycle) = self.recipe();
         let secs = super::as_secs(cycle).max(1e-9);
@@ -284,7 +321,7 @@ impl Install {
     pub fn capacity(&self) -> Qty {
         match self.proto.spec {
             Spec::Storage { capacity } => self.rated.unwrap_or(capacity),
-            _ => 0,
+            _ => self.lowered.as_ref().filter(|m|m.facility.storage).map(|m|m.facility.capacity).unwrap_or(0),
         }
     }
 }
@@ -537,11 +574,11 @@ impl World {
     /// The deposit one installation is standing on and can actually use.
     pub fn under(&self, id: Id) -> Option<&Deposit> {
         let i = self.get(id)?;
-        if !i.proto.digs() {
+        if !i.digs() {
             return None;
         }
         let (w, h) = i.size();
-        let draws = i.draws();
+        let draws = i.ground_items();
         self.deposits
             .iter()
             .find(|d| draws.iter().any(|it| *it == d.item) && d.touches(i.x, i.y, w, h))
@@ -566,7 +603,7 @@ impl World {
             .installs
             .iter()
             .filter(|i| {
-                i.proto.digs() && i.draws().iter().any(|it| *it == d.item) && {
+                i.digs() && i.ground_items().iter().any(|it| *it == d.item) && {
                     let (w, h) = i.size();
                     d.touches(i.x, i.y, w, h)
                 }
@@ -581,7 +618,7 @@ impl World {
     /// in a float is a desynchronisation with a delay fuse in it.
     fn appetite(i: &Install, item: &str) -> Qty {
         let Some(m) = &i.lowered else { return 0 };
-        let give = m.gives_of(item);
+        let give = m.takes.iter().find(|(i,_)|i==item).map(|(_,q)|*q).unwrap_or(0);
         if m.cycle == 0 {
             return 0;
         }
@@ -606,7 +643,7 @@ impl World {
     pub fn reprice(&mut self) {
         // Every head starts with nothing: one that has been moved off its seam,
         // or redesigned to draw something else, must lose what it had.
-        for i in self.installs.iter_mut().filter(|i| i.proto.digs()) {
+        for i in &mut self.installs {
             i.ground = None;
         }
         let ground: Vec<(Id, String, Qty)> = self
@@ -778,7 +815,7 @@ impl World {
             }
         }
         inst.name = format!("{}{}", proto.short, id);
-        let digs = inst.proto.digs();
+        let digs = inst.digs();
         self.installs.push(inst);
         self.next_id += 1;
         if digs {
@@ -809,7 +846,7 @@ impl World {
         self.hauls.retain(|h| h.from != id && h.to != id);
         // Taking a head down gives its share of the seam back to whatever is
         // still standing on it.
-        if gone.proto.digs() {
+        if gone.digs() {
             self.reprice();
         }
         Ok(gone)
@@ -832,7 +869,7 @@ impl World {
     /// connecting to it needs no menu.
     pub fn ports_of(&self, id: Id) -> Vec<Port> {
         let Some(i) = self.get(id) else { return Vec::new() };
-        if !i.is_storage() {
+        if !i.is_storage() || i.lowered.as_ref().is_some_and(|m|m.facility.storage) {
             return i.ports();
         }
         let mut items: Vec<String> = Vec::new();
@@ -932,6 +969,11 @@ impl World {
                 lower::item_title(item)
             ));
         }
+        for (i, out) in [(a,true),(b,false)] {
+            if i.storage_rate(item,out)==Some(0) {
+                return Err(format!("{} has no connected {} {} in its design",i.name,lower::item_title(item),if out {"outlet"} else {"intake"}));
+            }
+        }
         // Arbitration, unchanged in meaning and now stated about ports rather
         // than about bays. A machine that could draw one item from two places
         // needs a rule nobody has declared, and a machine whose output went two
@@ -986,6 +1028,11 @@ impl World {
         }
         if from == to {
             return Err("a transport has to go somewhere".into());
+        }
+        for (i,out) in [(a,true),(b,false)] {
+            if i.storage_rate(item,out)==Some(0) {
+                return Err(format!("{} has no connected {} {} in its design",i.name,lower::item_title(item),if out {"outlet"} else {"intake"}));
+            }
         }
         if !lower::ITEMS.contains(&item) {
             return Err(format!("`{item}` is not an item"));
@@ -1066,6 +1113,14 @@ impl World {
         let (ax, ay) = a.centre();
         let (bx, by) = b.centre();
         (((ax - bx).abs() + (ay - by).abs()) as u64) * 100
+    }
+
+    fn shared_storage_rate(&self, i: &Install, item: &str, out: bool) -> Option<Qty> {
+        i.storage_rate(item,out).map(|rate| {
+            let n=self.conns.iter().filter(|c|(if out {c.from} else {c.to})==i.id && c.item==item).count()
+                + self.hauls.iter().filter(|h|(if out {h.from} else {h.to})==i.id && h.item==item).count();
+            rate / n.max(1) as Qty
+        })
     }
 
     // --------------------------------------------------------- compiling
@@ -1204,13 +1259,15 @@ impl World {
                             // A head standing on ground that is already fully
                             // worked. Saying so is the difference between a
                             // puzzle and a bug.
-                            Some(i) if i.proto.digs() && i.design.is_some() => {
+                            Some(i) if i.digs() && i.design.is_some() => {
                                 match self.any_ground(i.x, i.y, i.size().0, i.size().1) {
                                     // Designed for something that is not
                                     // underneath it. Five prototypes used to
                                     // make this impossible by making it
                                     // unspellable; one chassis makes it a
                                     // mistake you can make and be told about.
+                                    Some(d) if i.ground_items().contains(&d.item) =>
+                                        "connect the extraction component to an outlet or process before committing".to_string(),
                                     Some(d) => format!(
                                         "it is standing on {} and is not designed to draw {}",
                                         d.title(),
@@ -1242,9 +1299,6 @@ impl World {
             if !i.is_storage() {
                 continue;
             }
-            if i.proto.role != Role::Storage {
-                continue;
-            }
             let mut n = Node::new(&i.name, Kind::Storage);
             n.capacity = i.capacity();
             n.policy = Policy::RoundRobin;
@@ -1255,6 +1309,9 @@ impl World {
             // arrived yet.
             if let Some(item) = &i.item {
                 n.holds.push(item.clone());
+            }
+            if let Some(m)=&i.lowered {
+                if m.facility.storage { n.holds.extend(m.facility.inputs.iter().map(|(i,_)|i.clone())); }
             }
             g.nodes.push(n);
         }
@@ -1282,11 +1339,9 @@ impl World {
             // experiment 13 wants somebody to build -- is a process like any
             // other. The role says where it sits in the room; the recipe says
             // what kind of node it is.
-            let kind = match i.proto.role {
-                Role::Source if inputs.is_empty() => Kind::Source,
-                Role::Sink => Kind::Sink,
-                _ => Kind::Process,
-            };
+            let kind = if i.is_dispatch() { Kind::Sink }
+                else if (i.digs() || i.proto.role==Role::Source) && inputs.is_empty() { Kind::Source }
+                else { Kind::Process };
             let mut n = Node::new(&i.name, kind);
             n.inputs = inputs;
             n.outputs = outputs;
@@ -1295,6 +1350,18 @@ impl World {
                 Spec::Sink { count, .. } => count,
                 _ => 1,
             };
+
+            // Container interfaces are finite. A cycle waits for the slowest
+            // authored loading interface on either side, including fan-out.
+            for c in self.conns.iter().filter(|c|c.from==i.id || c.to==i.id) {
+                let (id,out,amounts)=if c.to==i.id {(c.from,true,&n.inputs)} else {(c.to,false,&n.outputs)};
+                let Some(store)=self.get(id) else { continue };
+                if let Some(rate)=self.shared_storage_rate(store,&c.item,out) {
+                    if let Some(q)=amounts.iter().find(|a|a.item==c.item) {
+                        n.duration=n.duration.max(q.qty.saturating_mul(n.count).saturating_mul(SIM_TICK_RATE).div_ceil(rate.max(1)));
+                    }
+                }
+            }
             g.nodes.push(n);
             b.running.push(i.id);
         }
@@ -1309,10 +1376,26 @@ impl World {
             n.count = vehicles;
             let geo = Geometry { base, distance: self.span(h), speed };
             n.duration = geo.latency();
+            for (store,out) in [(self.get(h.from),true),(self.get(h.to),false)] {
+                if let Some(rate)=store.and_then(|i|self.shared_storage_rate(i,&h.item,out)) {
+                    n.duration=n.duration.max(load.saturating_mul(vehicles).saturating_mul(SIM_TICK_RATE).div_ceil(rate.max(1)));
+                }
+            }
             n.returns = geo.latency();
             n.geometry = Some(geo);
             g.nodes.push(n);
             b.running.push(h.id);
+        }
+
+        for i in self.installs.iter().filter(|i|i.is_storage()) {
+            let Some(m)=&i.lowered else { continue };
+            for (item,rate) in &m.facility.shipping {
+                let mut n=Node::new(&format!("{}_ship_{}",i.name,item),Kind::Sink);
+                n.inputs=vec![Amount {item:item.clone(),qty:*rate}];
+                n.duration=SIM_TICK_RATE;
+                g.edges.push(Edge {from:i.name.clone(),to:n.name.clone(),item:None});
+                g.nodes.push(n);
+            }
         }
 
         // ---- wires ------------------------------------------------------
@@ -1476,8 +1559,8 @@ impl World {
                             Json::obj()
                                 .set("id", Json::big(i.id as u128))
                                 .set("proto", i.proto.tag)
-                                .set("title", i.proto.title)
-                                .set("role", i.proto.role.word())
+                                .set("title", i.title())
+                                .set("role", i.role().word())
                                 // Whether this is a thing with an inside. The
                                 // client should not have to know which roles
                                 // those are -- and an empty one still has an
@@ -1505,7 +1588,7 @@ impl World {
                                 )
                                 .set(
                                     "capacity",
-                                    (i.proto.role == Role::Storage)
+                                    i.is_storage()
                                         .then(|| Json::big(i.capacity() as u128)),
                                 )
                                 .set("placedAt", i.placed)

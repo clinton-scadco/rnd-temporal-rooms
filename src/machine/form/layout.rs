@@ -489,11 +489,11 @@ pub fn arch(k: Kind) -> Arch {
     use Arch::*;
     use Kind::*;
     match k {
-        Reactor | Tank => Vessel,
-        Burner | Furnace | Gearbox | Crusher | Lathe | SteamEngine => Skid,
-        Heater | Pump | Generator | Motor | MechPump => Can,
-        Mains | Outlet | Skip => Pad,
-        Inlet | Hopper | Separator => Bin,
+        Reactor | Tank | StorageTank => Vessel,
+        Burner | Furnace | Gearbox | Crusher | Lathe | SteamEngine | MiningDrill => Skid,
+        Heater | Pump | Generator | Motor | MechPump | WaterIntake => Can,
+        Mains | Outlet | Skip | DispatchDock | Sorter => Pad,
+        Inlet | Hopper | Separator | BulkBin => Bin,
         Radiator | Fan => Bank,
         Drum | Exchanger | Preheater | Condenser | Mill | Jacket => Shell,
         Flywheel | Crank | WaterWheel | Pulley => Wheel,

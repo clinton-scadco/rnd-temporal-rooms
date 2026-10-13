@@ -34,6 +34,7 @@ let onTool = () => {};
 let onOpen = () => {};
 let onPipette = () => {};
 let lastCursor = 0;
+let pendingOpen = null;
 
 export function init(el, hooks) {
   canvas = el;
@@ -43,6 +44,12 @@ export function init(el, hooks) {
   onTool = hooks.onTool || (() => {});
   onOpen = hooks.onOpen || (() => {});
   onPipette = hooks.onPipette || (() => {});
+  net.onFrame(v => {
+    if (!pendingOpen) return;
+    if (pendingOpen.code !== net.state.code) { pendingOpen = null; return; }
+    const i=(v.world.installs||[]).find(i=>i.proto==='works' && i.x===pendingOpen.x && i.y===pendingOpen.y && i.placedBy===net.state.player);
+    if (i) { pendingOpen=null; clearTool(); select(i.id); onOpen(i.id); }
+  });
   addEventListener('resize', resize);
   resize();
   wire();
@@ -365,7 +372,7 @@ function click(x, y, e, rx = x + .5, ry = y + .5) {
   select(hit ? hit.id : (line === null || line === undefined ? null : line));
 }
 
-function place(x, y) {
+async function place(x, y) {
   const h = held();
   if (!h) return;
   if (collides(x, y, h.w, h.h)) return toast('that does not fit there');
@@ -383,7 +390,9 @@ function place(x, y) {
       pick: () => net.send('PlaceMachine', { ...common, item: i }),
     })));
   }
-  net.send('PlaceMachine', common);
+  if (h.p.tag==='works' && !tool.design) pendingOpen={x,y,code:net.state.code};
+  const res=await net.send('PlaceMachine', common);
+  if (!res.ok) pendingOpen=null;
 }
 
 /// The items a delivery depot might be set to: whatever anything in this room
@@ -429,7 +438,7 @@ function join(fromId, toId, e) {
     // The one pairing still refused, and not for want of a buffer: two bays
     // are joined by a transport, which has a length and a latency.
     if (a.role === 'storage' && b.role === 'storage') {
-      return toast('two bays need a transport between them');
+      return toast('two storage facilities need a transport between them');
     }
     // A connection was started from a particular port, so there is nothing
     // left to ask.
@@ -446,8 +455,8 @@ function join(fromId, toId, e) {
   }
   // A transport. Both ends must be bays, and the item must be something that
   // actually arrives at the loading end.
-  if (a.role !== 'storage' || b.role !== 'storage') return toast('a transport runs between two bays');
-  const items = arriving(a.id);
+  if (a.role !== 'storage' || b.role !== 'storage') return toast('a transport runs between storage facilities');
+  const items = arriving(a.id).filter(item => (!a.designed || portItems(a,true).includes(item)) && (!b.designed || portItems(b,false).includes(item)));
   if (!items.length) return toast(`nothing is delivered to ${a.name} yet`);
   choose(items, item => net.send('CreateWorldLink', { proto: tool.mode, from: a.id, to: b.id, item }), e);
 }
@@ -465,8 +474,8 @@ export function mating(a, b) {
   // A bay has no ports of its own until the room gives it some, so an empty
   // one falls back to what the other end can handle. Two machines with nothing
   // in common get an empty list and are told so.
-  if (a.role === 'storage' && !outs.length) return ins;
-  if (b.role === 'storage' && !ins.length) return outs;
+  if (a.role === 'storage' && !a.designed && !outs.length) return ins;
+  if (b.role === 'storage' && !b.designed && !ins.length) return outs;
   return both;
 }
 

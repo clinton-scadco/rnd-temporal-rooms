@@ -543,6 +543,7 @@ impl Machine {
                             let l = self.links[w];
                             let dp = &parts::part(self.kinds[l.to]).ports[l.to_port];
                             let db = &self.st[l.to].buf[l.to_port];
+                            if self.kinds[l.to] == Kind::Sorter && mine.item_tag() != self.tunes[l.to].drawn().item_tag() { return 0; }
                             if !db.takes(&mine) {
                                 return 0;
                             }
@@ -703,10 +704,10 @@ impl Machine {
                 None => match kind {
                     Kind::Reactor => self.reactor(i, d),
                     Kind::Mains => self.source(i, Subst::Power, d),
-                    Kind::Pump => self.source(i, self.tunes[i].subst, d),
-                    Kind::Inlet => self.source(i, self.tunes[i].subst, d),
-                    Kind::Hopper | Kind::Tank | Kind::Drum | Kind::Flywheel => self.store(i),
-                    Kind::Outlet | Kind::Skip | Kind::Radiator => self.dump(i),
+                    Kind::Pump | Kind::WaterIntake => self.source(i, self.tunes[i].subst, d),
+                    Kind::Inlet | Kind::MiningDrill => self.source(i, self.tunes[i].subst, d),
+                    Kind::Hopper | Kind::Tank | Kind::Drum | Kind::Flywheel | Kind::BulkBin | Kind::StorageTank => self.store(i),
+                    Kind::Outlet | Kind::Skip | Kind::Radiator | Kind::DispatchDock | Kind::Sorter => self.dump(i),
                     Kind::Valve | Kind::Clutch => self.limiter(i),
                     Kind::Gearbox => self.gearbox(i, d),
                     Kind::Pulley => self.pulley(i, d),
@@ -1170,7 +1171,7 @@ impl Machine {
     fn source(&mut self, i: usize, subst: Subst, d: &mut Delta) {
         let p = &parts::part(self.kinds[i]).ports[0];
         let s = &mut self.st[i];
-        let want = Stuff::fresh(subst);
+        let want = if matches!(self.kinds[i],Kind::Inlet|Kind::Pump) { self.tunes[i].drawn() } else { Stuff::fresh(subst) };
         // A source that has been left holding something else -- a pump retuned
         // from water to crude while it was running -- empties before it draws.
         if !s.buf[0].takes(&want) {
@@ -1245,7 +1246,7 @@ impl Machine {
         self.st[i].shipped[0] += n;
         if what.subst == Subst::Heat {
             d.heat_wasted += n;
-        } else if self.kinds[i] == Kind::Outlet {
+        } else if matches!(self.kinds[i], Kind::Outlet | Kind::Sorter | Kind::DispatchDock) {
             bump(&mut d.gave, what, n);
             if what.subst == Subst::Power {
                 d.power += n;

@@ -29,7 +29,7 @@ function draw(){
   for(const p of geo.patches){
     const region=frame.regions.find(r=>r.tag===p.tag);if(!region)continue;const tx=sx(p.offsetX+36),ty=sy(64);
     ctx.fillStyle='rgba(14,21,23,.88)';ctx.fillRect(tx-94,ty-15,188,47);ctx.textAlign='center';ctx.fillStyle=ERAS[p.phase];ctx.font='600 12px system-ui';ctx.fillText(region.title,tx,ty);
-    ctx.fillStyle='#b8c3bd';ctx.font='10px system-ui';ctx.fillText(`${region.machines} machines · ${region.gridMW} MW`,tx,ty+17);
+    ctx.fillStyle='#b8c3bd';ctx.font='10px system-ui';ctx.fillText(`${region.machines} works · ${region.gridMW} MW`,tx,ty+17);
   }
   for(const c of geo.crossings){
     const g=frame.shipping?.interfaces.find(g=>g.fracture===c.tag);ctx.fillStyle=g?.lit?'#c6b68b':'#676b63';ctx.fillRect(sx(c.x)-5,sy(c.y)-9,10,18);ctx.strokeStyle='#e7d8ad';ctx.lineWidth=1;ctx.strokeRect(sx(c.x)-5,sy(c.y)-9,10,18);

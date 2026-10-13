@@ -42,7 +42,7 @@ use crate::machine::design::Design;
 use crate::machine::eval::{self, Report};
 use crate::machine::orbit;
 use crate::machine::stuff::{
-    Domain, Stuff, Subst, FORM_BILLET, FORM_GEAR, FORM_SCRAP, FORM_STRIP, SIZE_POWDER,
+    Domain, Stuff,
 };
 use crate::model::{Qty, Tick};
 
@@ -53,35 +53,7 @@ use crate::model::{Qty, Tick};
 /// a different item rather than a slightly worse one. That is most of the
 /// reason a crushing line is worth designing at all.
 pub fn item_of(s: &Stuff) -> &'static str {
-    match s.subst {
-        Subst::Power => "Power",
-        Subst::Heat => "Heat",
-        Subst::Torque => "Torque",
-        Subst::Stroke => "Stroke",
-        Subst::Water => "Water",
-        Subst::Coal => "Coal",
-        Subst::Crude => "Crude",
-        Subst::Slag => "Slag",
-        Subst::Light => "LightFraction",
-        Subst::Middle => "MiddleFraction",
-        Subst::Heavy => "HeavyFraction",
-        Subst::Ore => {
-            if s.q.purity >= 80 && s.q.size >= SIZE_POWDER {
-                "Concentrate"
-            } else if s.q.size >= SIZE_POWDER {
-                "OrePowder"
-            } else {
-                "IronOre"
-            }
-        }
-        Subst::Iron => match s.q.form {
-            FORM_GEAR => "Gear",
-            FORM_STRIP => "IronStrip",
-            FORM_BILLET => "IronBillet",
-            FORM_SCRAP => "Scrap",
-            _ => "Iron",
-        },
-    }
+    s.item_tag()
 }
 
 /// Which domain an item belongs to.
@@ -179,6 +151,7 @@ pub struct Macro {
     /// machine's inspector says so.
     pub settled: bool,
     pub transient: Tick,
+    pub facility: super::facility::Layout,
 }
 
 impl Macro {
@@ -215,6 +188,7 @@ impl Macro {
             )
         };
         Json::obj()
+            .set("facility", self.facility.to_json())
             .set("name", self.name.clone())
             .set("cycle", self.cycle)
             .set("cycleSeconds", super::as_secs(self.cycle))
@@ -237,10 +211,21 @@ pub fn lower(d: &Design) -> Result<Macro, String> {
     if let Some(f) = d.check().first() {
         return Err(f.what.clone());
     }
+    let facility=super::facility::layout(d);
+    if facility.ground.len()>1 { return Err("Use a separate plot for each ground resource type".into()); }
+    if facility.storage {
+        let (design_w,design_h,_)=d.footprint();
+        let (w,h)=Macro::footprint(design_w,design_h);
+        return Ok(Macro { name:d.name.clone(),cycle:DESIGN_TICK,takes:Vec::new(),gives:Vec::new(),
+            wasted:0,power:0,design_w,design_h,w,h,components:d.units.len(),settled:true,transient:0,facility });
+    }
     let c = orbit::compile(d)?;
     let r = eval::report(d, &c);
     let den = if c.settled() { c.period } else { c.searched.max(1) };
-    Ok(of_report(d, &r, den))
+    let mut m=of_report(d, &r, den);
+    if m.facility.storage { m.takes.clear(); m.gives.clear(); }
+    if m.facility.dispatch { m.gives.clear(); }
+    Ok(m)
 }
 
 /// The report, as a recipe. Split out so a caller that already has one -- the
@@ -301,6 +286,7 @@ pub fn of_report(d: &Design, r: &Report, den: Tick) -> Macro {
         components: r.components,
         settled: r.settled,
         transient: r.transient,
+        facility: super::facility::layout(d),
     }
 }
 

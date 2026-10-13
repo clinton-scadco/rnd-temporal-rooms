@@ -49,7 +49,7 @@ use crate::json::Json;
 use crate::machine::design::{Design, Tune, Unit, Wire};
 use crate::machine::era::Mat;
 use crate::machine::parts::{self, Kind};
-use crate::machine::stuff::Subst;
+use crate::machine::stuff::{Subst, Stuff};
 use crate::model::Tick;
 
 /// One thing a player meant.
@@ -864,6 +864,18 @@ fn apply_one(w: &mut World, c: &Cmd, out: &mut Vec<Effect>) -> Result<(), String
             // a commit that silently moves a building, and place-and-delete
             // exists so that nothing ever silently moves.
             let (w0, h0) = if i.face & 1 == 1 { (m.h, m.w) } else { (m.w, m.h) };
+            let mut revised=i.clone();revised.lowered=Some(m.clone());
+            for conn in w.conns.iter().filter(|c|c.from==*id || c.to==*id) {
+                let output=conn.from==*id;
+                let valid=if revised.is_storage() {revised.storage_rate(&conn.item,output).unwrap_or(0)>0}
+                    else if output {revised.makes().contains(&conn.item)} else {revised.wants().contains(&conn.item)};
+                if !valid { return Err(format!("Disconnect the {} connection before removing its {}",super::lower::item_title(&conn.item),if output {"outlet"} else {"intake"})); }
+            }
+            for haul in w.hauls.iter().filter(|h|h.from==*id || h.to==*id) {
+                if !revised.is_storage() || revised.storage_rate(&haul.item,haul.from==*id).unwrap_or(0)==0 {
+                    return Err("Remove the transport before changing its connected storage interface".into());
+                }
+            }
             let (x, y, name) = (i.x, i.y, i.name.clone());
             w.free(x, y, w0, h0, Some(*id))?;
             let i = w.get_mut(*id).expect("checked above");
@@ -890,6 +902,9 @@ fn apply_one(w: &mut World, c: &Cmd, out: &mut Vec<Effect>) -> Result<(), String
             }
             if !super::lower::ITEMS.contains(&item.as_str()) {
                 return Err(format!("`{item}` is not an item"));
+            }
+            if bay.storage_rate(item,false)==Some(0) {
+                return Err(format!("{} has no connected intake for {}",bay.name,super::lower::item_title(item)));
             }
             if *qty == 0 {
                 return Err("an empty train is not an arrival".into());
@@ -965,7 +980,12 @@ fn tune(u: &mut Unit, field: &str, value: &str) -> Result<(), String> {
         "limit" => u.tune.limit = num()?.max(0) as u64,
         "stages" => u.tune.stages = num()?.max(0) as u32,
         "subst" => {
-            u.tune.subst = Subst::by_tag(value).ok_or(format!("there is no `{value}` to draw"))?
+            u.tune.subst = Subst::by_tag(value).ok_or(format!("there is no `{value}` to draw"))?;
+            u.tune.goods=None;
+        }
+        "item" => {
+            let goods=Stuff::for_item(value).ok_or(format!("there is no `{value}` to deliver"))?;
+            u.tune.subst=goods.subst;u.tune.goods=Some(goods);
         }
         // Experiment 14. A machine carried into a room keeps the frames it was
         // designed with, and a player editing it in the room can change them,
@@ -1082,7 +1102,7 @@ fn settings(u: &Unit) -> Vec<(&'static str, String)> {
         Kind::Reactor if u.tune.throttle != d.throttle => {
             out.push(("throttle", u.tune.throttle.to_string()))
         }
-        Kind::Pump | Kind::Inlet if u.tune.subst != d.subst => {
+        Kind::Pump | Kind::Inlet | Kind::MiningDrill | Kind::WaterIntake | Kind::Sorter if u.tune.subst != d.subst => {
             out.push(("subst", u.tune.subst.tag().to_string()))
         }
         Kind::Gearbox if u.tune.ratio != d.ratio => out.push(("ratio", u.tune.ratio.to_string())),
@@ -1094,6 +1114,7 @@ fn settings(u: &Unit) -> Vec<(&'static str, String)> {
         }
         _ => {}
     }
+    if let Some(goods)=u.tune.goods { out.push(("item",goods.item_tag().to_string())); }
     // The frame is orthogonal to all of the above -- a gearbox has a ratio and
     // a frame -- so it is tested on its own rather than as a match arm.
     if u.tune.mat != d.mat {

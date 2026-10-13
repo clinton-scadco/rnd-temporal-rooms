@@ -47,7 +47,7 @@ fn one_world_with_distinct_region_coordinates() {
     // be in one place in 1890 and another in 2037 -- but the *test* has to be
     // written against the resolved worlds rather than against the table, or it
     // is checking that a struct has three fields.
-    for f in land::LAND {
+    for f in temporal_rooms::slice::landscape::LAND {
         for p in PHASES {
             let Some((item, q)) = f.face(p).yields() else { continue };
             let Some((_, r)) = REGIONS.iter().enumerate().find(|(_, r)| r.phase == p) else {
@@ -57,7 +57,7 @@ fn one_world_with_distinct_region_coordinates() {
             let found = w
                 .deposits
                 .iter()
-                .find(|d| d.x == f.x + temporal_rooms::slice::geography::offset(p) && d.y == f.y && d.item == item)
+                .find(|d| d.x == f.x && d.y == f.y && d.item == item)
                 .unwrap_or_else(|| panic!("{}: {} is not at {},{} in {p}", f.tag, item, f.x, f.y));
             assert_eq!(found.w, f.w, "{}: a different width in {p}", f.tag);
             assert_eq!(found.h, f.h, "{}: a different height in {p}", f.tag);
@@ -93,9 +93,9 @@ fn the_ore_body_is_taken_and_then_built_over() {
     // naming the century where the same tiles are open.
     let (_, district) = region("district").expect("the district");
     let why = district
-        .built_over(reach.x + temporal_rooms::slice::geography::offset(Phase::P2037), reach.y, 4, 4)
+        .built_over(99, 5, 4, 4)
         .expect("building on a standing works should be refused");
-    assert!(why.contains(reach.name), "the refusal does not say what is there: {why}");
+    assert!(why.contains("Kestrel Foundry"), "the refusal does not say what is there: {why}");
     assert!(why.contains("2037"), "the refusal does not name the occupied patch: {why}");
 
     // The same rectangle in 1890 is free.
@@ -839,8 +839,8 @@ fn the_slice_serialises_what_a_front_end_would_need() {
     assert_eq!(j.at("regions").as_arr().len(), REGIONS.len());
     assert_eq!(j.at("phases").as_arr().len(), PHASES.len());
     assert_eq!(j.at("crossings").as_arr().len(), gate::FRACTURES.len());
-    assert_eq!(j.at("land").at("features").as_arr().len(), land::LAND.len());
-    assert_eq!(j.at("land").at("plot").as_u64(), Some(land::PLOT as u64));
+    assert_eq!(j.at("land").at("features").as_arr().len(), temporal_rooms::slice::landscape::LAND.len());
+    assert_eq!(j.at("land").at("geography").at("width").as_u64(), Some(temporal_rooms::slice::geography::WIDTH as u64));
 
     for r in j.at("regions").as_arr() {
         let tag = r.at("tag").as_str().unwrap_or_default().to_string();

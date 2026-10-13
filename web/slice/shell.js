@@ -122,7 +122,7 @@ export function renderRegion(v, tag, go) {
     `<p class="problem" title="${esc(r.note)}">${esc(r.problem)}</p>` +
     `<div class="tiles">` +
     `<div><b>${num(r.gridMW)}</b><span>MW grid</span></div>` +
-    `<div><b>${r.machines}</b><span>machines</span></div>` +
+    `<div><b>${r.machines}</b><span>works</span></div>` +
     `<div><b>${num(r.footprint)}</b><span>occupied tiles</span></div>` +
     (r.machinery && r.machinery.landed
       ? `<div class="imp"><b>${num(r.machinery.free)}</b><span>plant free</span></div>`
@@ -202,7 +202,7 @@ export function renderCentury(v, phases, tag) {
     `<p class="blurb">${esc(p.blurb)}</p>` +
     `<div class="stat"><b>a grid to use</b><span>${p.grid ? 'yes' : 'no'}</span></div>` +
     `<div class="stat"><b>frames</b><span>${(p.materials || []).join(', ')}</span></div>` +
-    `<div class="stat"><b>components</b><span>${p.holds} of 37</span></div>` +
+    `<div class="stat"><b>components</b><span>${p.holds} of ${p.holds+(p.lacks||[]).length}</span></div>` +
     (lacks ? `<h3>has not got</h3><div class="lacks">${lacks}</div>` : '');
 }
 

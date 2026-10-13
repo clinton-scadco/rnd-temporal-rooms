@@ -6,14 +6,12 @@
 //!   zone      2070   two processes nobody else has, and no resources at all
 //! ```
 //!
-//! # Every region is the same rectangle
+//! # One landscape, distinct neighbouring patches
 //!
-//! They all have [`land::PLOT`] for a plot, and every deposit in every one of
-//! them comes out of [`super::land::seams`] at coordinates authored once. That
-//! is not a convenience, it is the experiment: the Kestrel ore body is at
-//! `8,6` in 1890 and Kestrel Foundry is at `8,6` in 2037, and neither of them
-//! can be moved without moving the other, because they are one row of one
-//! table.
+//! Every feature in [`super::landscape`] has one global position. Resources,
+//! roads, watercourses and buildings are authored for that position, rather
+//! than translated copies of a historical face table. Each region owns an
+//! irregular patch of the same playable valley.
 //!
 //! # What a region *is*, and what it is not
 //!
@@ -32,12 +30,9 @@
 //!   built over     the tiles somebody else already used, and the sentence why
 //! ```
 //!
-//! The last one is the smallest and does the most work. In 2037 the tiles the
-//! Kestrel ore body occupies are refused, and the refusal reads *Kestrel
-//! Foundry has stood on this since 1951 -- in 1890 it is open ground with four
-//! hundred a second under it*. That sentence is the whole of the brief's
-//! instruction to "prove the player understands: this is the same place at a
-//! different time", and it costs one lookup in [`super::land`].
+//! Existing buildings reserve their actual footprints. A refusal names the
+//! building at that position; it does not reveal another playable version of
+//! the ground. The original historical face table is retained for the CLI study.
 //!
 //! # The three problems, and why they are three problems
 //!
@@ -52,7 +47,7 @@
 //! matters here for a second reason: the three regions have to *need* each
 //! other, or the fractures between them are scenery.
 
-use super::land;
+use super::{land, landscape};
 use super::phase::Phase;
 use crate::json::Json;
 use crate::model::Qty;
@@ -141,8 +136,8 @@ pub static REGIONS: &[Region] = &[
                2037 has to make them and somebody has to keep the fracture lit.",
         kit: &[
             ship(4, 48, "IronOre"),
-            ship(12, 48, "Coal"),
-            ship(20, 48, "OrePowder"),
+            ship(12, 52, "Coal"),
+            ship(20, 49, "OrePowder"),
             // Where machinery from the future is unloaded. A region that could
             // not receive a crate could not be electrified at all.
             land_at(32, 48, "Gear"),
@@ -155,21 +150,21 @@ pub static REGIONS: &[Region] = &[
         phase: Phase::P2037,
         template: "slice-district",
         problem: "Every machine you could want, and an ore body four generations went through.",
-        note: "Kestrel Spoil is eight a second and a crushing line wants ninety-three, so \
+        note: "The Old Quarry is eight a second and a crushing line wants ninety-three, so \
                the ore is coming out of 1890 or it is not coming. This region also pays for \
                both fractures out of its own grid connection -- 98 MW for the deep one, 53 \
                for the corridor to 2070 -- and the coal to make that with is on the far side \
-               of the deep one. The way in is the forty-five a second still in Blackband and \
-               the twelve hundred in the race: one compact plant and one water-driven \
+               of the deep one. The way in is the forty-five a second in Blackband Adits and \
+               the twelve hundred in Tarrant Canal: one compact plant and one water-driven \
                generator will hold the deep fracture open, and after that the coal arrives.",
         kit: &[
             land_at(4, 48, "IronOre"),
             land_at(14, 48, "Coal"),
             land_at(24, 48, "OrePowder"),
             land_at(34, 48, "Gear"),
-            ship(44, 48, "Concentrate"),
-            ship(50, 48, "IronBillet"),
-            ship(56, 48, "Gear"),
+            ship(44, 46, "Concentrate"),
+            ship(50, 50, "IronBillet"),
+            ship(56, 46, "Gear"),
             // Power goals are counted here, and so is every megawatt an
             // interface is holding a fracture open with.
             fix("grid", 64, 48),
@@ -184,17 +179,17 @@ pub static REGIONS: &[Region] = &[
         problem: "The two best processes on the map, standing on ground with nothing under it.",
         note: "A lathe takes billet straight to gears in one machine, which is the whole of \
                what this phase has that 2037 does not. It also wants 133 MW to do it, and \
-               there is nothing here to burn: no coal, no ore, twenty-four a second left in \
-               the caster, and a culvert where the mill race used to be. The wheels do still \
+               there are only traces of coal and ore, twenty-four a second left in \
+               the reclaim caster, and a narrow eastern culvert. The wheels do still \
                turn in it -- 2070 builds a water-driven generator for nothing, which is the \
                joke the valley pays two crates for -- but not enough of them. The rest comes \
                down the corridor. What this region is *for* is the far end of the loop: \
                gears made here are machinery, and machinery is how 1890 gets a generator.",
         kit: &[
-            land_at(4, 48, "IronBillet"),
+            land_at(4, 46, "IronBillet"),
             land_at(14, 48, "Power"),
-            land_at(24, 48, "Concentrate"),
-            ship(36, 48, "Gear"),
+            land_at(24, 46, "Concentrate"),
+            ship(36, 51, "Gear"),
             fix("grid", 46, 48),
         ],
         my: 2,
@@ -224,8 +219,8 @@ impl Region {
         let mut ports = Ports::default();
         // The ground first, resolved out of the shared land at this region's
         // own date, so that anything placed on it finds it already there.
-        for (item, f, yields) in land::seams(self.phase) {
-            w.seam(item, f.x + ox, f.y, f.w, f.h, yields);
+        for (item, f, yields) in landscape::seams(self.phase) {
+            w.seam(item, f.x, f.y, f.w, f.h, yields);
         }
         for f in self.kit {
             let Some(p) = proto(f.proto) else { continue };
@@ -258,15 +253,14 @@ impl Region {
         if !super::geography::contains(self.phase, x, y, w, h) {
             return Some("this footprint crosses a region boundary; build in the neighbouring region or connect through its crossing".into());
         }
-        let x = x - super::geography::offset(self.phase);
-        let f = land::taken_by(self.phase, x, y, w, h)?;
+        let f = landscape::taken_by(self.phase, x, y, w, h)?;
         let here = f.face(self.phase);
         Some(format!("{} is {} in this {} patch", f.name, here.title(), self.phase.tag()))
     }
 
     /// What this region can dig, in the order the land lays it out.
     pub fn ground(&self) -> Vec<(&'static str, &'static land::Feature, Qty)> {
-        land::seams(self.phase)
+        landscape::seams(self.phase)
     }
 
     /// The most this region could lift out of the ground of one item in a
@@ -307,14 +301,14 @@ impl Region {
             .set(
                 "builtOver",
                 Json::Arr(
-                    land::LAND
+                    landscape::LAND
                         .iter()
                         .filter(|f| f.tag != "rift" && f.face(self.phase).taken())
                         .map(|f| {
                             Json::obj()
                                 .set("name", f.name)
                                 .set("what", f.face(self.phase).title())
-                                .set("x", (f.x + super::geography::offset(self.phase)) as i64)
+                                .set("x", f.x as i64)
                                 .set("y", f.y as i64)
                                 .set("w", f.w as i64)
                                 .set("h", f.h as i64)

@@ -112,7 +112,11 @@ impl Compiled {
 
     /// The machine itself at tick `t`, rebuilt by running the equivalent tick.
     pub fn state_at(&self, d: &Design, t: Tick) -> Result<Machine, String> {
-        let steps = self.equivalent_tick(t);
+        let phase = self.equivalent_tick(t);
+        // The state key can repeat before the first cycle's flow counters and
+        // status have caught up. Replay one complete orbit for a steady-state
+        // inspection so an outlet that is shipping is not reported as idle.
+        let steps = if self.period>0 && t>=self.transient+self.period {phase+self.period} else {phase};
         let mut m = Machine::new(d)?;
         for _ in 0..steps {
             m.step();

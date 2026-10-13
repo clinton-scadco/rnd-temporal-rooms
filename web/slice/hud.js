@@ -64,23 +64,18 @@ export function icons(root = document) {
 
 /// Everything a hand can hold on the plot.
 ///
-/// `proto` is what gets placed. The machine chassis is `machining` only because
-/// something has to be named: every machine prototype places an empty chassis,
-/// and its footprint becomes the design's the moment something is designed in.
+/// Construction starts with the same empty plot for every job. Its component
+/// graph determines its footprint, extraction, storage and outside ports.
 export const TOOLS = [
   { id: 'pick', key: 'V', label: 'Select', tip: 'hover to read, click to pick, double-click to design' },
   { id: 'pipette', key: 'Q', label: 'Pipette', tip: 'Q over a building picks up another one like it — design and all. Q over empty ground lets go.' },
   null,
-  { id: 'head', key: '1', proto: 'head', label: 'Extractor', tip: 'stands on ore, coal, water or wood' },
-  { id: 'machine', key: '2', proto: 'machining', label: 'Machine', tip: 'an empty chassis — double-click it to design what it does' },
-  { id: 'bay', key: '3', proto: 'bay', label: 'Bay', tip: 'holds 20,000 of one item' },
-  { id: 'yard', key: '4', proto: 'yard', label: 'Yard', tip: 'holds 120,000 — for trains and fractures' },
-  { id: 'depot', key: '5', proto: 'depot', label: 'Depot', tip: 'ships what it is wired to; goals count it' },
+  { id: 'build', key: '1', proto: 'works', label: 'Build', tip: 'place an empty plot, then design mining, processing, storage or shipping inside it' },
   { id: 'grid', key: '6', proto: 'grid', label: 'Grid', tip: 'sells electricity to the grid', needsGrid: true },
   null,
   { id: 'connect', key: 'W', label: 'Wire', tip: 'click what makes it, then what takes it' },
-  { id: 'belt', key: 'B', label: 'Belt', tip: 'bay to bay, short distances' },
-  { id: 'rail', key: 'T', label: 'Rail', tip: 'bay to bay, long distances' },
+  { id: 'belt', key: 'B', label: 'Belt', tip: 'between storage facilities, short distances' },
+  { id: 'rail', key: 'T', label: 'Rail', tip: 'between storage facilities, long distances' },
   null,
   { id: 'delete', key: 'X', label: 'Delete', tip: 'click anything; it leaves a ghost you can restore' },
 ];
@@ -99,7 +94,7 @@ export function renderDock(hasGrid, onPick) {
     if (!t) return '<span class="sep"></span>';
     if (t.needsGrid && !hasGrid) return '';
     return (
-      `<button data-tool="${t.id}" aria-label="${t.label}">${ICON[t.id]}` +
+      `<button data-tool="${t.id}" aria-label="${t.label}">${ICON[t.id] || ICON.machine}` +
       `<kbd>${t.key}</kbd>` +
       `<span class="tip"><b>${t.label}</b><kbd>${t.key}</kbd><em>${t.tip}</em></span></button>`
     );
@@ -116,7 +111,7 @@ export function toolIdOf(tool) {
   const exact = TOOLS.find(t => t && t.proto === tool.proto);
   if (exact) return exact.id;
   const p = net.proto(tool.proto);
-  return p && p.role === 'machine' ? 'machine' : null;
+  return p && p.role === 'machine' ? 'build' : null;
 }
 
 export function markDock(tool) {
@@ -131,8 +126,8 @@ export function markDock(tool) {
 const HINT = {
   place: '<kbd>R</kbd> rotate',
   connect: 'click the source, then where it goes',
-  belt: 'click a bay, then another bay',
-  rail: 'click a bay, then another bay',
+  belt: 'click storage, then its destination',
+  rail: 'click storage, then its destination',
   delete: 'click what to remove',
   pipette: 'click a building to pick up one like it',
 };
@@ -325,7 +320,7 @@ function depositCard(d) {
     `<b>${esc(d.title)}</b><span class="pill ${d.spare ? 'run' : 'bad'}">${d.spare ? 'open' : 'taken'}</span></div>` +
     `<div class="hc-fill"><div class="bar"><div style="width:${k.toFixed(0)}%"></div></div>` +
     `<span>${num(d.spare)} of ${num(d.yields)}/s ${esc(d.itemTitle || d.item)} free</span></div>` +
-    `<div class="hc-cta">${ICON.head}<span>put an extractor on it <kbd>1</kbd></span></div>`
+    `<div class="hc-cta">${ICON.head}<span>build a plot, then add a drill or intake <kbd>1</kbd></span></div>`
   );
 }
 

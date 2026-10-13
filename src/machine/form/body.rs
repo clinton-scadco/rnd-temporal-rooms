@@ -78,7 +78,9 @@ pub fn dress(u: &Placed, _plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: 
     let n0 = out.len();
     let g = grade;
 
-    match u.arch {
+    if u.kind == Kind::MiningDrill {
+        drill(u, out);
+    } else { match u.arch {
         Arch::Vessel => vessel(u, &mut r, g, out),
         Arch::Shell => shell(u, &mut r, g, out),
         Arch::Skid => skid(u, &mut r, g, out),
@@ -91,7 +93,7 @@ pub fn dress(u: &Placed, _plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: 
         Arch::Inline => inline(u, &mut r, out),
         Arch::Bank => bank(u, &mut r, g, out),
         Arch::Turbine => turbine(u, &mut r, g, out),
-    }
+    } }
     if u.material == crate::machine::era::Mat::CastIron {
         for p in &mut out[n0..] {
             if p.mat == Mat::Paint && matches!(p.mesh, Mesh::Box | Mesh::Cyl | Mesh::Volute | Mesh::Dome) {
@@ -111,7 +113,7 @@ pub fn dress(u: &Placed, _plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: 
             // The pump's fluid belongs to its process casing, and an external
             // drive belongs to its rear housing. Do not attach a water neck
             // to whichever motor surface happens to be nearest the socket.
-            let solids = if g.articulated() && matches!(u.kind, crate::machine::parts::Kind::Pump | crate::machine::parts::Kind::MechPump) {
+            let solids = if g.articulated() && matches!(u.kind, crate::machine::parts::Kind::Pump | crate::machine::parts::Kind::MechPump | crate::machine::parts::Kind::WaterIntake) {
                 if s.dom == Domain::Fluid { &bodies[..1] }
                 else if matches!(s.dom, Domain::Rotary | Domain::Mech) { &bodies[1..2] }
                 else { &bodies[..] }
@@ -163,6 +165,32 @@ pub fn dress(u: &Placed, _plan: &Plan, seed: &Seed, grade: Grade, id: u16, out: 
             p.tint = wear;
         }
     }
+}
+
+/// An exposed boring head: the mast and drill visibly reach the ground.
+/// A material intake remains a hopper; extracting is a different object.
+fn drill(u: &Placed, out: &mut Vec<Piece>) {
+    let v=u.vol;
+    let c=v.centre();
+    let size=v.size();
+    let bottom=v.lo.y;
+    let top=v.hi.y-250;
+    let x=size.x/3;
+    let z=size.z/3;
+    out.push(Piece::up(Mesh::Box, Mat::CastIron, p3(c.x,bottom,c.z),p3(size.x,220,size.z)));
+    for dx in [-x,x] { for dz in [-z,z] {
+        out.push(Piece::span(Mesh::Beam,Mat::Dark,p3(c.x+dx,bottom,c.z+dz),p3(c.x+dx,top,c.z+dz),180));
+    } }
+    for dz in [-z,z] {
+        out.push(Piece::span(Mesh::Beam,Mat::Dark,p3(c.x-x,top,c.z+dz),p3(c.x+x,top,c.z+dz),220));
+        out.push(Piece::span(Mesh::Beam,Mat::Dark,p3(c.x-x,bottom,c.z+dz),p3(c.x+x,top,c.z+dz),130));
+    }
+    out.push(Piece::up(Mesh::Cyl,Mat::Steel,p3(c.x,bottom+250,c.z),p3(300,top-bottom-500,300)));
+    for n in 0..6 {
+        let y=bottom+400+n*(top-bottom-800)/6;
+        out.push(Piece::up(Mesh::Rotor,Mat::CastIron,p3(c.x,y,c.z),p3(1100,130,1100)).spin(n as u8));
+    }
+    out.push(Piece::up(Mesh::Box,Mat::Paint,p3(c.x,top-750,c.z),p3(1200,650,1100)));
 }
 
 /// Test the authored solids in integer local coordinates. The pipe router
@@ -567,7 +595,7 @@ fn portal(u: &Placed, _r: &mut super::seed::Rng, out: &mut Vec<Piece>) {
 // --------------------------------------------------------------------- cans
 
 fn can(u: &Placed, r: &mut super::seed::Rng, g: Grade, out: &mut Vec<Piece>) {
-    if g.articulated() && matches!(u.kind, crate::machine::parts::Kind::Pump | crate::machine::parts::Kind::MechPump) {
+    if g.articulated() && matches!(u.kind, crate::machine::parts::Kind::Pump | crate::machine::parts::Kind::MechPump | crate::machine::parts::Kind::WaterIntake) {
         pump(u, out);
         return;
     }

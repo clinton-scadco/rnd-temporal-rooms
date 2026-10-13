@@ -30,7 +30,7 @@
   <div class="seg" id="views" hidden>
     <button id="viewmap" class="on" title="the world: fractures and shipping (M)"><i data-icon="map"></i><span>World</span></button>
     <button id="viewworld" title="the region you are standing in (M)"><i data-icon="plot"></i><span>Region</span></button>
-    <button id="viewbench" disabled title="the machine bench"><i data-icon="gear"></i><span>Machine</span></button>
+    <button id="viewbench" disabled title="design the selected works"><i data-icon="gear"></i><span>Design</span></button>
   </div>
 
   <!-- Which century you are standing in, and the two you are not. -->
@@ -156,11 +156,12 @@
         <span class="lock" id="benchlock"></span>
       </div>
       <aside id="benchside">
+        <div id="benchstart"></div>
+        <div id="benchinfo"></div>
         <h2>components <span class="century" id="benchcentury"></span></h2>
         <select id="family"></select>
         <div class="palette small" id="parts"></div>
         <h2>this design</h2>
-        <div id="benchinfo"></div>
       </aside>
     </div>
     <div id="atlas" hidden>
@@ -190,12 +191,12 @@
     <h1 id="brieftitle">One fractured valley</h1>
     <p class="lede" id="briefbrief"></p>
     <div class="keys">
-      <div><kbd>1</kbd>&ndash;<kbd>6</kbd><span>build</span></div>
+      <div><kbd>1</kbd><span>build a plot</span></div>
       <div><kbd>W</kbd><span>wire</span></div>
       <div><kbd>Q</kbd><span>copy what is under the pointer</span></div>
       <div><kbd>R</kbd><span>rotate</span></div>
       <div><kbd>right-click</kbd><span>let go</span></div>
-      <div><kbd>double-click</kbd><span>design a machine</span></div>
+      <div><kbd>double-click</kbd><span>open its design</span></div>
     </div>
     <button id="briefstart" class="primary">Start the slice</button>
     <p class="muted" id="briefwait" hidden>waiting for somebody to start the slice&hellip;</p>

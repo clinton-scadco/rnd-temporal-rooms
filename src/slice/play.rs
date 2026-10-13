@@ -274,7 +274,7 @@ impl Play {
             .s
             .yard(region)
             .and_then(|y| y.room.host.world.nth_ground(item, n))
-            .map(|d| (d.x + dx - ox, d.y));
+            .map(|d| if d.h>d.w { (d.x-ox,d.y+dx) } else { (d.x+dx-ox,d.y) });
         let Some((x, y)) = at else {
             self.bad.push(format!("{region} has no {item} ground at index {n}"));
             return 0;
@@ -526,7 +526,7 @@ pub fn run(p: &mut Play) -> bool {
 
     // The wall that is the whole experiment: the same tiles, a hundred and
     // forty-seven years later, with somebody else's foundry on them.
-    let kestrel_at = super::land::feature("kestrel").map(|f| (f.x, f.y)).unwrap_or((8, 6));
+    let kestrel_at = super::landscape::LAND.iter().find(|f|f.tag=="foundry").map(|f| (f.x-super::geography::offset(Phase::P2037), f.y)).unwrap_or((27, 5));
     p.expect_refusal(
         bruno,
         "district",

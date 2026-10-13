@@ -65,7 +65,6 @@ use crate::json::Json;
 use crate::model::Tick;
 use crate::mp::cmd::{Act, Cmd, Effect};
 use crate::mp::goal::commas;
-use crate::mp::kit::Role;
 use crate::mp::room::{Clock, Room, Sim, COLOURS};
 use crate::mp::world::{Id, PlayerId};
 use crate::mp::{as_secs, hash64, lower::item_title, room_code, secs, SIM_TICK_RATE};
@@ -1017,7 +1016,7 @@ impl Slice {
                             .world
                             .installs
                             .iter()
-                            .filter(|i| i.proto.role == Role::Machine)
+                            .filter(|i| i.proto.role.designed())
                             .count() as i64,
                     )
                     .set("footprint", y.room.host.world.footprint())
@@ -1060,7 +1059,7 @@ impl Slice {
             .set("phases", phase::phases())
             .set("regions", Json::Arr(regions))
             .set("crossings", Json::Arr(crossings))
-            .set("land", land::to_json().set("geography", super::geography::to_json()))
+            .set("land", super::landscape::to_json())
             .set("shipping", self.ledger.to_json(now))
             .set("disturbance", self.disturbance.to_json(now))
             .set("finished", self.done.len() as i64)

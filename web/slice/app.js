@@ -376,7 +376,7 @@ function announce(v) {
     $('wontitle').textContent = `${r.title} met its objective`;
     $('wondetail').innerHTML =
       `<b>met at</b><span>${shell.clock(r.doneAt)}</span>` +
-      `<b>installations</b><span>${r.installs}, ${r.machines} of them machines</span>` +
+      `<b>installations</b><span>${r.installs}, ${r.machines} designed works</span>` +
       `<b>footprint</b><span>${shell.num(r.footprint)} tiles</span>` +
       `<b>on the grid</b><span>${shell.num(r.gridMW)} MW</span>` +
       (r.machinery && r.machinery.standing

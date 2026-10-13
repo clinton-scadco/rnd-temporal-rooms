@@ -12,11 +12,11 @@ export function paintLand(ctx,land,sx,sy,scale,selected) {
     ctx.fillStyle='rgba(224,216,180,.035)';
     for(let y=3;y<geo.height;y+=5)for(let x=1;x<geo.width;x+=7)ctx.fillRect(sx(x),sy(y),scale*1.4,scale*.45);
     for(const f of land.features){
-      const face=f.faces.find(v=>v.phase===p.phase);if(!face||f.tag==='rift')continue;
-      let x=f.x+p.offsetX,w=f.w;if(f.tag==='millrace'){x=p.offsetX;w=72;}
+      const face=f.faces.find(v=>v.phase===p.phase);if(!face||face.what==='open ground')continue;
+      const x=f.x,w=f.w;
       const px=sx(x),py=sy(f.y),pw=w*scale,ph=f.h*scale;
       ctx.globalAlpha=face.taken?.8:face.yields?.6:.55;ctx.fillStyle=face.colour;ctx.fillRect(px,py,pw,ph);ctx.globalAlpha=1;
-      if(f.tag==='drove'||f.tag==='cut'){
+      if(face.layer==='roads'){
         ctx.strokeStyle=p.phase==='1890'?'#c1b28b':'#c2c2b1';ctx.lineWidth=Math.max(.7,scale*.12);
         ctx.setLineDash(p.phase==='1890'?[]:[scale*1.2,scale*1.8]);ctx.beginPath();ctx.moveTo(px,py+ph/2);ctx.lineTo(px+pw,py+ph/2);ctx.stroke();ctx.setLineDash([]);
       }else if(f.tag==='millrace'){
@@ -35,13 +35,19 @@ export function paintLand(ctx,land,sx,sy,scale,selected) {
   }
   for(const p of geo.patches.slice(1)){
     ctx.strokeStyle='#b8a68c';ctx.lineWidth=Math.max(1.2,scale*.25);ctx.setLineDash([4,5]);ctx.beginPath();
-    p.polygon.slice(0,12).forEach(([x,y],i)=>i?ctx.lineTo(sx(x),sy(y)):ctx.moveTo(sx(x),sy(y)));ctx.stroke();ctx.setLineDash([]);
+    p.polygon.slice(0,p.polygon.length/2).forEach(([x,y],i)=>i?ctx.lineTo(sx(x),sy(y)):ctx.moveTo(sx(x),sy(y)));ctx.stroke();ctx.setLineDash([]);
   }
 }
 export function patchAt(geo,x,y){
   if(!geo||y<0||y>=geo.height||x<0||x>=geo.width)return null;
-  const bend=y<14?4:y<24?0:y<36?-4:0;
-  return geo.patches[x<72+bend?0:x<144+bend?1:2];
+  return geo.patches.find(p=>{
+    let inside=false;
+    for(let i=0,j=p.polygon.length-1;i<p.polygon.length;j=i++){
+      const [ax,ay]=p.polygon[i],[bx,by]=p.polygon[j];
+      if((ay>y)!==(by>y) && x<(bx-ax)*(y-ay)/(by-ay)+ax)inside=!inside;
+    }
+    return inside;
+  })||null;
 }
 export function paintBuildings(ctx,regions,sx,sy,scale,except){
   for(const r of regions||[]){if(r.tag===except)continue;

@@ -1,6 +1,6 @@
 # temporal-rooms
 
-**Current play direction:** experiments 14–16 now extend the camp and machine workspace. The designer has a side-by-side era workshop; the slice is one spatial valley with neighbouring historical patches; Experiment 16 opens that factory with one local disturbance. See [the realignment notes](realignment.md) for behavior and launch commands. Earlier experiment write-ups below document their original laboratory versions.
+**Current play direction:** experiments 14–16 now extend the camp and machine workspace. The designer has a side-by-side era workshop; the slice is one spatial valley with individually authored terrain and a single Build tool for component-designed extraction, processing, storage and shipping; Experiment 16 opens that factory with one local disturbance. See [the realignment notes](realignment.md) for behavior and launch commands. Earlier experiment write-ups below document their original laboratory versions.
 
 An event-driven factory simulator with exact closed-form solvers, built to
 answer questions about billions of factory objects without touching most of

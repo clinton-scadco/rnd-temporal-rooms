@@ -18,7 +18,7 @@ use temporal_rooms::live::{self, Log};
 use temporal_rooms::machine::design::Design;
 use temporal_rooms::mp::cmd::{Act, Cmd, Effect};
 use temporal_rooms::mp::goal::{self, Goal, Shape, TEMPLATES};
-use temporal_rooms::mp::kit::{proto, Role, PROTOS};
+use temporal_rooms::mp::kit::{proto, PROTOS};
 use temporal_rooms::mp::room::{Room, Sim};
 use temporal_rooms::mp::world::{head_design, stock_design, Id, World};
 use temporal_rooms::mp::{lower, secs, Rng};
@@ -30,7 +30,7 @@ use temporal_rooms::json::{self, Json};
 /// fact about the design rather than a number anybody typed.
 #[test]
 fn every_catalogue_machine_lowers() {
-    for p in PROTOS.iter().filter(|p| p.role == Role::Machine) {
+    for p in PROTOS.iter().filter(|p| p.design_source().is_some()) {
         let d = stock_design(p.tag).unwrap_or_else(|e| panic!("{}: {e}", p.tag));
         let m = lower::lower(&d).unwrap_or_else(|e| panic!("{}: {e}", p.tag));
         assert!(m.settled, "{}: its orbit never closed", p.tag);
@@ -51,7 +51,7 @@ fn every_catalogue_machine_lowers() {
 /// The same design lowers the same way, every time, on every replica.
 #[test]
 fn lowering_is_a_function_of_the_design() {
-    for p in PROTOS.iter().filter(|p| p.role == Role::Machine) {
+    for p in PROTOS.iter().filter(|p| p.design_source().is_some()) {
         let a = lower::lower(&stock_design(p.tag).unwrap()).unwrap();
         let b = lower::lower(&Design::parse(&stock_design(p.tag).unwrap().emit()).unwrap()).unwrap();
         assert_eq!(a, b, "{} lowered differently after a round trip through its own file", p.tag);
@@ -62,7 +62,7 @@ fn lowering_is_a_function_of_the_design() {
 /// exactly.
 #[test]
 fn the_primitive_cycle_keeps_the_rate() {
-    for p in PROTOS.iter().filter(|p| p.role == Role::Machine) {
+    for p in PROTOS.iter().filter(|p| p.design_source().is_some()) {
         let d = stock_design(p.tag).unwrap();
         let m = lower::lower(&d).unwrap();
         let c = temporal_rooms::machine::orbit::compile(&d).unwrap();

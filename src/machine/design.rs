@@ -69,7 +69,7 @@
 use super::era::Mat;
 use super::eval::Brief;
 use super::parts::{self, Dir, Kind};
-use super::stuff::Subst;
+use super::stuff::{Subst, Stuff};
 use crate::json::Json;
 
 /// The settings a component exposes to the player. One struct for all
@@ -86,6 +86,8 @@ pub struct Tune {
     pub low: u64,
     /// Pump and inlet: what it draws from the world.
     pub subst: Subst,
+    /// Optional grade of delivered goods, for intakes and sorter outlets.
+    pub goods: Option<Stuff>,
     /// Gearbox: positive gears down, negative gears up.
     pub ratio: i32,
     /// Valve: units per tick. Clutch: the threshold it engages at.
@@ -111,6 +113,7 @@ impl Default for Tune {
             high: 1200,
             low: 0,
             subst: Subst::Water,
+            goods: None,
             ratio: 4,
             limit: 100,
             stages: 2,
@@ -120,12 +123,14 @@ impl Default for Tune {
 }
 
 impl Tune {
+    pub fn drawn(&self) -> Stuff { self.goods.unwrap_or_else(||Stuff::fresh(self.subst)) }
+
     /// What this kind's tune would be if the player had not touched it. An
     /// inlet's default substance is not a pump's, so the answer depends on the
     /// kind rather than on `Default` alone.
     pub fn default_for(kind: Kind) -> Tune {
         let mut t = Tune::default();
-        if kind == Kind::Inlet {
+        if matches!(kind, Kind::Inlet | Kind::MiningDrill | Kind::Sorter) {
             t.subst = Subst::Ore;
         }
         t.mat = parts::phys(kind).mat;
@@ -142,7 +147,7 @@ impl Tune {
         match kind {
             Kind::Reactor => self.throttle == d.throttle,
             Kind::Tank | Kind::Drum | Kind::Flywheel | Kind::Hopper => !self.pulse,
-            Kind::Pump | Kind::Inlet => self.subst == d.subst,
+            Kind::Pump | Kind::Inlet | Kind::MiningDrill | Kind::WaterIntake | Kind::Sorter => self.subst == d.subst,
             Kind::Gearbox => self.ratio == d.ratio,
             Kind::Valve | Kind::Clutch => self.limit == d.limit,
             Kind::Column => self.stages == d.stages,
@@ -501,7 +506,18 @@ impl Design {
                     Some(&u.name),
                 ));
             }
-            if matches!(u.kind, Kind::Pump | Kind::Inlet) {
+            if let Some(goods)=u.tune.goods {
+                if !matches!(u.kind,Kind::Pump|Kind::Inlet|Kind::Sorter) || goods.subst!=u.tune.subst {
+                    out.push(fault("delivered goods can only be selected on belt/pipe intakes and sorter outlets",Some(&u.name)));
+                }
+            }
+            if u.kind == Kind::MiningDrill && !matches!(u.tune.subst, Subst::Ore | Subst::Coal) {
+                out.push(fault("a mining drill extracts ore or coal", Some(&u.name)));
+            }
+            if u.kind == Kind::WaterIntake && u.tune.subst != Subst::Water {
+                out.push(fault("a water intake draws water", Some(&u.name)));
+            }
+            if matches!(u.kind, Kind::Pump | Kind::Inlet | Kind::MiningDrill | Kind::WaterIntake | Kind::Sorter) {
                 let want = parts::part(u.kind).ports[0].dom;
                 if u.tune.subst.home() != want {
                     out.push(fault(
@@ -795,6 +811,11 @@ impl Design {
                         u.tune.subst = Subst::by_tag(v)
                             .ok_or_else(|| at(format!("`{v}` is not a substance")))?;
                     }
+                    "item" => {
+                        let v=w.next().ok_or_else(||at("`item` needs delivered goods".into()))?;
+                        let goods=Stuff::for_item(v).ok_or_else(||at(format!("`{v}` is not delivered goods")))?;
+                        u.tune.subst=goods.subst;u.tune.goods=Some(goods);
+                    }
                     "ratio" => {
                         let v = w.next().ok_or_else(|| at("`ratio` needs a number".into()))?;
                         u.tune.ratio =
@@ -892,7 +913,7 @@ impl Design {
             if !u.tune.is_default_for(u.kind) {
                 match u.kind {
                     Kind::Reactor => s.push_str(&format!("  throttle {}", u.tune.throttle)),
-                    Kind::Pump | Kind::Inlet => {
+                    Kind::Pump | Kind::Inlet | Kind::MiningDrill | Kind::WaterIntake | Kind::Sorter => {
                         s.push_str(&format!("  draws {}", u.tune.subst.tag()))
                     }
                     Kind::Gearbox => s.push_str(&format!("  ratio {}", u.tune.ratio)),
@@ -903,6 +924,7 @@ impl Design {
                     _ => {}
                 }
             }
+            if let Some(goods)=u.tune.goods { s.push_str(&format!("  item {}",goods.item_tag())); }
             // Pulse is not exclusive with the tune above: only the four stores
             // have it, and none of them have anything else.
             if u.tune.pulse {
@@ -958,6 +980,7 @@ impl Design {
                                 .set("high", u.tune.high as i64)
                                 .set("low", u.tune.low as i64)
                                 .set("draws", u.tune.subst.tag())
+                                .set("item", u.tune.goods.map(|s|Json::from(s.item_tag())).unwrap_or(Json::Null))
                                 .set("ratio", u.tune.ratio as i64)
                                 .set("limit", u.tune.limit as i64)
                                 .set("stages", u.tune.stages as i64)
@@ -1009,6 +1032,10 @@ impl Design {
             if let Some(v) = u.at("draws").as_str() {
                 tune.subst =
                     Subst::by_tag(v).ok_or_else(|| format!("`{v}` is not a substance"))?;
+            }
+            if let Some(v)=u.at("item").as_str() {
+                let goods=Stuff::for_item(v).ok_or_else(||format!("`{v}` is not delivered goods"))?;
+                tune.subst=goods.subst;tune.goods=Some(goods);
             }
             if let Some(v) = u.at("ratio").as_i128() {
                 tune.ratio = v as i32;
@@ -1067,6 +1094,9 @@ impl Design {
                         .set("storeys", parts::storeys(k) as i64)
                         .set("height", parts::height(k) as i64)
                         .set("tunable", Tune::tunable(k))
+                        .set("goods", Json::Arr(["IronOre","OrePowder","Concentrate","Coal","Iron","IronBillet","IronStrip","Gear","Scrap","Slag","Water","Crude","LightFraction","MiddleFraction","HeavyFraction"].iter()
+                            .filter(|tag| matches!(k,Kind::Inlet|Kind::Pump|Kind::Sorter) && Stuff::for_item(tag).unwrap().domain()==p.ports[0].dom)
+                            .map(|tag| Json::from(*tag)).collect()))
                         .set("recipe", recipe_json(k))
                         // Experiment 14: the other half of what a component is.
                         .set("phys", parts::phys(k).to_json())

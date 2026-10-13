@@ -9,8 +9,8 @@ export function setPhase(p){phase=p;last='';}
 export function setWorld(r,tag){regions=r;current=tag;draw();}
 export function resize(){if(!cv)return;const r=cv.getBoundingClientRect(),d=Math.min(2,window.devicePixelRatio||1);cv.width=Math.max(1,Math.round(r.width*d));cv.height=Math.max(1,Math.round(r.height*d));last='';draw();}
 export function here(){
-  if(!land||!phase)return[];const patch=land.geography?.patches.find(p=>p.phase===phase),ox=patch?.offsetX||0;
-  return land.features.filter(f=>f.tag!=='rift').map(f=>({name:f.name,became:f.became,x:f.x+ox,y:f.y,w:f.w,h:f.h,...f.faces.find(v=>v.phase===phase)})).filter(f=>f.what);
+  if(!land||!phase)return[];
+  return land.features.filter(f=>f.tag!=='rift').map(f=>({name:f.name,became:f.became,x:f.x,y:f.y,w:f.w,h:f.h,...f.faces.find(v=>v.phase===phase)})).filter(f=>f.what && f.what!=='open ground');
 }
 function draw(){
   if(!ctx||!cv||!land?.geography)return;const r=cv.getBoundingClientRect(),d=Math.min(2,window.devicePixelRatio||1);

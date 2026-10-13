@@ -297,6 +297,45 @@ impl Stuff {
         Stuff { subst, q: subst.def().fresh }
     }
 
+    /// The coarse item at the factory boundary. Inside, quality still matters.
+    pub fn item_tag(&self) -> &'static str {
+        match self.subst {
+            Subst::Power => "Power", Subst::Heat => "Heat", Subst::Torque => "Torque", Subst::Stroke => "Stroke",
+            Subst::Water => "Water", Subst::Coal => "Coal", Subst::Crude => "Crude", Subst::Slag => "Slag",
+            Subst::Light => "LightFraction", Subst::Middle => "MiddleFraction", Subst::Heavy => "HeavyFraction",
+            Subst::Ore if self.q.purity >= 80 && self.q.size >= SIZE_POWDER => "Concentrate",
+            Subst::Ore if self.q.size >= SIZE_POWDER => "OrePowder",
+            Subst::Ore => "IronOre",
+            Subst::Iron => match self.q.form {
+                FORM_GEAR => "Gear", FORM_STRIP => "IronStrip", FORM_BILLET => "IronBillet", FORM_SCRAP => "Scrap", _ => "Iron",
+            },
+        }
+    }
+
+    /// Representative quality for an explicitly delivered item. An intake
+    /// requests this item from the world; it never upgrades a different one.
+    pub fn for_item(tag: &str) -> Option<Stuff> {
+        let subst = match tag {
+            "IronOre" | "OrePowder" | "Concentrate" => Subst::Ore,
+            "Iron" | "IronBillet" | "IronStrip" | "Gear" | "Scrap" => Subst::Iron,
+            "Water" => Subst::Water, "Coal" => Subst::Coal, "Crude" => Subst::Crude,
+            "Slag" => Subst::Slag, "LightFraction" => Subst::Light, "MiddleFraction" => Subst::Middle, "HeavyFraction" => Subst::Heavy,
+            _ => return None,
+        };
+        let mut s=Stuff::fresh(subst);
+        match tag {
+            "OrePowder" => s.q.size=SIZE_POWDER,
+            "Concentrate" => {s.q.size=SIZE_POWDER;s.q.purity=84;},
+            "Iron" => s.q.form=FORM_RAW,
+            "IronBillet" => s.q.form=FORM_BILLET,
+            "IronStrip" => s.q.form=FORM_STRIP,
+            "Gear" => s.q.form=FORM_GEAR,
+            "Scrap" => s.q.form=FORM_SCRAP,
+            _ => {},
+        }
+        Some(s)
+    }
+
     pub fn with(subst: Subst, q: Qual) -> Stuff {
         Stuff { subst, q }
     }

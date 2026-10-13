@@ -67,6 +67,7 @@ pub mod net;
 pub mod room;
 pub mod kit;
 pub mod lower;
+pub mod facility;
 pub mod world;
 
 use crate::model::Tick;

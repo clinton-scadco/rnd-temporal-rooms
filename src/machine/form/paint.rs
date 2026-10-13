@@ -331,7 +331,7 @@ pub fn service(d: &Design, unit: usize, port: usize) -> Subst {
         // knows an answer. Both of the kinds that draw from the world are
         // asked, because a pump drawing crude is exactly the case this whole
         // function exists for.
-        if matches!(here.kind, Kind::Inlet | Kind::Pump) {
+        if matches!(here.kind, Kind::Inlet | Kind::Pump | Kind::MiningDrill | Kind::WaterIntake) {
             return here.tune.subst;
         }
         let Some(next) = feeder(d, at, dom) else { break };

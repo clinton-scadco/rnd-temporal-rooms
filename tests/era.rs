@@ -701,7 +701,7 @@ fn a_warm_machine_still_settles() {
 /// free, and silently wrong the first time somebody inserts a row in the middle.
 #[test]
 fn the_physical_table_is_in_order() {
-    assert_eq!(parts::KINDS.len(), 37);
+    assert_eq!(parts::KINDS.len(), 43);
     for (i, &k) in parts::KINDS.iter().enumerate() {
         assert_eq!(k as usize, i);
         let ph = parts::phys(k);

@@ -105,9 +105,9 @@ impl Ghost {
             by,
             was: i.id,
             name: i.name.clone(),
-            title: i.proto.title.to_string(),
+            title: i.title().to_string(),
             proto: i.proto.tag,
-            role: i.proto.role,
+            role: i.role(),
             x: i.x,
             y: i.y,
             w,
@@ -381,6 +381,19 @@ impl Sim {
     /// Fold one canonical command in.
     pub fn apply(&mut self, c: &Cmd) -> Result<Vec<Effect>, Fault> {
         self.advance(c.tick)?;
+        if let Act::CommitMachineDesign{id,design}=&c.act {
+            if let Some(i)=self.world.get(*id).filter(|i|i.is_storage()) {
+                let f=super::facility::layout(design);
+                let stocks:Vec<_>=self.carry.qty.iter().filter(|((name,_),qty)|name==&i.name && **qty>0).collect();
+                let held:crate::model::Qty=stocks.iter().map(|(_,qty)|**qty).sum();
+                if held>f.capacity || (!stocks.is_empty() && !f.storage) {
+                    return Err(Fault::at(c.tick,"Unload the stored goods before reducing this plot below its occupied capacity"));
+                }
+                if stocks.iter().any(|((_,item),_)| !f.inputs.iter().any(|(it,_)|it==item)) {
+                    return Err(Fault::at(c.tick,"Unload the stored goods before removing their intake route"));
+                }
+            }
+        }
         match cmd::apply(&mut self.world, c) {
             Ok(mut effects) => {
                 // Only a command that was actually applied moves the sequence.
@@ -449,8 +462,9 @@ impl Sim {
             Some(i) => (i.name.clone(), i.capacity()),
             None => (format!("#{to}"), 0),
         };
+        let held:crate::model::Qty=self.carry.qty.iter().filter(|((n,_),_)|n==&name).map(|(_,q)|*q).sum();
+        let room = cap.saturating_sub(held);
         let slot = self.carry.qty.entry((name.clone(), item.to_string())).or_insert(0);
-        let room = cap.saturating_sub(*slot);
         let taken = qty.min(room);
         *slot += taken;
         Effect::Arrived {

@@ -632,6 +632,11 @@ pub fn height(k: Kind) -> u32 {
         SteamEngine => 3800,
         Fan => 1800,
         Jacket => 2000,
+        MiningDrill => 5200,
+        WaterIntake => 1400,
+        BulkBin => 4600,
+        StorageTank => 7000,
+        DispatchDock | Sorter => 1800,
     }
 }
 
@@ -650,7 +655,7 @@ pub fn lift(k: Kind) -> u32 {
         // A wheel stands in the race it is turned by.
         WaterWheel => 0,
         // On legs, because something has to fit underneath.
-        Inlet | Hopper | Separator => 2400,
+        Inlet | Hopper | Separator | BulkBin => 2400,
         // On a steel frame, at working height.
         Radiator | Condenser | Fan => 3200,
         // Everything else is heavy, and heavy things get a plinth.
@@ -752,9 +757,15 @@ pub enum Kind {
     SteamEngine,
     Fan,
     Jacket,
+    MiningDrill,
+    WaterIntake,
+    BulkBin,
+    StorageTank,
+    DispatchDock,
+    Sorter,
 }
 
-pub const KINDS: [Kind; 37] = [
+pub const KINDS: [Kind; 43] = [
     Kind::Reactor,
     Kind::Burner,
     Kind::Heater,
@@ -792,6 +803,12 @@ pub const KINDS: [Kind; 37] = [
     Kind::SteamEngine,
     Kind::Fan,
     Kind::Jacket,
+    Kind::MiningDrill,
+    Kind::WaterIntake,
+    Kind::BulkBin,
+    Kind::StorageTank,
+    Kind::DispatchDock,
+    Kind::Sorter,
 ];
 
 pub struct Part {
@@ -854,6 +871,12 @@ static SKIP_PORTS: [Port; 3] = [
 static RADIATOR_PORTS: [Port; 1] = [ext("heat", HEAT, IN, 500, 500)];
 
 // ------------------------------------------------------------------- stores
+
+static BULKBIN_PORTS: [Port; 2] =
+    [p("in", MAT, IN, 200, 20_000), p("out", MAT, OUT, 200, 200)];
+static STORAGE_TANK_PORTS: [Port; 2] =
+    [p("in", FLUID, IN, 200, 12_000), p("out", FLUID, OUT, 200, 200)];
+static SORTER_PORTS: [Port; 1] = [ext("solid", MAT, IN, 200, 200)];
 
 static TANK_PORTS: [Port; 2] =
     [p("in", GAS, IN, 200, 2000), p("out", GAS, OUT, 200, 200)];
@@ -1152,7 +1175,7 @@ static JACKET: Recipe =
 
 // ------------------------------------------------------------------- the table
 
-static PARTS: [Part; 37] = [
+static PARTS: [Part; 43] = [
     Part { kind: Kind::Reactor, tag: "reactor", title: "Fuel / Heat Source",
         blurb: "burns fuel at its throttle whether or not the heat is wanted",
         family: Family::Source, w: 4, h: 4, ports: &REACTOR_PORTS, recipe: None },
@@ -1165,11 +1188,11 @@ static PARTS: [Part; 37] = [
     Part { kind: Kind::Mains, tag: "mains", title: "Grid Connection",
         blurb: "up to 400 MW/tick from outside, and every unit is counted against you",
         family: Family::Source, w: 2, h: 2, ports: &MAINS_PORTS, recipe: None },
-    Part { kind: Kind::Pump, tag: "pump", title: "Fluid Inlet",
-        blurb: "draws 200/tick of one fluid from outside the machine",
+    Part { kind: Kind::Pump, tag: "pump", title: "Pipe Intake",
+        blurb: "Receives up to 200/s of selected delivered fluid. This is a pipe connection; use Water Intake Pump to extract from a watercourse.",
         family: Family::Source, w: 2, h: 2, ports: &PUMP_PORTS, recipe: None },
-    Part { kind: Kind::Inlet, tag: "inlet", title: "Material Inlet",
-        blurb: "feeds 100/tick of one raw material from outside the machine",
+    Part { kind: Kind::Inlet, tag: "inlet", title: "Belt Intake",
+        blurb: "Receives up to 100/s of selected delivered goods. Connect its output to a container or process.",
         family: Family::Source, w: 2, h: 2, ports: &INLET_PORTS, recipe: None },
 
     Part { kind: Kind::Outlet, tag: "outlet", title: "Product Outlet",
@@ -1271,6 +1294,24 @@ static PARTS: [Part; 37] = [
     Part { kind: Kind::Jacket, tag: "jacket", title: "Water Jacket",
         blurb: "240 waste heat into 120 water, two bands warmer, instead of into the sky",
         family: Family::Heat, w: 3, h: 2, ports: &JACKET_PORTS, recipe: Some(&JACKET) },
+    Part { kind: Kind::MiningDrill, tag: "drill", title: "Mining Drill",
+        blurb: "Extracts ore or coal from the seam beneath this plot, up to 100/s. Wire its output to a product outlet or a processing component.",
+        family: Family::Source, w: 3, h: 3, ports: &INLET_PORTS, recipe: None },
+    Part { kind: Kind::WaterIntake, tag: "intake", title: "Water Intake Pump",
+        blurb: "Draws water from the watercourse beneath this plot, up to 200/s. Wire it to a product outlet or something that uses water.",
+        family: Family::Source, w: 2, h: 2, ports: &PUMP_PORTS, recipe: None },
+    Part { kind: Kind::BulkBin, tag: "bin", title: "Bulk Storage Container",
+        blurb: "20,000 units of shared solid storage. Connect belt intakes to in, and out to product or sorter outlets. More containers add capacity.",
+        family: Family::Store, w: 4, h: 3, ports: &BULKBIN_PORTS, recipe: None },
+    Part { kind: Kind::StorageTank, tag: "storagetank", title: "Liquid Storage Tank",
+        blurb: "12,000 units of liquid storage. Connect pipe intakes and outlets. More tanks add capacity.",
+        family: Family::Store, w: 3, h: 3, ports: &STORAGE_TANK_PORTS, recipe: None },
+    Part { kind: Kind::DispatchDock, tag: "dispatch", title: "Shipping Dock",
+        blurb: "Ships arriving goods towards the region's orders. Connect an intake to it; delivered goods leave this facility and count towards orders.",
+        family: Family::Sink, w: 3, h: 2, ports: &OUTLET_PORTS, recipe: None },
+    Part { kind: Kind::Sorter, tag: "sorter", title: "Sorter Outlet",
+        blurb: "A solid outlet filtered to selected goods. Separate ore, coal, concentrate or finished products from a mixed container.",
+        family: Family::Sink, w: 2, h: 2, ports: &SORTER_PORTS, recipe: None },
 ];
 
 // ------------------------------------------- experiment 14: the other table
@@ -1360,7 +1401,7 @@ const fn inert(kind: Kind, power: i64) -> Phys {
 ///
 /// The steam engine is untouched at 500. It was the one row that was already
 /// right, and every uniform scaling tried on top of it broke `20-steamline`.
-static PHYS: [Phys; 37] = [
+static PHYS: [Phys; 43] = [
     // ------------------------------------------------------------- sources
     // A reactor, a burner and a furnace are hot, and none of them has a body
     // temperature: their heat is the product, it goes out of a port, and it is
@@ -1465,6 +1506,12 @@ static PHYS: [Phys; 37] = [
     Phys { kind: Kind::Jacket, era: Era::Steam, power: 0, torque: 0, speed: 0,
         heat: 0, mass: 0, lo: 0, hi: 0, max: 0,
         mat: IRON, mats: &IRON_STEEL, vib: 0 },
+    inert(Kind::MiningDrill, 0),
+    inert(Kind::WaterIntake, 0),
+    inert(Kind::BulkBin, 0),
+    inert(Kind::StorageTank, 0),
+    inert(Kind::DispatchDock, 0),
+    inert(Kind::Sorter, 0),
 ];
 
 /// The physical properties of one kind.

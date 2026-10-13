@@ -238,8 +238,8 @@ async function main() {
   shell.renderRegion(v, 'district', () => {});
   const d = el('roomcard').innerHTML;
   ok(
-    /somebody already built here/.test(d) && /Kestrel Reach/.test(d),
-    'in 2037 the card says somebody built on the ore body'
+    /somebody already built here/.test(d) && /Kestrel Foundry/.test(d),
+    'the district card identifies its own standing foundry'
   );
 
   shell.renderCentury(v, v.phases, 'valley');
@@ -333,7 +333,7 @@ async function main() {
   );
   ok(
     in2037.some(f => f.taken) && !in1890.some(f => f.name === 'Kestrel Reach' && f.taken),
-    'Kestrel Reach is open ground in 1890 and somebody else’s works in 2037'
+    'western deposits and the district works are distinct world features'
   );
   ok(
     in2037.every(f => Number.isFinite(f.x) && Number.isFinite(f.w)),
@@ -407,7 +407,7 @@ async function main() {
     code: 'district',
     player: me.player,
     type: 'PlaceStorage',
-    payload: { proto: 'bay', x: 82, y: 8, face: 0 },
+    payload: { proto: 'bay', x: 100, y: 8, face: 0 },
   });
   ok(!onWorks.ok && onWorks.refused, 'and not on the foundry somebody built in 1951');
 
